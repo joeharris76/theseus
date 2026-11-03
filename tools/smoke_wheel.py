@@ -14,6 +14,12 @@ SCENARIOS = (
     "tests/integration/test_two_consumers.py",
     "tests/integration/test_theseus_promotion_scenario.py",
     "tests/integration/test_local_review_scenario.py",
+    "tests/integration/test_local_findings_scenarios.py",
+    "tests/integration/test_local_concurrency_scenarios.py",
+    "tests/integration/test_local_driver_scenarios.py",
+    "tests/integration/test_cloud_review_reachability_scenario.py",
+    "tests/integration/test_redaction_scenarios.py",
+    "tests/integration/test_gateway_host.py",
 )
 
 
