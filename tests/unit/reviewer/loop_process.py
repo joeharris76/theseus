@@ -10,10 +10,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from _project.scripts.oracle_reviewers import cli, processes, runner
-from _project.scripts.oracle_reviewers.absence import INVALID, Absence
-from _project.scripts.oracle_reviewers.commands import Invocation
-from _project.scripts.oracle_reviewers.policy import Reviewer
+from theseus_reviewer import cli, processes, runner
+from theseus_reviewer.absence import INVALID, Absence
+from theseus_reviewer.commands import Invocation
+from theseus_reviewer.policy import Reviewer
 
 
 class Journal:

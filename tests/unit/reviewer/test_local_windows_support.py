@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import local
+from theseus_reviewer import local
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-ROOT = Path(__file__).resolve().parents[4]
-REVIEW_TEST = "tests/unit/scripts/oracle_reviewers/test_local_review.py"
+ROOT = Path(__file__).resolve().parents[3]
+REVIEW_TEST = "tests/unit/reviewer/test_local_review.py"
 SMART_QUOTE = "\u201d"
 
 
@@ -49,7 +49,7 @@ def _windows_locale_run(real_run: Any) -> Any:
 
 
 def test_local_imports_without_fcntl() -> None:
-    probe = "import sys; sys.modules['fcntl'] = None; import _project.scripts.oracle_reviewers.local"
+    probe = "import sys; sys.modules['fcntl'] = None; import theseus_reviewer.local"
     proc = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=ROOT,
@@ -91,4 +91,7 @@ def test_repository_remote_decodes_smart_quotes(tmp_path: Path, monkeypatch: pyt
     repo = _repo(tmp_path / "repo", {"note.md": "plain\n"})
     _git(repo, "remote", "add", "origin", f"https://github.com/acme/r{SMART_QUOTE}epo")
     monkeypatch.setattr(local, "subprocess", SimpleNamespace(run=_windows_locale_run(subprocess.run)))
-    assert local._repository(repo) == local.DEFAULT_REPOSITORY
+    with pytest.raises(local.Refused, match="cannot tell which GitHub repository"):
+        local._repository(repo)
+    _git(repo, "remote", "set-url", "origin", "https://github.com/acme/repo.git")
+    assert local._repository(repo) == "acme/repo"

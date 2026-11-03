@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import importlib
 import inspect
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "_project/scripts"))
-oracle_review_check = importlib.import_module("_project.scripts.oracle_review_check")
-sys.modules["oracle_review_check"] = oracle_review_check
-oracle_gate = importlib.import_module("_project.scripts.oracle_gate")
+from conftest import CONSUMER_ALPHA, CONSUMER_BETA
+from theseus_reviewer import gate, review_check
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
+POLICY_REL = ".github/oracle-reviewers.yml"
+CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
+BINDING = CONFIG.binding
+POLICY_ARGS = ["--policy", POLICY_REL, "--root", str(CONSUMER_ALPHA)]
 HEAD = "a" * 40
 OLDER = "b" * 40
 HEAD_DATE = "2026-10-01T12:00:00Z"
@@ -33,7 +31,7 @@ TEST_RUN_UUID = "1" * 32
 
 
 def _marked_body(run_uuid: str | None = TEST_RUN_UUID, state: str = "success") -> str:
-    from _project.scripts.oracle_reviewers import protocol
+    from theseus_reviewer import protocol
 
     record = {
         "v": protocol.MARKER_VERSION,
@@ -93,14 +91,22 @@ def _unmarked_receipt(**over: Any) -> dict[str, Any]:
     return _receipt_review(body=f"### oracle-verdict: success for `{HEAD}`\n\nDetails.", **over)
 
 
+def _alpha_matcher(listed_files: int, changed_files: int) -> Any:
+    classifier = CONFIG.policy.classifier
+    return review_check.path_matcher(
+        listed_files, changed_files, CONFIG.matchers, classifier.exempt_paths, classifier.gate_paths
+    )
+
+
 def _oracle(**kwargs: Any) -> tuple[int, str]:
-    return oracle_review_check.decide(
+    return review_check.decide(
         HEAD,
         kwargs.pop("files", SOUNDNESS_FILES),
         kwargs.pop("statuses", [_verdict()]),
-        kwargs.pop("paths", oracle_review_check.path_matcher(2, 2, *oracle_gate.load_policy_rules())),
+        kwargs.pop("paths", _alpha_matcher(2, 2)),
         kwargs.pop("base_date", None),
         kwargs.pop("comments", []),
+        binding=BINDING,
         reviews=kwargs.pop("reviews", [_receipt_review()]),
     )
 
@@ -145,7 +151,7 @@ def test_a_success_status_without_a_bound_unedited_receipt_names_the_recovery_no
     scenario: dict[str, Any],
 ) -> None:
     status, message = _oracle(**scenario)
-    assert status == oracle_review_check.WAITING
+    assert status == review_check.WAITING
     assert "push a new head" in message
     assert "a byte-identical rebase is enough" in message
     assert "owner stand-in" in message
@@ -153,7 +159,7 @@ def test_a_success_status_without_a_bound_unedited_receipt_names_the_recovery_no
 
 
 def test_an_exempt_success_verdict_never_satisfies_a_gate_that_requires_a_review() -> None:
-    exempt = _verdict("success", description=oracle_review_check.EXEMPT_SUCCESS_DESCRIPTION)
+    exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
     status, message = _oracle(statuses=[exempt])
     assert status == 1
     assert "require a review of this head" in message
@@ -245,13 +251,13 @@ def test_a_forged_success_does_not_hide_the_apps_failure() -> None:
 
 
 def test_decide_takes_no_review_thread_state() -> None:
-    assert "threads" not in inspect.signature(oracle_review_check.decide).parameters
-    assert not hasattr(oracle_review_check, "fetch_threads")
+    assert "threads" not in inspect.signature(review_check.decide).parameters
+    assert not hasattr(review_check, "fetch_threads")
     assert _oracle() == (0, f"oracle-review: pass (oracle verdict for {HEAD})")
 
 
 def test_rename_with_a_non_exempt_side_needs_review() -> None:
-    files = oracle_review_check.changed_paths(
+    files = review_check.changed_paths(
         [{"filename": "docs/moved.py", "previous_filename": "benchbox/core/equivalence/checker.py"}]
     )
     assert files == ["docs/moved.py", "benchbox/core/equivalence/checker.py"]
@@ -259,36 +265,34 @@ def test_rename_with_a_non_exempt_side_needs_review() -> None:
 
 
 def test_rename_within_exempt_paths_skips() -> None:
-    files = oracle_review_check.changed_paths([{"filename": "docs/new.md", "previous_filename": "docs/old.md"}])
+    files = review_check.changed_paths([{"filename": "docs/new.md", "previous_filename": "docs/old.md"}])
     assert _decide(files=files) == (0, "oracle-review: only exempt paths changed")
 
 
 def test_changed_paths_without_a_rename_keeps_only_the_filename() -> None:
-    assert oracle_review_check.changed_paths([{"filename": "README.md"}]) == ["README.md"]
+    assert review_check.changed_paths([{"filename": "README.md"}]) == ["README.md"]
 
 
 def test_truncated_file_list_needs_review() -> None:
-    matcher = oracle_review_check.path_matcher(listed_files=3000, changed_files=3001)
+    matcher = review_check.path_matcher(3000, 3001, CONFIG.matchers)
     assert matcher(OTHER_FILES) is True
     assert _decide(files=OTHER_FILES, paths=matcher)[0] == 1
 
 
 def test_complete_file_list_uses_the_exempt_paths() -> None:
-    matcher = oracle_review_check.path_matcher(listed_files=2, changed_files=2, exempt_paths=("docs/*", "*.md"))
+    matcher = review_check.path_matcher(2, 2, CONFIG.matchers, ("docs/*", "*.md"))
     assert matcher(OTHER_FILES) is False
     assert matcher(SOUNDNESS_FILES) is True
 
 
 def test_gate_paths_beat_the_exemption() -> None:
-    matcher = oracle_review_check.path_matcher(
-        listed_files=1, changed_files=1, exempt_paths=("*.md",), gate_paths=("gate/*",)
-    )
+    matcher = review_check.path_matcher(1, 1, CONFIG.matchers, ("*.md",), ("gate/*",))
     assert matcher(["gate/policy.md"]) is True
     assert matcher(["docs/notes.md"]) is False
 
 
 def test_verdict_before_a_retarget_waits() -> None:
-    assert _oracle(base_date=RETARGETED)[0] == oracle_review_check.WAITING
+    assert _oracle(base_date=RETARGETED)[0] == review_check.WAITING
 
 
 def test_verdict_after_a_retarget_passes() -> None:
@@ -357,7 +361,7 @@ def test_an_unbound_status_with_an_unmarked_receipt_does_not_count() -> None:
 
 
 def test_an_exempt_status_keeps_its_meaning_with_a_run_suffix() -> None:
-    exempt = _verdict("success", description=f"{oracle_review_check.EXEMPT_SUCCESS_DESCRIPTION} [run {'a' * 32}]")
+    exempt = _verdict("success", description=f"{review_check.EXEMPT_SUCCESS_DESCRIPTION} [run {'a' * 32}]")
     assert _oracle(statuses=[exempt])[0] == 1
 
 
@@ -367,7 +371,7 @@ def test_a_shadow_header_receipt_does_not_count() -> None:
 
 
 def _marked_receipt(run_uuid: str | None, **over: Any) -> dict[str, Any]:
-    from _project.scripts.oracle_reviewers import protocol
+    from theseus_reviewer import protocol
 
     record = {
         "v": protocol.MARKER_VERSION,
@@ -421,8 +425,8 @@ def test_latest_base_change_picks_the_newest_retarget() -> None:
         {"event": "commented", "created_at": "2026-10-01T16:00:00Z"},
         {"event": "base_ref_changed", "created_at": RETARGETED},
     ]
-    assert oracle_review_check.latest_base_change(events) == RETARGETED
-    assert oracle_review_check.latest_base_change([{"event": "commented", "created_at": RETARGETED}]) is None
+    assert review_check.latest_base_change(events) == RETARGETED
+    assert review_check.latest_base_change([{"event": "commented", "created_at": RETARGETED}]) is None
 
 
 def _attestation(
@@ -446,7 +450,7 @@ def _attestation(
 
 def test_standin_attestation_for_the_head_passes() -> None:
     status, message = _decide(comments=[_attestation()])
-    assert status == oracle_review_check.PASS
+    assert status == review_check.PASS
     assert "stand-in review attested by joeharris76" in message
 
 
@@ -499,7 +503,7 @@ def test_standin_attestation_for_the_head_passes() -> None:
 )
 def test_standin_attestation_must_be_exact_current_and_authorized(comment: dict[str, Any]) -> None:
     status, _ = _decide(comments=[comment])
-    assert status == oracle_review_check.WAITING
+    assert status == review_check.WAITING
 
 
 def test_standin_attestation_before_a_retarget_waits() -> None:
@@ -507,7 +511,7 @@ def test_standin_attestation_before_a_retarget_waits() -> None:
 
 
 def test_a_later_valid_attestation_counts_after_an_earlier_invalid_one() -> None:
-    assert _decide(comments=[_attestation(sha=OLDER), _attestation()])[0] == oracle_review_check.PASS
+    assert _decide(comments=[_attestation(sha=OLDER), _attestation()])[0] == review_check.PASS
 
 
 def test_the_oracle_verdict_message_wins_over_a_standin() -> None:
@@ -521,8 +525,8 @@ def test_fetch_comments_maps_author_type_and_edit_time(monkeypatch: pytest.Monke
         "created_at": AFTER_HEAD,
         "updated_at": AFTER_HEAD,
     }
-    monkeypatch.setattr(oracle_review_check, "_paginate", lambda _token, _path: [item])
-    assert oracle_review_check.fetch_comments("t", "o/r", 1) == [
+    monkeypatch.setattr(review_check, "_paginate", lambda _token, _path: [item])
+    assert review_check.fetch_comments("t", "o/r", 1) == [
         {"login": "joeharris76", "user_type": "User", "body": "x", "created_at": AFTER_HEAD, "updated_at": AFTER_HEAD}
     ]
 
@@ -604,7 +608,7 @@ def _stub_main(
     edited: tuple[str | None, bool] | None = None,
     files: list[str] | None = None,
 ) -> list[str]:
-    check = oracle_review_check
+    check = review_check
     files = files or SOUNDNESS_FILES
     requested: list[str] = []
     raw_statuses = [
@@ -629,17 +633,17 @@ def _stub_main(
 
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     pull = {"head": {"sha": HEAD}, "base": {"ref": "develop"}, "changed_files": 1}
-    monkeypatch.setattr(oracle_gate, "fetch_pull", lambda token, repo, pr: pull)
-    monkeypatch.setattr(oracle_gate, "fetch_files", lambda token, repo, pr: [{"filename": files[0]}])
+    monkeypatch.setattr(gate, "fetch_pull", lambda token, repo, pr: pull)
+    monkeypatch.setattr(gate, "fetch_files", lambda token, repo, pr: [{"filename": files[0]}])
     monkeypatch.setattr(check, "_paginate", paginate)
-    monkeypatch.setattr(oracle_gate, "fetch_base_change_date", lambda token, repo, pr: None)
-    monkeypatch.setattr(oracle_gate, "fetch_comments", lambda token, repo, pr: [])
+    monkeypatch.setattr(gate, "fetch_base_change_date", lambda token, repo, pr: None)
+    monkeypatch.setattr(gate, "fetch_comments", lambda token, repo, pr: [])
     monkeypatch.setattr(check, "fetch_review_edit", lambda token, node_id: (None, False) if edited is None else edited)
     return requested
 
 
 def _gate() -> int:
-    return oracle_gate.main(["--repo", "o/r", "--pr", "7", "--no-post"])
+    return gate.main(["--repo", "o/r", "--pr", "7", *POLICY_ARGS, "--no-post"])
 
 
 def _review(body: str, **over: Any) -> dict[str, Any]:
@@ -665,10 +669,10 @@ def test_the_gate_requires_the_oracle_and_prints_no_parity(monkeypatch: pytest.M
 @pytest.mark.parametrize(
     ("statuses", "expected_status"),
     [
-        ([], oracle_review_check.WAITING),
-        ([_verdict("pending")], oracle_review_check.WAITING),
-        ([_verdict("failure")], oracle_review_check.WAITING),
-        ([_verdict("success")], oracle_review_check.PASS),
+        ([], review_check.WAITING),
+        ([_verdict("pending")], review_check.WAITING),
+        ([_verdict("failure")], review_check.WAITING),
+        ([_verdict("success")], review_check.PASS),
     ],
     ids=["absent", "pending", "failure", "success"],
 )
@@ -685,7 +689,7 @@ EDITED_REVIEW = _review(SHIP_BODY, last_edited_at="2026-10-02T09:00:00Z", includ
 
 def test_an_edited_ship_review_over_a_failure_verdict_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     requested = _stub_main(monkeypatch, [_verdict("failure")], reviews=[EDITED_REVIEW])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
     assert any(path.endswith("/reviews") for path in requested)
 
 
@@ -693,40 +697,40 @@ def test_deleting_a_later_do_not_ship_review_does_not_revive_an_earlier_ship(mon
     earlier_ship = _review(SHIP_BODY, submitted_at=BEFORE_HEAD)
     statuses = [_verdict("success", created_at=BEFORE_HEAD, id=1), _verdict("failure", created_at=AFTER_HEAD, id=2)]
     _stub_main(monkeypatch, statuses, reviews=[earlier_ship])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
 
 
 def test_a_ship_review_with_no_app_verdict_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_main(monkeypatch, [], reviews=[_review(SHIP_BODY)])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
 
 
 def test_a_ship_review_with_a_non_app_verdict_status_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     forged = _verdict("success", login="joeharris76", user_type="User")
     _stub_main(monkeypatch, [forged], reviews=[_review(SHIP_BODY)])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
 
 
 def test_an_edited_receipt_over_a_success_verdict_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = _review(SHIP_BODY, node_id="node_9", submitted_at=AFTER_HEAD)
     _stub_main(monkeypatch, [_verdict("success")], reviews=[raw], edited=("2026-10-02T09:00:00Z", True))
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
 
 
 def test_an_unreadable_receipt_check_is_an_error_not_an_edited_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(_token: str, _node_id: str) -> tuple[None, bool]:
-        raise oracle_review_check.CheckError("GraphQL down")
+        raise review_check.CheckError("GraphQL down")
 
     _stub_main(monkeypatch, [_verdict("success")], reviews=[_review(SHIP_BODY, node_id="node_9")])
-    monkeypatch.setattr(oracle_review_check, "fetch_review_edit", broken)
+    monkeypatch.setattr(review_check, "fetch_review_edit", broken)
     posts: list[tuple[str, int, str]] = []
     monkeypatch.setattr(
-        oracle_gate, "post_status", lambda token, repo, head, status, message: posts.append((head, status, message))
+        gate, "post_status", lambda token, repo, head, status, message: posts.append((head, status, message))
     )
-    assert oracle_gate.main(["--repo", "o/r", "--pr", "7"]) == oracle_review_check.ERROR
-    assert [(head, status) for head, status, _ in posts] == [(HEAD, oracle_review_check.ERROR)]
+    assert gate.main(["--repo", "o/r", "--pr", "7", *POLICY_ARGS]) == review_check.ERROR
+    assert [(head, status) for head, status, _ in posts] == [(HEAD, review_check.ERROR)]
     assert "GraphQL down" in posts[0][2]
-    assert _gate() == oracle_review_check.ERROR
+    assert _gate() == review_check.ERROR
 
 
 def test_fetch_review_edit_reads_the_graphql_edit_flags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -736,34 +740,34 @@ def test_fetch_review_edit_reads_the_graphql_edit_flags(monkeypatch: pytest.Monk
         seen.append({"url": url, "body": body})
         return {"data": {"node": {"lastEditedAt": None, "includesCreatedEdit": False}}}
 
-    monkeypatch.setattr(oracle_review_check, "_request", request)
-    assert oracle_review_check.fetch_review_edit("t", "node_9") == (None, False)
+    monkeypatch.setattr(review_check, "_request", request)
+    assert review_check.fetch_review_edit("t", "node_9") == (None, False)
     assert seen[0]["url"].endswith("/graphql")
     assert seen[0]["body"]["variables"] == {"id": "node_9"}
 
 
 def test_fetch_review_edit_fails_closed_on_graphql_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(oracle_review_check, "_request", lambda *a, **k: {"errors": [{"message": "down"}]})
-    with pytest.raises(oracle_review_check.CheckError):
-        oracle_review_check.fetch_review_edit("t", "node_9")
+    monkeypatch.setattr(review_check, "_request", lambda *a, **k: {"errors": [{"message": "down"}]})
+    with pytest.raises(review_check.CheckError):
+        review_check.fetch_review_edit("t", "node_9")
 
 
 def test_fetch_review_edit_fails_closed_on_a_null_node(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(oracle_review_check, "_request", lambda *a, **k: {"data": {"node": None}})
-    with pytest.raises(oracle_review_check.CheckError):
-        oracle_review_check.fetch_review_edit("t", "node_9")
+    monkeypatch.setattr(review_check, "_request", lambda *a, **k: {"data": {"node": None}})
+    with pytest.raises(review_check.CheckError):
+        review_check.fetch_review_edit("t", "node_9")
 
 
 def test_fetch_review_edit_fails_closed_when_edit_fields_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(oracle_review_check, "_request", lambda *a, **k: {"data": {"node": {}}})
-    with pytest.raises(oracle_review_check.CheckError):
-        oracle_review_check.fetch_review_edit("t", "node_9")
+    monkeypatch.setattr(review_check, "_request", lambda *a, **k: {"data": {"node": {}}})
+    with pytest.raises(review_check.CheckError):
+        review_check.fetch_review_edit("t", "node_9")
 
 
 def test_annotate_receipt_marks_a_receipt_without_a_node_id_as_edited() -> None:
     reviews = [_receipt_review()]
     assert "node_id" not in reviews[0]
-    oracle_review_check.annotate_receipt("t", reviews, HEAD)
+    review_check.annotate_receipt("t", reviews, HEAD, BINDING.bot_login)
     assert _oracle(statuses=[_verdict()], reviews=reviews)[0] == 1
 
 
@@ -789,9 +793,9 @@ def test_annotate_checks_every_receipt_the_gate_may_decide_on(
         seen.append(node_id)
         return None, False
 
-    monkeypatch.setattr(oracle_review_check, "fetch_review_edit", edit)
+    monkeypatch.setattr(review_check, "fetch_review_edit", edit)
     reviews = [earlier, later]
-    oracle_review_check.annotate_receipt("t", reviews, HEAD)
+    review_check.annotate_receipt("t", reviews, HEAD, BINDING.bot_login)
     assert sorted(seen) == ["node_new", "node_old"]
     assert _oracle(statuses=[_verdict()], reviews=reviews)[0] == 0
 
@@ -809,18 +813,18 @@ def _other_pr_success() -> dict[str, Any]:
 
 def test_a_newer_success_for_another_pull_request_does_not_strand_this_one() -> None:
     own = _verdict()
-    assert _oracle(statuses=[own])[0] == oracle_review_check.PASS
-    assert _oracle(statuses=[own, _other_pr_success()])[0] == oracle_review_check.PASS
+    assert _oracle(statuses=[own])[0] == review_check.PASS
+    assert _oracle(statuses=[own, _other_pr_success()])[0] == review_check.PASS
 
 
 def test_a_newer_success_with_no_receipt_here_does_not_hide_a_failure_after_it() -> None:
     failure = _verdict("failure", created_at=LATEST, id=3)
-    assert _oracle(statuses=[_verdict(), _other_pr_success(), failure])[0] == oracle_review_check.WAITING
+    assert _oracle(statuses=[_verdict(), _other_pr_success(), failure])[0] == review_check.WAITING
 
 
 def test_an_earlier_success_is_not_reused_across_a_later_failure_and_new_success() -> None:
     statuses = [_verdict(), _verdict("failure", created_at=LATER, id=3), _other_pr_success()]
-    assert _oracle(statuses=statuses)[0] == oracle_review_check.WAITING
+    assert _oracle(statuses=statuses)[0] == review_check.WAITING
 
 
 def test_an_edited_receipt_for_the_newest_run_here_is_not_bypassed_by_an_older_run() -> None:
@@ -831,16 +835,16 @@ def test_an_edited_receipt_for_the_newest_run_here_is_not_bypassed_by_an_older_r
         body=_marked_body(newer_run), submitted_at=LATEST, last_edited_at=LATEST, includes_created_edit=True
     )
     reviews = [_receipt_review(submitted_at=BEFORE_HEAD), edited]
-    assert _oracle(statuses=[older, newest], reviews=reviews)[0] == oracle_review_check.WAITING
+    assert _oracle(statuses=[older, newest], reviews=reviews)[0] == review_check.WAITING
 
 
 def test_a_withheld_verdict_between_two_successes_blocks_the_earlier_one() -> None:
     statuses = [_verdict(), _verdict("pending", created_at=LATER, id=3), _other_pr_success() | {"created_at": LATEST}]
-    assert _oracle(statuses=statuses)[0] == oracle_review_check.WAITING
+    assert _oracle(statuses=statuses)[0] == review_check.WAITING
 
 
 def test_a_success_with_no_matching_receipt_here_still_waits() -> None:
-    assert _oracle(statuses=[_other_pr_success()])[0] == oracle_review_check.WAITING
+    assert _oracle(statuses=[_other_pr_success()])[0] == review_check.WAITING
 
 
 def test_annotate_receipt_raises_when_the_edit_check_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -848,36 +852,36 @@ def test_annotate_receipt_raises_when_the_edit_check_is_unreadable(monkeypatch: 
     reviews[0]["node_id"] = "node_9"
 
     def broken(_token: str, _node_id: str) -> tuple[None, bool]:
-        raise oracle_review_check.CheckError("GraphQL down")
+        raise review_check.CheckError("GraphQL down")
 
-    monkeypatch.setattr(oracle_review_check, "fetch_review_edit", broken)
-    with pytest.raises(oracle_review_check.CheckError, match="GraphQL down"):
-        oracle_review_check.annotate_receipt("t", reviews, HEAD)
+    monkeypatch.setattr(review_check, "fetch_review_edit", broken)
+    with pytest.raises(review_check.CheckError, match="GraphQL down"):
+        review_check.annotate_receipt("t", reviews, HEAD, BINDING.bot_login)
 
 
 def test_a_standin_still_counts_against_an_exempt_success_verdict() -> None:
-    exempt = _verdict("success", description=oracle_review_check.EXEMPT_SUCCESS_DESCRIPTION)
+    exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
     status, message = _oracle(statuses=[exempt], comments=[_attestation(created_at=LATER)])
-    assert status == oracle_review_check.PASS
+    assert status == review_check.PASS
     assert "stand-in review attested" in message
 
 
 def test_the_gate_rejects_an_exempt_success_verdict_when_a_review_is_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exempt = _verdict("success", description=oracle_review_check.EXEMPT_SUCCESS_DESCRIPTION)
+    exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
     _stub_main(monkeypatch, [exempt])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
     _stub_main(monkeypatch, [_verdict("success")])
-    assert _gate() == oracle_review_check.PASS
+    assert _gate() == review_check.PASS
 
 
 def test_a_shadow_header_review_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     shadow = _review(f"### oracle-review-shadow: success for `{HEAD}`\n\nDecision: **SHIP**.\n")
     _stub_main(monkeypatch, [], reviews=[shadow])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
     _stub_main(monkeypatch, [_verdict(context="oracle-review-shadow")], reviews=[shadow])
-    assert _gate() == oracle_review_check.WAITING
+    assert _gate() == review_check.WAITING
 
 
 def test_fetch_statuses_reads_the_head_commit_and_keeps_the_creator_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -891,20 +895,18 @@ def test_fetch_statuses_reads_the_head_commit_and_keeps_the_creator_type(monkeyp
         "target_url": "https://example.invalid",
     }
     seen: list[str] = []
-    monkeypatch.setattr(oracle_review_check, "_paginate", lambda token, path: seen.append(path) or [raw])
-    assert oracle_review_check.fetch_statuses("t", "o/r", HEAD) == [
-        _verdict("success", id=9, description="large: SHIP")
-    ]
+    monkeypatch.setattr(review_check, "_paginate", lambda token, path: seen.append(path) or [raw])
+    assert review_check.fetch_statuses("t", "o/r", HEAD) == [_verdict("success", id=9, description="large: SHIP")]
     assert seen == [f"/repos/o/r/commits/{HEAD}/statuses"]
 
 
 def _refusal_description() -> str:
-    from _project.scripts.oracle_reviewers import report
-    from _project.scripts.oracle_reviewers.policy import load_policy
+    from theseus_reviewer import report
+    from theseus_reviewer.policy import load_policy
 
     patches = {"aaaaaaaa": "11111111"}
     plan = {
-        "status_context": load_policy(REPO_ROOT / ".github" / "oracle-reviewers.yml").status_context,
+        "status_context": load_policy(CONSUMER_ALPHA / POLICY_REL).status_context,
         "head_sha": HEAD,
         "mode": "shadow",
         "tier": "very-high",
@@ -922,25 +924,25 @@ def _refusal_description() -> str:
         },
     }
     payload = report.status_payload(plan, report.refused(plan), "https://example.invalid/run")
-    assert payload["context"] == oracle_review_check.ORACLE_CONTEXT and payload["state"] == "failure"
+    assert payload["context"] == review_check.ORACLE_CONTEXT and payload["state"] == "failure"
     return payload["description"]
 
 
 def test_a_refused_pull_request_is_told_to_open_a_new_one() -> None:
     status, message = _oracle(statuses=[_verdict("failure", description=_refusal_description())])
-    assert status == oracle_review_check.WAITING
+    assert status == review_check.WAITING
     assert "refused to review" in message and "close this pull request and open a new one" in message
     failure_status, failure_message = _oracle(statuses=[_verdict("failure")])
-    assert failure_status == oracle_review_check.WAITING and "refused" not in failure_message
+    assert failure_status == review_check.WAITING and "refused" not in failure_message
 
 
 def test_a_standin_after_a_refusal_passes() -> None:
     statuses = [_verdict("failure", description=_refusal_description(), created_at=AFTER_HEAD)]
     later = "2026-10-08T23:59:59Z"
     status, message = _oracle(statuses=statuses, comments=[_attestation(created_at=later)])
-    assert status == oracle_review_check.PASS and "stand-in review attested" in message
+    assert status == review_check.PASS and "stand-in review attested" in message
     early = _oracle(statuses=statuses, comments=[_attestation(created_at=BEFORE_HEAD)])
-    assert early[0] == oracle_review_check.WAITING
+    assert early[0] == review_check.WAITING
 
 
 @pytest.mark.parametrize(
@@ -956,9 +958,42 @@ def test_a_standin_after_a_refusal_passes() -> None:
     ],
 )
 def test_the_api_root_is_overridden_only_by_a_loopback_server(value: str, expected: str) -> None:
-    assert oracle_review_check._api_root(value) == expected
+    assert review_check._api_root(value) == expected
 
 
 def test_a_verdict_posted_before_the_base_changed_is_not_a_verdict_for_the_new_base() -> None:
     status, message = _oracle(statuses=[_verdict("success", created_at=AFTER_HEAD)], base_date=RETARGETED)
-    assert status == oracle_review_check.WAITING and "waiting for the oracle's verdict" in message
+    assert status == review_check.WAITING and "waiting for the oracle's verdict" in message
+
+
+BETA_BINDING = gate.load_gate_config(POLICY_REL, CONSUMER_BETA).binding
+
+
+def _beta(**kwargs: Any) -> tuple[int, str]:
+    return review_check.decide(
+        HEAD,
+        kwargs.pop("files", SOUNDNESS_FILES),
+        kwargs.pop("statuses", []),
+        _alpha_matcher(2, 2),
+        None,
+        kwargs.pop("comments", []),
+        binding=BETA_BINDING,
+        reviews=kwargs.pop("reviews", []),
+    )
+
+
+def test_the_oracle_identity_comes_from_the_binding() -> None:
+    assert _oracle()[0] == review_check.PASS
+    assert _beta(statuses=[_verdict()], reviews=[_receipt_review()])[0] == review_check.WAITING
+    beta_login = "beta-oracle[bot]"
+    status, _ = _beta(statuses=[_verdict(login=beta_login)], reviews=[_receipt_review(login=beta_login)])
+    assert status == review_check.PASS
+
+
+def test_the_attesters_come_from_the_binding() -> None:
+    comment = _attestation()
+    assert _decide(comments=[comment])[0] == review_check.PASS
+    assert _beta(comments=[comment])[0] == review_check.WAITING
+    for attester in ("beta-owner", "beta-deputy"):
+        status, message = _beta(comments=[{**comment, "login": attester}])
+        assert status == review_check.PASS and attester in message

@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, cli, omp_pin, selection
-from _project.scripts.oracle_reviewers.absence import INCOMPLETE, INVALID, Absence
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.render import (
+from theseus_reviewer import attempts, cli, omp_pin, selection
+from theseus_reviewer.absence import INCOMPLETE, INVALID, Absence
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.render import (
     RETRY_NONE,
     SLOT_MAX_BYTES,
     UNREAD_MARK,
@@ -20,7 +20,7 @@ from _project.scripts.oracle_reviewers.render import (
     retry_note,
     unread_required,
 )
-from _project.scripts.oracle_reviewers.selection import Attempt, SelectionInput
+from theseus_reviewer.selection import Attempt, SelectionInput
 
 from .test_attempt_loop import Loop, _git
 from .test_attempts import _classification, _plan
@@ -28,7 +28,7 @@ from .test_render import _values
 
 pytestmark = [pytest.mark.unit, pytest.mark.medium]
 
-FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers"
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers"
 TEMPLATES = "_project/scripts/oracle_reviewers/templates"
 TESTS = "tests/unit/scripts/oracle_reviewers"
 READ_ALREADY = (

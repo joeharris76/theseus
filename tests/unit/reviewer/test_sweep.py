@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from _project.scripts.oracle_reviewers import sweep
-from _project.scripts.oracle_reviewers.github import SWEEP_FAILURE_SURFACE_PREFIX
+from theseus_reviewer import sweep
+from theseus_reviewer.github import SWEEP_FAILURE_SURFACE_PREFIX
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

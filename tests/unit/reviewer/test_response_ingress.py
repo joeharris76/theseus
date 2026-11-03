@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, protocol, selection
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.verdict import (
+from theseus_reviewer import attempts, protocol, selection
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.verdict import (
     RESPONSE_PLACEHOLDERS,
     VerdictError,
     normalize_reviewer,
@@ -213,7 +213,7 @@ def test_missing_do_not_ship_summary_stays_invalid() -> None:
 
 
 def test_actual_pr3237_responses_preserve_unfixed_d6() -> None:
-    path = Path(__file__).resolve().parents[3] / "fixtures/oracle_reviewers/pr3237_missing_text_fields.json"
+    path = Path(__file__).resolve().parents[2] / "fixtures/oracle_reviewers/pr3237_missing_text_fields.json"
     for record in json.loads(path.read_text(encoding="utf-8")):
         with pytest.raises(VerdictError):
             validate(record["payload"])

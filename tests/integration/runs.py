@@ -11,16 +11,16 @@ from unittest import mock
 
 import yaml
 
-from _project.scripts.oracle_reviewers import isolation, omp_pin
+from theseus_reviewer import isolation, omp_pin
 
 from .fake_github import APP_TOKEN, JOB_TOKEN
 from .harness import (
+    ALPHA_ROOT,
     APP_PRIVATE_KEY,
     GATEWAY_TOKEN,
     HELD_SECRET,
     JEV_KEY,
     OAUTH_CLIENT_ID,
-    REPO_ROOT,
     WORKFLOW,
     ReviewRun,
     Step,
@@ -35,7 +35,6 @@ ENVIRONMENT_STEPS = frozenset(
     {
         "Refuse a dispatch from any ref other than develop",
         "Check out the trusted develop copy",
-        "Check out the current develop gate",
         "Install uv",
         "Join the tailnet to reach the credential gateway",
     }
@@ -45,7 +44,7 @@ MINT_STEP = "Mint the App token"
 ISOLATION_PHASE = "isolation"
 DECOYED_STEPS = frozenset({"prepare", "finalize", "publish"})
 SCANS = ("scan-before", "scan-after-join", "scan-after-exit")
-DRIVE_PHASE = re.compile(r"\bdrive(?: --policy (?P<policy>\S+))? (?P<phase>\w+)\s*$")
+DRIVE_PHASE = re.compile(r"\bdrive --policy (?P<policy>\S+) (?P<phase>\w+)\s*$")
 CONDITION = re.compile(
     r"(?P<left>steps\.\w+\.outputs\.\w+|steps\.\w+\.outcome|env\.\w+) (?P<operator>==|!=|>=) (?P<right>'[^']*'|\d+)"
 )
@@ -54,20 +53,19 @@ STEP_OUTPUT = re.compile(r"steps\.(\w+)\.outputs\.(\w+)")
 AFTER = re.compile(r"after attempt (\d+)$")
 
 
-SCAN_COMMAND = "python3 -m _project.scripts.oracle_reviewers.cli drive scan"
 SCAN_WITHOUT_SHARED_SCRATCH = (
-    "import dataclasses, os\n"
+    "import dataclasses, os, sys\n"
     "from pathlib import Path\n"
-    "from _project.scripts.oracle_reviewers import driver\n"
-    "env = driver.CiEnvironment.from_environ(os.environ, Path(driver.POLICY_DEFAULT))\n"
+    "from theseus_reviewer import driver\n"
+    "env = driver.CiEnvironment.from_environ(os.environ, Path(sys.argv[1]))\n"
     "shared = {Path('/tmp'), Path('/var/tmp'), Path('/dev/shm')}\n"
     "kept = tuple(root for root in env.scan_roots if root not in shared)\n"
     "raise SystemExit(driver.scan(dataclasses.replace(env, scan_roots=kept), None))\n"
 )
 
 
-def scan_step(harness: Harness, name: str, env: dict[str, str]) -> Step:
-    return harness.run(name, [sys.executable, "-c", SCAN_WITHOUT_SHARED_SCRATCH], env)
+def scan_step(harness: Harness, name: str, env: dict[str, str], policy: str) -> Step:
+    return harness.run(name, [sys.executable, "-c", SCAN_WITHOUT_SHARED_SCRATCH, policy], env)
 
 
 @dataclass
@@ -82,11 +80,11 @@ class Options:
 
 
 def review_steps() -> list[dict[str, Any]]:
-    return yaml.safe_load((REPO_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["steps"]
+    return yaml.safe_load((ALPHA_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["steps"]
 
 
 def review_job_env() -> dict[str, str]:
-    return yaml.safe_load((REPO_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["env"]
+    return yaml.safe_load((ALPHA_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["env"]
 
 
 def phase_keys() -> dict[str, tuple[str, dict[str, Any]]]:
@@ -148,7 +146,6 @@ class WorkflowRunner:
         expression = _bare(str(raw))
         known: dict[str, str] = {
             "github.token": JOB_TOKEN,
-            "${{ github.workspace }}/gate": str(REPO_ROOT),
             "secrets.TYPESAFE_API_KEY": JEV_KEY,
             "secrets.TS_OAUTH_CI_SECRET": HELD_SECRET,
             "secrets.TS_OAUTH_CI_CLIENT_ID": OAUTH_CLIENT_ID,
@@ -208,18 +205,16 @@ class WorkflowRunner:
             **scoped,
         }
 
-    def _drive(self, step: dict[str, Any], phase: str, policy: str | None) -> Step:
+    def _drive(self, step: dict[str, Any], phase: str, policy: str) -> Step:
         key = self.keys[step["name"]]
         env = self._step_env(step, key)
         env_file = self.temp / f"github-env-{key}.txt"
         env_file.write_text("", encoding="utf-8")
         extra = {"GITHUB_ENV": str(env_file)}
         if phase == "scan":
-            assert step["run"].strip() == SCAN_COMMAND
-            result = scan_step(self.harness, key, {**env, **extra})
+            result = scan_step(self.harness, key, {**env, **extra}, policy)
         else:
-            args = ["drive", *(["--policy", str(self.harness.policy_file)] if policy else []), phase]
-            result = self.harness.cli(key, args, {**env, **extra})
+            result = self.harness.cli(key, ["drive", "--policy", policy, phase], {**env, **extra})
         written = env_file.read_text(encoding="utf-8")
         if phase == "harness":
             result.outputs["env"] = written

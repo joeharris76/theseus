@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import recovery
-from _project.scripts.oracle_reviewers.jev import JevError, JevSession
+from theseus_reviewer import recovery
+from theseus_reviewer.jev import JevError, JevSession
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

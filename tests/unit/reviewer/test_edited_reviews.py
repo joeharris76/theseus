@@ -6,12 +6,11 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, edits, github, protocol
-from _project.scripts.oracle_reviewers.dedup import fingerprint, open_fingerprints
+from theseus_reviewer import cli, edits, github, protocol
+from theseus_reviewer.dedup import fingerprint, open_fingerprints
 
 from .conftest import POLICY_PATH
 from .test_cli_plan import (
-    CAPTURE,
     CAPTURE_CHANGED,
     CHECKER,
     DEFECT,
@@ -27,7 +26,7 @@ from .test_cli_plan import (
     _thread_fake,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.fast]
+pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 BOT = "benchbox-oracle"
 CREATED_EDIT = (None, True)

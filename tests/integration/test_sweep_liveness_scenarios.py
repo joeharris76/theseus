@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from _project.scripts.oracle_reviewers.github import SWEEP_FAILURE_SURFACE_PREFIX
+from theseus_reviewer.github import SWEEP_FAILURE_SURFACE_PREFIX
 
 from .fake_github import ACCOUNTS, APP_TOKEN, now_text
 from .harness import SLUG, Harness, ago

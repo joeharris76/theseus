@@ -18,12 +18,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from _project.scripts.oracle_reviewers import cli, omp_pin
+from theseus_reviewer import cli, omp_pin
 
 from .conftest import POLICY_PATH
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
+SRC_ROOT = Path(omp_pin.__file__).resolve().parents[1]
 SCRIPT = "#!/bin/sh\necho omp/1.2.3\n"
 URL = "https://downloads.example.invalid/omp-linux-x64"
 
@@ -302,7 +303,7 @@ def test_the_cache_root_defaults_under_home_and_honours_the_override(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv(omp_pin.CACHE_ENV, raising=False)
-    assert omp_pin.cache_root() == tmp_path / ".cache" / "benchbox" / "omp"
+    assert omp_pin.cache_root() == tmp_path / ".cache" / "theseus" / "omp"
     monkeypatch.setenv(omp_pin.CACHE_ENV, str(tmp_path / "elsewhere"))
     assert omp_pin.cache_root() == tmp_path / "elsewhere"
 
@@ -391,8 +392,8 @@ def test_verified_binary_never_falls_back_to_the_path_omp(tmp_path: Path, monkey
 
 @pytest.mark.parametrize("command", ["select", "scan-disk", "attempts", "finalize"])
 def test_bare_python_cli_imports_without_pyyaml(command: str) -> None:
-    root = POLICY_PATH.parents[1]
-    env = {**os.environ, "PYTHONPATH": str(root), "MUTANT_UNDER_TEST": ""}
+    root = SRC_ROOT
+    env = {**os.environ, "PYTHONPATH": str(SRC_ROOT), "MUTANT_UNDER_TEST": ""}
     probe = subprocess.run(
         [sys.executable, "-S", "-c", "import importlib.util; assert importlib.util.find_spec('yaml') is None"],
         cwd=root,
@@ -402,7 +403,7 @@ def test_bare_python_cli_imports_without_pyyaml(command: str) -> None:
     )
     assert probe.returncode == 0, probe.stderr
     result = subprocess.run(
-        [sys.executable, "-S", "-m", "_project.scripts.oracle_reviewers.cli", command, "--help"],
+        [sys.executable, "-S", "-m", "theseus_reviewer", command, "--help"],
         cwd=root,
         env=env,
         capture_output=True,
@@ -413,13 +414,13 @@ def test_bare_python_cli_imports_without_pyyaml(command: str) -> None:
 
 
 def test_bare_python_disk_scan_runs_without_pyyaml(tmp_path: Path) -> None:
-    root = POLICY_PATH.parents[1]
+    root = SRC_ROOT
     result = subprocess.run(
         [
             sys.executable,
             "-S",
             "-m",
-            "_project.scripts.oracle_reviewers.cli",
+            "theseus_reviewer",
             "scan-disk",
             "--root",
             str(tmp_path),

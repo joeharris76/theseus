@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from _project.scripts.oracle_reviewers.dedup import fingerprint, marker, open_fingerprints, split, thread_fingerprint
-from _project.scripts.oracle_reviewers.verdict import Finding
+from theseus_reviewer.dedup import fingerprint, marker, open_fingerprints, split, thread_fingerprint
+from theseus_reviewer.verdict import Finding
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import promotion, protocol
-from _project.scripts.oracle_reviewers.policy import Policy, PromotionRules
+from theseus_reviewer import promotion, protocol
+from theseus_reviewer.policy import Policy, PromotionRules
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -459,6 +459,8 @@ def _preparation_inputs(*, bootstrap: bool = False) -> dict[str, Any]:
         "is_ancestor": lambda _ancestor, _descendant: True,
         "artifact_loader": lambda url: dependency if "pyyaml" in url else wheel,
         "rules": PromotionRules(
+            repository="BenchBox-dev/theseus",
+            bootstrap_reviewers=("joeharris76",),
             dependencies={"pyyaml==6.0.3": dependency_sha},
             bootstrap_baseline_commit=SHA_C,
             bootstrap_path_map=path_map,
@@ -470,7 +472,7 @@ def _preparation_inputs(*, bootstrap: bool = False) -> dict[str, Any]:
 def test_preparation_accepts_trusted_dependency_pin_and_rejects_unpinned_author_hash() -> None:
     inputs = _preparation_inputs()
     assert promotion.prepare_promotion(**inputs) is not None
-    inputs["rules"] = PromotionRules()
+    inputs["rules"] = replace(inputs["rules"], dependencies={})
     with pytest.raises(promotion.PromotionError, match="not pinned in the base review policy"):
         promotion.prepare_promotion(**inputs)
 
@@ -528,8 +530,8 @@ def test_trusted_dependency_pin_still_requires_matching_downloaded_bytes() -> No
 def test_ci_bootstrap_reads_authenticated_comments_and_holds_on_fetch_failure(
     monkeypatch: pytest.MonkeyPatch, policy: Policy, fetch_fails: bool, status: str
 ) -> None:
-    from _project.scripts.oracle_reviewers import cli, github
-    from _project.scripts.oracle_reviewers.classifier import ChangedFile
+    from theseus_reviewer import cli, github
+    from theseus_reviewer.classifier import ChangedFile
 
     inputs = _preparation_inputs(bootstrap=True)
     lock = promotion.parse_lock(inputs["head_lock_text"])
@@ -629,8 +631,8 @@ def test_lock_rejects_duplicate_normalized_dependencies(other_name: str, other_v
 def test_ci_lock_fetch_errors_other_than_not_found_hold(
     monkeypatch: pytest.MonkeyPatch, policy: Policy, error: str
 ) -> None:
-    from _project.scripts.oracle_reviewers import cli, github
-    from _project.scripts.oracle_reviewers.classifier import ChangedFile
+    from theseus_reviewer import cli, github
+    from theseus_reviewer.classifier import ChangedFile
 
     def fail(*_args: Any, **_kwargs: Any) -> str:
         raise github.GitHubError(error)
@@ -647,8 +649,8 @@ def test_ci_lock_fetch_errors_other_than_not_found_hold(
 
 
 def test_ci_rename_away_from_canonical_lock_is_removal_hold(monkeypatch: pytest.MonkeyPatch, policy: Policy) -> None:
-    from _project.scripts.oracle_reviewers import cli, github
-    from _project.scripts.oracle_reviewers.classifier import ChangedFile
+    from theseus_reviewer import cli, github
+    from theseus_reviewer.classifier import ChangedFile
 
     inputs = _preparation_inputs()
 
@@ -680,8 +682,8 @@ def test_ci_rename_away_from_canonical_lock_is_removal_hold(monkeypatch: pytest.
 def test_local_lock_renames_resolve_only_canonical_base_and_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: Policy, rename_into_lock: bool
 ) -> None:
-    from _project.scripts.oracle_reviewers import cli
-    from _project.scripts.oracle_reviewers.classifier import ChangedFile
+    from theseus_reviewer import cli
+    from theseus_reviewer.classifier import ChangedFile
 
     def git(*args: str) -> str:
         return subprocess.run(

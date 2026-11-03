@@ -8,15 +8,15 @@ from typing import Any
 import pytest
 import yaml
 
-from _project.scripts.oracle_reviewers import omp_pin
-from _project.scripts.oracle_reviewers.commands import (
+from theseus_reviewer import omp_pin
+from theseus_reviewer.commands import (
     FORBIDDEN_FLAGS,
     build,
     build_omp,
     write_overlay,
 )
-from _project.scripts.oracle_reviewers.policy import Reviewer
-from _project.scripts.oracle_reviewers.runner import Invocation, execute
+from theseus_reviewer.policy import Reviewer
+from theseus_reviewer.runner import Invocation, execute
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

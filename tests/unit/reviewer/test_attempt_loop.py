@@ -11,16 +11,17 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, cli, credentials, disk_scan, omp_pin, processes, runner
-from _project.scripts.oracle_reviewers.absence import ERROR, INVALID, TIMEOUT, Absence
-from _project.scripts.oracle_reviewers.commands import OMP_BASE_ENV, Invocation, omp_env
-from _project.scripts.oracle_reviewers.policy import Policy, Reviewer
-from _project.scripts.oracle_reviewers.selection import JOB_FAILURE_DETAIL
+from conftest import CONSUMER_ALPHA
+from theseus_reviewer import attempts, cli, credentials, disk_scan, omp_pin, processes, runner
+from theseus_reviewer.absence import ERROR, INVALID, TIMEOUT
+from theseus_reviewer.commands import OMP_BASE_ENV, Invocation, omp_env
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.selection import JOB_FAILURE_DETAIL
 
 from .loop_process import Journal
 from .test_attempts import RUN_ID, _classification, _plan
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+LOOP_PROCESS = Path(__file__).resolve().with_name("loop_process.py")
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -86,13 +87,12 @@ class Loop:
         result = subprocess.run(
             [
                 sys.executable,
-                "-m",
-                "tests.unit.scripts.oracle_reviewers.loop_process",
+                str(LOOP_PROCESS),
                 str(spec),
                 *(command or self.attempts_command()),
             ],
-            cwd=REPO_ROOT,
-            env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "MUTANT_UNDER_TEST": "", "TYPESAFE_API_KEY": ""},
+            cwd=CONSUMER_ALPHA,
+            env={**os.environ, "MUTANT_UNDER_TEST": "", "TYPESAFE_API_KEY": ""},
             capture_output=True,
             text=True,
             check=False,
@@ -253,9 +253,9 @@ def test_execute_raises_for_a_survivor_and_kills_it(tmp_path: Path) -> None:
 
 def _adopting_child(mode: str, *args: str) -> Any:
     result = subprocess.run(
-        [sys.executable, "-m", "tests.unit.scripts.oracle_reviewers.loop_process", "adopt", mode, *args],
-        cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "MUTANT_UNDER_TEST": ""},
+        [sys.executable, str(LOOP_PROCESS), "adopt", mode, *args],
+        cwd=CONSUMER_ALPHA,
+        env={**os.environ, "MUTANT_UNDER_TEST": ""},
         capture_output=True,
         text=True,
         check=True,

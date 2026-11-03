@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, driver, github, isolation, omp_pin
-from _project.scripts.oracle_reviewers.driver import CiEnvironment, GitHubSink
+from theseus_reviewer import cli, driver, github, isolation, omp_pin
+from theseus_reviewer.driver import CiEnvironment, GitHubSink
+
+from .conftest import POLICY_PATH
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -29,7 +32,9 @@ def _environment(tmp_path: Path, **overrides: str) -> CiEnvironment:
         "HOME": str(tmp_path / "home"),
         **overrides,
     }
-    return CiEnvironment.from_environ(environ, tmp_path / "policy.yml")
+    policy = tmp_path / "policy.yml"
+    shutil.copy(POLICY_PATH, policy)
+    return CiEnvironment.from_environ(environ, policy)
 
 
 def _write(path: Path, data: Any) -> None:
@@ -93,14 +98,14 @@ class RecordingSink:
 @pytest.fixture
 def sink(monkeypatch: pytest.MonkeyPatch) -> RecordingSink:
     recording = RecordingSink()
-    monkeypatch.setattr(driver, "GitHubSink", lambda app_token, job_token: recording)
+    monkeypatch.setattr(driver, "GitHubSink", lambda app_token, job_token, gated_base, policy: recording)
     return recording
 
 
 def test_every_phase_is_a_drive_subcommand() -> None:
     parser = cli._parser()
     for name in driver.PHASES:
-        parsed = parser.parse_args(["drive", name])
+        parsed = parser.parse_args(["drive", "--policy", str(POLICY_PATH), name])
         assert parsed.phase == name and parsed.handler is driver.command_drive
 
 
@@ -360,7 +365,7 @@ def test_the_dispatch_phase_dispatches_the_gate_only_for_a_develop_base(
     _plan(environment.layout)
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(github, "pull_base_ref", lambda repo, pr, token: base)
-    monkeypatch.setattr(github, "dispatch_gate", lambda repo, pr, head, token: calls.append((token, head)))
+    monkeypatch.setattr(github, "dispatch_gate", lambda repo, pr, head, token, base: calls.append((token, head)))
 
     assert driver.dispatch(environment, argparse.Namespace()) == 0
 
@@ -404,7 +409,7 @@ def test_the_github_sink_posts_each_payload_with_the_app_token(tmp_path: Path, m
     monkeypatch.setattr(github, "post_file", lambda path, payload, token: posted.append((path, token)))
     payload = tmp_path / "payload.json"
 
-    sink = GitHubSink("app-token", "job-token")
+    sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
     sink.status(REPO, HEAD, payload)
     sink.comment(REPO, 7, payload)
     sink.review(REPO, 7, payload)
@@ -418,9 +423,11 @@ def test_the_github_sink_posts_each_payload_with_the_app_token(tmp_path: Path, m
 
 def test_the_github_sink_posts_the_gate_with_the_app_token(monkeypatch: pytest.MonkeyPatch) -> None:
     posted: list[tuple[str, int, str, str]] = []
-    monkeypatch.setattr(github, "post_gate", lambda repo, pr, head, token: posted.append((repo, pr, head, token)))
+    monkeypatch.setattr(
+        github, "post_gate", lambda repo, pr, head, token, policy: posted.append((repo, pr, head, token))
+    )
 
-    GitHubSink("app-token", "job-token").gate(REPO, 7, HEAD)
+    GitHubSink("app-token", "job-token", "develop", POLICY_PATH).gate(REPO, 7, HEAD)
 
     assert posted == [(REPO, 7, HEAD, "app-token")]
 

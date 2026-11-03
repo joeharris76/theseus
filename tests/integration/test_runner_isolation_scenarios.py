@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from .harness import REPO_ROOT, Harness, Step
-from .runs import SCAN_COMMAND, scan_step, step_by_name
+from .harness import POLICY, Harness, Step
+from .runs import scan_step, step_by_name
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
@@ -24,7 +24,6 @@ def _run_step(harness: Harness, name: str, extra: dict[str, str]) -> Step:
     env = {
         **harness.base_env(temp),
         "PATH": f"{Path(sys.executable).parent}:{harness.base_env(temp)['PATH']}",
-        "PYTHONPATH": str(REPO_ROOT),
         "GITHUB_WORKSPACE": str(workspace),
         "TMPDIR": str(temp / "tmp"),
         **extra,
@@ -32,9 +31,9 @@ def _run_step(harness: Harness, name: str, extra: dict[str, str]) -> Step:
     (temp / "tmp").mkdir(exist_ok=True)
     command = step_by_name(name)["run"]
     if name == JOIN_SCAN_STEP:
-        assert command == SCAN_COMMAND
-        return scan_step(harness, name, env)
-    return harness.run(name, ["bash", "-e", "-c", command], env, cwd=REPO_ROOT)
+        assert command.strip() == f"theseus drive --policy {POLICY} scan"
+        return scan_step(harness, name, env, POLICY)
+    return harness.run(name, ["bash", "-e", "-c", command], env)
 
 
 def test_a_job_holding_the_oidc_request_token_fails_the_isolation_step_before_any_reviewer_runs(

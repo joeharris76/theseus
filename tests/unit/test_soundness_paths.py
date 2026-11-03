@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import fnmatch
-import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-SCRIPT_PATH = ROOT / "_project/scripts/soundness_paths.py"
+from conftest import ALPHA_POLICY, CONSUMER_ALPHA
+from theseus_reviewer import soundness_paths
+from theseus_reviewer.soundness_paths import Matcher, Rule, load_rules, parse_rules
 
-spec = importlib.util.spec_from_file_location("soundness_paths_predicate_test", SCRIPT_PATH)
-assert spec is not None and spec.loader is not None
-soundness = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = soundness
-spec.loader.exec_module(soundness)
+MANIFEST = CONSUMER_ALPHA / ".github" / "soundness-paths.txt"
+OVERRIDE_FILES_GLOB = "results-data/bundles/**/*.override.json"
+soundness = Matcher(load_rules(MANIFEST))
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -170,12 +169,14 @@ def test_soundness_predicate_ignores_fast_default_paths(path: str) -> None:
     assert soundness.is_soundness_path(path) is False
 
 
-def test_soundness_prefixes_are_directory_prefixes() -> None:
-    assert soundness.surface_invariant_violations() == []
+def test_every_prefix_rule_ends_with_a_directory_separator() -> None:
+    prefixes = [rule.pattern for rule in soundness.rules if rule.kind == "prefix"]
+    assert prefixes
+    assert all(prefix.endswith("/") for prefix in prefixes)
 
 
 def test_soundness_files_glob_duality_stays_pinned() -> None:
-    assert soundness.OVERRIDE_FILES_GLOB in soundness.SOUNDNESS_FILES
+    assert Rule("glob", OVERRIDE_FILES_GLOB) in soundness.rules
     assert soundness.is_soundness_path("results-data/bundles/tpch/duckdb/sf1.override.json") is True
     assert soundness.is_soundness_path("results-data/bundles/x.override.json.bak") is False
 
@@ -194,27 +195,20 @@ TUNING_TRUST_GLOB = "benchbox/platforms/*_introspection.py"
 
 
 def test_tuning_trust_paths_are_pinned_in_manifest() -> None:
-    manifest = (ROOT / ".github" / "soundness-paths.txt").read_text(encoding="utf-8").splitlines()
+    manifest = MANIFEST.read_text(encoding="utf-8").splitlines()
     for path in TUNING_TRUST_FILES:
         assert f"file\t{path}" in manifest
-        assert (ROOT / path).is_file(), f"{path} no longer exists; update the soundness manifest"
         assert soundness.is_soundness_path(path) is True
     assert f"glob\t{TUNING_TRUST_GLOB}" in manifest
-    candidates = sorted((ROOT / "benchbox" / "platforms").rglob("*.py"))
-    introspection_modules = [
-        module for module in candidates if fnmatch.fnmatchcase(module.relative_to(ROOT).as_posix(), TUNING_TRUST_GLOB)
-    ]
-    assert introspection_modules, "the platform introspection glob matches no module"
-    for module in introspection_modules:
-        assert soundness.is_soundness_path(module.relative_to(ROOT).as_posix()) is True
+    for module in ("benchbox/platforms/duckdb_introspection.py", "benchbox/platforms/snowflake_introspection.py"):
+        assert fnmatch.fnmatchcase(module, TUNING_TRUST_GLOB) is True
+        assert soundness.is_soundness_path(module) is True
 
 
 def test_tuning_trust_glob_covers_nested_introspection_modules() -> None:
     nested = "benchbox/platforms/clickhouse/custom_introspection.py"
     assert fnmatch.fnmatchcase(nested, TUNING_TRUST_GLOB) is True
     assert soundness.is_soundness_path(nested) is True
-    top_level = {path.name for path in (ROOT / "benchbox" / "platforms").glob("*_introspection.py")}
-    assert "custom_introspection.py" not in top_level
 
 
 def test_any_soundness_path_recognises_tuning_trust_paths() -> None:
@@ -236,10 +230,9 @@ SELECTION_LOGIC_FILES = (
 
 
 def test_selection_logic_paths_are_pinned_in_manifest() -> None:
-    manifest = (ROOT / ".github" / "soundness-paths.txt").read_text(encoding="utf-8").splitlines()
+    manifest = MANIFEST.read_text(encoding="utf-8").splitlines()
     for path in SELECTION_LOGIC_FILES:
         assert f"file\t{path}" in manifest
-        assert (ROOT / path).is_file(), f"{path} no longer exists; update the soundness manifest"
         assert soundness.is_soundness_path(path) is True
 
 
@@ -279,32 +272,27 @@ TRANSLATION_DATA_FILES = (
 
 
 def test_translation_paths_are_pinned_in_manifest() -> None:
-    manifest = (ROOT / ".github" / "soundness-paths.txt").read_text(encoding="utf-8").splitlines()
+    manifest = MANIFEST.read_text(encoding="utf-8").splitlines()
     for path in TRANSLATION_FILES:
         assert f"file\t{path}" in manifest
-        assert (ROOT / path).is_file(), f"{path} no longer exists; update the soundness manifest"
         assert soundness.is_soundness_path(path) is True
     for prefix in TRANSLATION_PREFIXES:
         assert f"prefix\t{prefix}" in manifest
-        assert (ROOT / prefix).is_dir(), f"{prefix} no longer exists; update the soundness manifest"
     for path in TRANSLATION_DATA_FILES:
-        assert (ROOT / path).is_file(), f"{path} no longer exists; update the soundness manifest"
         assert soundness.is_soundness_path(path) is True
 
 
 def test_translation_prefixes_cover_every_file_beneath_them() -> None:
-    covered: list[str] = []
-    for prefix in TRANSLATION_PREFIXES:
-        covered += [
-            path.relative_to(ROOT).as_posix()
-            for path in sorted((ROOT / prefix).rglob("*"))
-            if path.is_file() and "__pycache__" not in path.parts
-        ]
-    assert any(path.endswith(".whl.zip") for path in covered), "no bundled runtime wheel archive"
-    assert any(path.startswith("scripts/sql_execution_gate/") and path.endswith("gate.py") for path in covered)
-    assert any("golden_corpus/area_" in path and path.endswith(".py") for path in covered)
-    assert any("/recorded/" in path for path in covered)
-    assert any("/frozen/" in path for path in covered)
+    covered = [
+        "benchbox/_vendor/sqlglot.json",
+        "benchbox/_vendor/sqlglot-runtime.whl.zip",
+        "make/site-inputs.mk",
+        "scripts/sql_execution_gate/gate.py",
+        "scripts/sql_execution_gate/nested/expected_differences.json",
+        "tests/unit/sql_compat/golden_corpus/area_ddl.py",
+        "tests/unit/sql_compat/golden_corpus/recorded/area_ddl.json",
+        "tests/unit/sql_compat/golden_corpus/frozen/area_ddl.json",
+    ]
     for path in covered:
         assert soundness.is_soundness_path(path) is True, path
 
@@ -324,3 +312,116 @@ def test_translation_prefixes_cover_every_file_beneath_them() -> None:
 )
 def test_translation_paths_do_not_overmatch_neighbours(path: str) -> None:
     assert soundness.is_soundness_path(path) is False
+
+
+def test_importing_the_matcher_reads_no_files() -> None:
+    source = Path(soundness_paths.__file__).read_text(encoding="utf-8")
+    assert "read_text" not in source.split("def load_rules", 1)[0]
+    assert "BenchBox" not in source
+
+
+def test_parse_rules_reports_malformed_manifests() -> None:
+    with pytest.raises(ValueError, match="m:1: expected kind<TAB>pattern"):
+        parse_rules("file no-tab", "m")
+    with pytest.raises(ValueError, match="m:1: unknown rule kind 'bogus'"):
+        parse_rules("bogus\tx", "m")
+    with pytest.raises(ValueError, match="prefix must end with '/'"):
+        parse_rules("prefix\tdocs", "m")
+    with pytest.raises(ValueError, match="manifest is empty"):
+        parse_rules("# only a comment\n\n", "m")
+    with pytest.raises(Exception):
+        parse_rules("regex\t(", "m")
+
+
+def test_parse_rules_skips_comments_and_blank_lines() -> None:
+    rules = parse_rules("# c\n\nfile\ta.py\nprefix\tdocs/\n", "m")
+    assert rules == (Rule("file", "a.py"), Rule("prefix", "docs/"))
+
+
+def test_matcher_has_no_default_rules_and_union_requires_any_manifest() -> None:
+    base = Matcher(parse_rules("file\tbase.py\n"))
+    head = Matcher(parse_rules("file\thead.py\n"))
+    assert soundness_paths.union_matches("base.py", [base, head]) is True
+    assert soundness_paths.union_matches("head.py", [base, head]) is True
+    assert soundness_paths.union_matches("other.py", [base, head]) is False
+    assert soundness_paths.union_matches("base.py", []) is False
+
+
+def test_matcher_normalizes_backslashes_and_whitespace() -> None:
+    matcher = Matcher(parse_rules("prefix\tdocs/\n"))
+    assert matcher.is_soundness_path(" docs\\a.md \n") is True
+    assert matcher.is_soundness_path("   ") is False
+
+
+def test_load_rules_reads_a_custom_manifest(tmp_path: Path) -> None:
+    manifest = tmp_path / "paths.txt"
+    manifest.write_text("file\tonly.py\n", encoding="utf-8")
+    matcher = Matcher(load_rules(manifest))
+    assert matcher.is_soundness_path("only.py") is True
+    assert matcher.is_soundness_path("benchbox/core/validation/data.py") is False
+
+
+def run_cli(*args: str, stdin: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "theseus_reviewer.soundness_paths", *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_cli_requires_a_manifest() -> None:
+    result = run_cli("--stdin", stdin="a.py\n")
+    assert result.returncode != 0
+    assert "--manifest is required" in result.stderr
+
+
+def test_cli_reports_a_missing_manifest(tmp_path: Path) -> None:
+    result = run_cli("--manifest", str(tmp_path / "absent.txt"), "--stdin", stdin="a.py\n")
+    assert result.returncode != 0
+    assert "soundness_paths:" in result.stderr
+
+
+def test_cli_unions_repeated_manifests(tmp_path: Path) -> None:
+    base = tmp_path / "base.txt"
+    head = tmp_path / "head.txt"
+    base.write_text("file\tbase.py\n", encoding="utf-8")
+    head.write_text("file\thead.py\n", encoding="utf-8")
+    manifests = ["--manifest", str(base), "--manifest", str(head)]
+    assert run_cli(*manifests, "--stdin", stdin="docs/x.md\nhead.py\n").stdout.strip() == "true"
+    assert run_cli(*manifests, "--stdin", stdin="base.py\n").stdout.strip() == "true"
+    assert run_cli(*manifests, "--stdin", stdin="docs/x.md\n").stdout.strip() == "false"
+    only_base = run_cli("--manifest", str(base), "--stdin", "--format", "github-output", stdin="head.py\n")
+    assert only_base.stdout.strip() == "soundness_path=false"
+
+
+def test_cli_matches_against_the_alpha_manifest() -> None:
+    manifest = str(MANIFEST)
+    assert run_cli("--manifest", manifest, "--stdin", "--format", "shell", stdin="scripts/pr_arm.py\n").stdout == (
+        "SOUNDNESS_PATH=true\n"
+    )
+    assert run_cli("--manifest", manifest, "--stdin", stdin="docs/site-deploy.md\n").stdout.strip() == "false"
+
+
+def test_cli_reads_paths_from_a_file(tmp_path: Path) -> None:
+    paths = tmp_path / "paths.txt"
+    paths.write_text("benchbox/core/validation/data.py\n", encoding="utf-8")
+    result = run_cli("--manifest", str(MANIFEST), "--paths-file", str(paths), stdin="")
+    assert result.stdout.strip() == "true"
+
+
+def test_alpha_policy_names_the_alpha_manifest() -> None:
+    assert ALPHA_POLICY.parent.parent == CONSUMER_ALPHA
+    assert (CONSUMER_ALPHA / ".github" / "soundness-paths.txt") == MANIFEST
+
+
+def test_theseus_matcher_check_runs_the_same_predicate() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "theseus_reviewer", "matcher", "check", "--manifest", str(MANIFEST), "--stdin"],
+        input="scripts/pr_arm.py\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.stdout.strip() == "true"

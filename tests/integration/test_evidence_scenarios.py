@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import yaml
 
-from .harness import CHECKER, REPO_ROOT, Harness, ReviewRun
+from .harness import ALPHA_ROOT, CHECKER, Harness, ReviewRun
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
@@ -26,7 +24,7 @@ FULL_READ = {**SHIP, "files_examined": [CHECKER, CELLS], "reads": [CELLS]}
 INERT_WITHOUT_MARKDOWN = (
     "\n".join(
         line
-        for line in (REPO_ROOT / ".github" / "inert-paths.txt").read_text(encoding="utf-8").splitlines()
+        for line in (ALPHA_ROOT / ".github" / "inert-paths.txt").read_text(encoding="utf-8").splitlines()
         if line not in ("glob\t*.md", "glob\tdocs/**")
     )
     + "\n"
@@ -121,13 +119,10 @@ def test_a_binary_that_is_not_a_confirmed_font_still_needs_a_read(
     assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["pending"]
 
 
-def test_prose_is_exempt_only_when_it_is_not_source_or_soundness(harness: Harness, tmp_path: Path) -> None:
-    manifest = tmp_path / "inert-without-markdown.txt"
-    manifest.write_text(INERT_WITHOUT_MARKDOWN, encoding="utf-8")
+def test_prose_is_exempt_only_when_it_is_not_source_or_soundness(harness: Harness) -> None:
+    (harness.trusted / ".github" / "inert-paths.txt").write_text(INERT_WITHOUT_MARKDOWN, encoding="utf-8")
 
-    run = _large_review(
-        harness, 85, {GUIDE: "How the checker is used.\n"}, plan_env={"INERT_PATH_MANIFEST": str(manifest)}
-    )
+    run = _large_review(harness, 85, {GUIDE: "How the checker is used.\n"})
 
     assert run.plan["evidence_files"] == [CHECKER, GUIDE]
     assert [(item["outcome"], item["absence"]) for item in run.attempts()] == [("verdict", None)]
@@ -145,7 +140,7 @@ def test_soundness_prose_and_source_stay_required(harness: Harness) -> None:
 
 
 def test_a_branch_cannot_add_its_own_exemption(harness: Harness) -> None:
-    policy = yaml.safe_load((REPO_ROOT / ".github" / "oracle-reviewers.yml").read_text(encoding="utf-8"))
+    policy = yaml.safe_load((ALPHA_ROOT / ".github" / "oracle-reviewers.yml").read_text(encoding="utf-8"))
     policy.setdefault("evidence", {}).setdefault("exempt_paths", []).append("assets/*.dat")
     widened = yaml.safe_dump(policy, sort_keys=False)
 

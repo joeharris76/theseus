@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import sys
 from datetime import UTC, datetime, timedelta
@@ -9,16 +8,18 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, cli, omp_pin, protocol, render, report, retry, selection
-from _project.scripts.oracle_reviewers.absence import Absence
-from _project.scripts.oracle_reviewers.classify import Classification
-from _project.scripts.oracle_reviewers.dedup import fingerprint, marker
-from _project.scripts.oracle_reviewers.diff import commentable_lines
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.recovery import ESCALATE, JEV, RETRY, Recovery
-from _project.scripts.oracle_reviewers.retry import ALL_ABSENT, INTEGRITY, OVERSIZE, UNREPORTED
-from _project.scripts.oracle_reviewers.selection import Attempt, SelectionInput, Step
-from _project.scripts.oracle_reviewers.verdict import Finding, VerdictError, validate
+from conftest import CONSUMER_ALPHA
+from theseus_reviewer import attempts, cli, omp_pin, protocol, report, retry, review_check, selection
+from theseus_reviewer.absence import Absence
+from theseus_reviewer.classify import Classification
+from theseus_reviewer.dedup import fingerprint, marker
+from theseus_reviewer.diff import commentable_lines
+from theseus_reviewer.matchers import load_matchers
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.recovery import ESCALATE, JEV, RETRY, Recovery
+from theseus_reviewer.retry import ALL_ABSENT, INTEGRITY, OVERSIZE, UNREPORTED
+from theseus_reviewer.selection import Attempt, SelectionInput, Step
+from theseus_reviewer.verdict import Finding, VerdictError, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -51,6 +52,7 @@ def _plan(policy: Policy, buckets: tuple[str, ...] = ("small", "medium")) -> dic
         "mode": "shadow",
         "status_context": policy.status_context,
         "bot_login": policy.bot_login,
+        "omp_config": policy.consumer.omp_config,
         "findings_delivery": "comment",
         "repo": "BenchBox-dev/BenchBox",
         "pr": 7,
@@ -464,13 +466,13 @@ def test_a_finalized_exempt_success_never_satisfies_a_gate_whose_rules_require_a
         "user_type": "Bot",
         "created_at": "2026-10-05T12:00:00Z",
     }
-    monkeypatch.syspath_prepend(str(Path(cli.__file__).resolve().parents[1]))
-    gate = importlib.import_module("_project.scripts.oracle_review_check")
-    rules = gate.path_matcher(2, 2, *importlib.import_module("_project.scripts.oracle_gate").load_policy_rules())
-    code, message = gate.decide(HEAD, [CHECKER], [posted], rules)
-    assert code == gate.WAITING and "reports only exempt paths changed" in message
-    assert gate.decide(HEAD, ["notes.md"], [posted], rules) == (
-        gate.PASS,
+    matchers = load_matchers(policy.consumer, CONSUMER_ALPHA)
+    rules = review_check.path_matcher(2, 2, matchers, policy.classifier.exempt_paths, policy.classifier.gate_paths)
+    binding = policy.binding()
+    code, message = review_check.decide(HEAD, [CHECKER], [posted], rules, binding=binding)
+    assert code == review_check.WAITING and "reports only exempt paths changed" in message
+    assert review_check.decide(HEAD, ["notes.md"], [posted], rules, binding=binding) == (
+        review_check.PASS,
         "oracle-review: only exempt paths changed",
     )
 
@@ -748,7 +750,7 @@ def test_a_long_status_description_is_cut_to_the_status_limit(policy: Policy, tm
 
 
 def test_a_success_status_carries_the_run_id_for_direct_equality(monkeypatch: pytest.MonkeyPatch) -> None:
-    from _project.scripts.oracle_reviewers import report
+    from theseus_reviewer import report
 
     plan = {"status_context": "oracle-verdict", "run_id": "a" * 32}
     final = report.fixed(report.SUCCESS, "large: SHIP")
@@ -758,7 +760,7 @@ def test_a_success_status_carries_the_run_id_for_direct_equality(monkeypatch: py
 
 
 def test_a_long_success_description_still_fits_with_the_run_id() -> None:
-    from _project.scripts.oracle_reviewers import report
+    from theseus_reviewer import report
 
     plan = {"status_context": "oracle-verdict", "run_id": "a" * 32}
     final = report.fixed(report.SUCCESS, "x" * 200)
@@ -768,7 +770,7 @@ def test_a_long_success_description_still_fits_with_the_run_id() -> None:
 
 
 def test_a_status_without_a_plan_run_id_is_unchanged() -> None:
-    from _project.scripts.oracle_reviewers import report
+    from theseus_reviewer import report
 
     plan = {"status_context": "oracle-verdict"}
     final = report.fixed(report.SUCCESS, "large: SHIP")

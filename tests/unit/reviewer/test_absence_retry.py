@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, cli
-from _project.scripts.oracle_reviewers.absence import Absence
-from _project.scripts.oracle_reviewers.recovery import JEV, RETRY, Recovery
-from _project.scripts.oracle_reviewers.selection import (
+from theseus_reviewer import attempts, cli
+from theseus_reviewer.absence import Absence
+from theseus_reviewer.recovery import JEV, RETRY, Recovery
+from theseus_reviewer.selection import (
     ABSENT,
     FAIL,
     JOB_FAILURE_DETAIL,

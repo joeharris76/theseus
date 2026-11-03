@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.conftest import ALPHA_POLICY, BETA_POLICY
 
-from _project.scripts.oracle_reviewers import cli, github, reset
+from theseus_reviewer import cli, github, reset
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+ATTESTERS = frozenset({"joeharris76"})
 REPO = "BenchBox-dev/BenchBox"
 HEAD = "a" * 40
 OTHER = "b" * 40
 START = datetime(2026, 10, 26, 9, 0, tzinfo=UTC)
 OWNER = {"login": "joeharris76", "type": "User"}
+BETA_OWNER = {"login": "beta-owner", "type": "User"}
 
 
 def _comment(body: str, minutes: int, *, user: dict[str, str] = OWNER, edited: bool = False) -> dict[str, Any]:
@@ -35,12 +35,12 @@ def _reset(head: str = HEAD, minutes: int = 5, reason: str = "the gateway was do
 
 
 def test_a_reset_after_an_owner_instruction_is_accepted() -> None:
-    assert reset.reset_moment([_instruction(), _reset()], HEAD) == START + timedelta(minutes=5)
+    assert reset.reset_moment([_instruction(), _reset()], HEAD, ATTESTERS) == START + timedelta(minutes=5)
 
 
 def test_the_latest_valid_reset_wins() -> None:
     comments = [_instruction(), _reset(minutes=5), _reset(minutes=9)]
-    assert reset.reset_moment(comments, HEAD) == START + timedelta(minutes=9)
+    assert reset.reset_moment(comments, HEAD, ATTESTERS) == START + timedelta(minutes=9)
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def test_the_latest_valid_reset_wins() -> None:
     ],
 )
 def test_anything_short_of_an_owner_reset_with_a_prior_instruction_is_ignored(comments: list[dict[str, Any]]) -> None:
-    assert reset.reset_moment(comments, HEAD) is None
+    assert reset.reset_moment(comments, HEAD, ATTESTERS) is None
 
 
 @pytest.mark.parametrize(
@@ -72,17 +72,13 @@ def test_a_reason_is_one_trimmed_line(reason: str, valid: bool) -> None:
     assert reset.valid_reason(reason) is valid
 
 
-def test_the_reset_attesters_are_the_stand_in_attesters() -> None:
-    script = REPO_ROOT / "_project" / "scripts" / "oracle_review_check.py"
-    sys.path.insert(0, str(script.parent))
-    try:
-        spec = importlib.util.spec_from_file_location("oracle_review_check_for_attesters", script)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(script.parent))
-    assert reset.ATTESTERS == module.STANDIN_ATTESTERS
+def test_the_attesters_are_a_parameter_not_a_default() -> None:
+    comments = [_instruction(user=BETA_OWNER), _reset(user=BETA_OWNER)]
+    assert reset.reset_moment(comments, HEAD, ATTESTERS) is None
+    assert reset.reset_moment(comments, HEAD, frozenset({"beta-owner"})) == START + timedelta(minutes=5)
+    assert reset.has_owner_instruction(comments, HEAD, frozenset({"beta-owner"}))
+    assert not reset.has_owner_instruction(comments, HEAD, ATTESTERS)
+    assert not reset.has_owner_instruction(comments, HEAD, frozenset())
 
 
 class Console:
@@ -94,8 +90,9 @@ class Console:
         monkeypatch.setattr(github, "get_paginated", lambda path: comments)
         monkeypatch.setattr(github, "post_comment", lambda repo, pr, body: self.posted.append((pr, body)))
 
-    def run(self, *, head: str = HEAD, reason: str = "the gateway was down") -> int:
-        return cli.main(["reset-backoff", "--pr", "7", "--head", head, "--reason", reason, "--repo", REPO])
+    def run(self, *, head: str = HEAD, reason: str = "the gateway was down", policy: Path = ALPHA_POLICY) -> int:
+        argv = ["reset-backoff", "--pr", "7", "--head", head, "--reason", reason, "--repo", REPO]
+        return cli.main([*argv, "--policy", str(policy)])
 
 
 def test_the_owner_resets_a_backoff_with_the_reason_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,7 +100,7 @@ def test_the_owner_resets_a_backoff_with_the_reason_recorded(monkeypatch: pytest
     assert console.run() == 0
     assert console.posted == [(7, f"Oracle backoff reset: {HEAD}\nReason: the gateway was down")]
     posted = _comment(console.posted[0][1], 5)
-    assert reset.reset_moment([_instruction(), posted], HEAD) == START + timedelta(minutes=5)
+    assert reset.reset_moment([_instruction(), posted], HEAD, ATTESTERS) == START + timedelta(minutes=5)
 
 
 def test_a_reset_without_an_owner_instruction_naming_the_head_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,4 +135,17 @@ def test_a_malformed_head_or_reason_is_refused(monkeypatch: pytest.MonkeyPatch, 
     console = Console(monkeypatch, [_instruction()])
     with pytest.raises(SystemExit):
         console.run(head=head, reason=reason)
+    assert console.posted == []
+
+
+def test_the_consumer_policy_names_who_may_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    console = Console(monkeypatch, [_instruction(user=BETA_OWNER)], login="beta-deputy")
+    assert console.run(policy=BETA_POLICY) == 0
+    assert console.posted == [(7, f"Oracle backoff reset: {HEAD}\nReason: the gateway was down")]
+
+
+def test_an_alpha_attester_cannot_reset_under_the_beta_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    console = Console(monkeypatch, [_instruction()])
+    with pytest.raises(SystemExit, match="not an owner"):
+        console.run(policy=BETA_POLICY)
     assert console.posted == []

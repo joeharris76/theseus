@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers.diff import commentable_lines, select_files
-from _project.scripts.oracle_reviewers.verdict import (
+from theseus_reviewer.diff import commentable_lines, select_files
+from theseus_reviewer.verdict import (
     LINK_REMOVED,
     REDACTED,
     VerdictError,
@@ -265,7 +265,7 @@ def test_more_than_one_json_value_is_not_a_verdict() -> None:
 
 def test_a_recorded_multi_turn_omp_review_yields_its_final_verdict() -> None:
     stream = (
-        Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
+        Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
     ).read_text(encoding="utf-8")
     assert sum('"type":"message_end"' in line and '"role":"assistant"' in line for line in stream.splitlines()) > 1
     verdict = validate(parse_output("omp", stream))

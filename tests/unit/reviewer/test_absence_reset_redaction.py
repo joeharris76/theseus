@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from _project.scripts.oracle_reviewers import absence
-from _project.scripts.oracle_reviewers.absence import classify, parse_reset, redact_detail
+from theseus_reviewer import absence
+from theseus_reviewer.absence import classify, parse_reset, redact_detail
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

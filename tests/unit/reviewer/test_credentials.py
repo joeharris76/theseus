@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from _project.scripts.oracle_reviewers import absence, credentials
-from _project.scripts.oracle_reviewers.verdict import REDACTED, VerdictError, sanitize, validate
+from theseus_reviewer import absence, credentials
+from theseus_reviewer.verdict import REDACTED, VerdictError, sanitize, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

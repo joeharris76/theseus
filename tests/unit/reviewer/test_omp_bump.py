@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
 import json
 import sys
 from collections.abc import Callable
@@ -11,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.conftest import ALPHA_POLICY as POLICY_PATH
 
-from _project.scripts.oracle_reviewers import omp_bump, omp_bump_gate, omp_candidate, omp_pin
+from theseus_reviewer import omp_bump, omp_bump_gate, omp_candidate, omp_pin
 
-from .conftest import POLICY_PATH, REPO_ROOT
-from .test_omp_candidate import FIXTURES, _chain_from, _fake, _good_runs
+from .test_omp_candidate import FIXTURES, OMP_CONFIG, _chain_from, _fake, _good_runs
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -198,6 +197,8 @@ class Scenario:
     def prepare(self, runs: dict[str, Any] | None = None, **kwargs: Any) -> omp_bump.Outcome:
         return omp_bump.prepare(
             self.policy,
+            omp_config=OMP_CONFIG,
+            fixtures=FIXTURES,
             getter=self.answers(),
             fetch=self.fetch,
             chain_factory=lambda *_: _chain_from(runs if runs is not None else _good_runs()),
@@ -221,7 +222,7 @@ def test_a_newer_release_that_passes_the_suite_becomes_a_pin_edit_and_an_evidenc
     assert "`--version` on " in body and "omp/18.13.2" in body
     assert "result: partial" in body
     assert "-      --old-flag=<value>   removed later" in body
-    assert "make omp-candidate-check VERSION=18.13.2" in body
+    assert "theseus omp-candidate-check check` for version 18.13.2" in body
     assert "the oracle reviewing this pull request runs the previous build and reads only the YAML" in body
 
 
@@ -251,7 +252,13 @@ def test_downloads_that_disagree_with_the_build_host_stop_the_bump_before_any_pr
         destination.write_bytes(b"tampered" if "stencil" in url else scenario.previous_bytes)
 
     outcome = omp_bump.prepare(
-        scenario.policy, getter=scenario.answers(), fetch=tampered, chain_factory=factory, cache_root=scenario.cache
+        scenario.policy,
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
+        getter=scenario.answers(),
+        fetch=tampered,
+        chain_factory=factory,
+        cache_root=scenario.cache,
     )
     assert outcome.state == omp_bump.RED and "the build host publishes" in outcome.detail
     assert started == [] and outcome.policy_text == ""
@@ -282,6 +289,8 @@ def test_the_evidence_line_the_check_prints_is_the_line_pr_arm_accepts(tmp_path:
     pin = omp_pin.Pin("18.12.1", {HOST: omp_pin.Build("https://downloads.example.invalid/omp", digest)})
     report = omp_candidate.check_candidate(
         pin,
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
         fetch=lambda url, destination: destination.write_bytes(binary.read_bytes()),
         chain_factory=lambda *_: _chain_from(_good_runs()),
     )
@@ -325,12 +334,22 @@ def test_a_partial_or_red_report_prints_no_evidence_line(tmp_path: Path) -> None
             "linux-arm64": omp_pin.Build("https://downloads.example.invalid/x", digest),
         },
     )
-    fetch = lambda url, destination: destination.write_bytes(binary.read_bytes())
+
+    def fetch(url: str, destination: Path) -> None:
+        destination.write_bytes(binary.read_bytes())
+
     partial = omp_candidate.check_candidate(
-        pin, targets=[HOST], fetch=fetch, chain_factory=lambda *_: _chain_from(_good_runs())
+        pin,
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
+        targets=[HOST],
+        fetch=fetch,
+        chain_factory=lambda *_: _chain_from(_good_runs()),
     )
     assert partial.evidence_line is None and omp_candidate.EVIDENCE_PREFIX not in partial.render()
-    green = omp_candidate.check_candidate(pin, fetch=fetch, chain_factory=lambda *_: _chain_from(_good_runs()))
+    green = omp_candidate.check_candidate(
+        pin, omp_config=OMP_CONFIG, fixtures=FIXTURES, fetch=fetch, chain_factory=lambda *_: _chain_from(_good_runs())
+    )
     assert green.releasable and green.evidence_line is None
     assert (
         replace(green, head="b" * 40).evidence_line

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import copy
-import importlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 import yaml
+from tests.conftest import BETA_POLICY
 
-from _project.scripts.oracle_reviewers.policy import SIZE_BUCKETS, Policy, PolicyError, parse_policy
+from theseus_reviewer import review_check
+from theseus_reviewer.policy import SIZE_BUCKETS, Policy, PolicyError, PromotionRules, parse_policy
 
 from .conftest import POLICY_PATH
 
@@ -18,14 +20,10 @@ def _raw() -> dict[str, Any]:
     return yaml.safe_load(POLICY_PATH.read_text(encoding="utf-8"))
 
 
-def test_the_live_policy_enforces_and_posts_where_the_gate_reads(
-    policy: Policy, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.syspath_prepend(str(POLICY_PATH.parents[1] / "_project" / "scripts"))
-    gate = importlib.import_module("_project.scripts.oracle_review_check")
+def test_the_live_policy_enforces_and_posts_where_the_gate_reads(policy: Policy) -> None:
     assert (policy.mode, policy.findings_delivery) == ("enforce", "review")
-    assert policy.status_context == gate.ORACLE_CONTEXT
-    assert policy.bot_login == gate.ORACLE_LOGIN
+    assert policy.status_context == review_check.ORACLE_CONTEXT
+    assert policy.bot_login == "benchbox-oracle"
 
 
 def test_live_reviewers_match_buckets_one_to_one(policy: Policy) -> None:
@@ -192,7 +190,7 @@ def test_a_policy_with_a_bad_build_key_is_rejected() -> None:
 def test_a_plan_carries_the_hash_pinned_for_the_running_platform(
     policy: Policy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from _project.scripts.oracle_reviewers import cli, omp_pin
+    from theseus_reviewer import cli, omp_pin
 
     monkeypatch.setattr(omp_pin, "current_platform", lambda: "linux-x64")
     assert cli._base_plan(policy, "o/r", 7, "x")["omp_sha256"] == _raw()["omp"]["builds"]["linux-x64"]["sha256"]
@@ -200,9 +198,16 @@ def test_a_plan_carries_the_hash_pinned_for_the_running_platform(
     assert cli._base_plan(policy, "o/r", 7, "x")["omp_sha256"] == ""
 
 
+PROMOTION = {"repository": "owner/theseus", "bootstrap_reviewers": ["owner-reviewer"]}
+
+
+def _promotion(**extra: Any) -> dict[str, Any]:
+    return {**PROMOTION, **extra}
+
+
 def test_promotion_dependency_pins_default_to_deny_all_and_parse_exact_hashes() -> None:
     raw = _raw()
-    raw["promotion"] = {}
+    raw["promotion"] = _promotion()
     assert parse_policy(raw).promotion.dependencies == {}
     raw["promotion"]["dependencies"] = {"my-package==1.2.3": "a" * 64}
     assert parse_policy(raw).promotion.dependencies == {"my-package==1.2.3": "a" * 64}
@@ -225,7 +230,7 @@ def test_promotion_dependency_pins_default_to_deny_all_and_parse_exact_hashes() 
 )
 def test_invalid_promotion_dependency_pins_are_rejected(dependencies: Any) -> None:
     raw = _raw()
-    raw["promotion"] = {"dependencies": dependencies}
+    raw["promotion"] = _promotion(dependencies=dependencies)
     with pytest.raises(PolicyError, match="promotion dependencies"):
         parse_policy(raw)
 
@@ -234,14 +239,129 @@ def test_invalid_promotion_dependency_pins_are_rejected(dependencies: Any) -> No
 @pytest.mark.parametrize("value", [[], None, ""])
 def test_explicit_empty_promotion_allowlists_do_not_restore_defaults(key: str, value: Any) -> None:
     raw = _raw()
-    raw["promotion"] = {key: value}
+    raw["promotion"] = _promotion(**{key: value})
     with pytest.raises(PolicyError, match=key):
         parse_policy(raw)
 
 
-def test_missing_promotion_allowlists_keep_defaults() -> None:
+def test_missing_promotion_artifact_hosts_keep_the_public_defaults() -> None:
     raw = _raw()
-    raw["promotion"] = {}
+    raw["promotion"] = _promotion()
     rules = parse_policy(raw).promotion
-    assert rules.bootstrap_reviewers == ("joeharris76",)
+    assert rules.bootstrap_reviewers == ("owner-reviewer",)
+    assert rules.repository == "owner/theseus"
     assert "github.com" in rules.allowed_artifact_hosts
+
+
+def test_a_policy_without_a_promotion_section_parses_with_empty_promotion_rules() -> None:
+    raw = _raw()
+    raw.pop("promotion", None)
+    rules = parse_policy(raw).promotion
+    assert rules == PromotionRules()
+    assert (rules.repository, rules.bootstrap_reviewers) == ("", ())
+
+
+@pytest.mark.parametrize("missing", ["repository", "bootstrap_reviewers"])
+def test_a_promotion_section_without_a_required_key_is_rejected(missing: str) -> None:
+    raw = _raw()
+    raw["promotion"] = {key: value for key, value in PROMOTION.items() if key != missing}
+    with pytest.raises(PolicyError, match=f"promotion {missing} is required when the policy has a promotion section"):
+        parse_policy(raw)
+
+
+def test_the_live_policy_carries_its_consumer_binding(policy: Policy) -> None:
+    assert policy.consumer.gated_base == "develop"
+    assert policy.consumer.attesters == ("joeharris76",)
+    assert policy.consumer.soundness_manifest == ".github/soundness-paths.txt"
+    assert policy.consumer.inert_manifest == ".github/inert-paths.txt"
+    assert policy.consumer.omp_config == ".github/oracle-omp-config.yml"
+    assert policy.consumer.omp_fixture_prefix == "tests/fixtures/oracle_reviewers/omp_candidate/"
+    binding = policy.binding()
+    assert (binding.bot_login, binding.attesters, binding.gated_base) == (
+        "benchbox-oracle",
+        frozenset({"joeharris76"}),
+        "develop",
+    )
+
+
+def test_a_beta_consumer_policy_binds_its_own_identities() -> None:
+    policy = parse_policy(yaml.safe_load(BETA_POLICY.read_text(encoding="utf-8")))
+    binding = policy.binding()
+    assert binding.bot_login == "beta-oracle"
+    assert binding.attesters == frozenset({"beta-owner", "beta-deputy"})
+    assert binding.gated_base == "main"
+
+
+def test_optional_consumer_keys_default_to_none() -> None:
+    raw = _raw()
+    del raw["consumer"]["inert_manifest"], raw["consumer"]["omp_fixture_prefix"]
+    consumer = parse_policy(raw).consumer
+    assert (consumer.inert_manifest, consumer.omp_fixture_prefix) == (None, None)
+
+
+def test_a_policy_without_a_consumer_section_fails_with_the_documented_message() -> None:
+    raw = _raw()
+    del raw["consumer"]
+    with pytest.raises(
+        PolicyError,
+        match=(
+            "policy needs a consumer section naming gated_base, attesters, soundness_manifest and omp_config; "
+            "the package has no consumer defaults"
+        ),
+    ):
+        parse_policy(raw)
+
+
+@pytest.mark.parametrize("consumer", [None, [], "alpha", 7])
+def test_a_consumer_section_that_is_not_a_mapping_fails(consumer: Any) -> None:
+    raw = _raw()
+    raw["consumer"] = consumer
+    with pytest.raises(PolicyError, match="policy needs a consumer section"):
+        parse_policy(raw)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda consumer: consumer.pop("gated_base"), "consumer gated_base must be a branch name"),
+        (lambda consumer: consumer.update(gated_base=""), "consumer gated_base must be a branch name"),
+        (lambda consumer: consumer.update(gated_base="-develop"), "consumer gated_base must be a branch name"),
+        (lambda consumer: consumer.update(gated_base="has space"), "consumer gated_base must be a branch name"),
+        (lambda consumer: consumer.update(gated_base=3), "consumer gated_base must be a branch name"),
+        (lambda consumer: consumer.pop("attesters"), "consumer attesters must be a string list"),
+        (lambda consumer: consumer.update(attesters=[]), "consumer attesters must be a non-empty list"),
+        (lambda consumer: consumer.update(attesters="joe"), "consumer attesters must be a string list"),
+        (lambda consumer: consumer.update(attesters=["ok", "-bad"]), "consumer attesters must be a non-empty list"),
+        (lambda consumer: consumer.update(attesters=["has space"]), "consumer attesters must be a non-empty list"),
+        (lambda consumer: consumer.pop("soundness_manifest"), "consumer soundness_manifest is required"),
+        (lambda consumer: consumer.update(soundness_manifest=""), "consumer soundness_manifest is required"),
+        (lambda consumer: consumer.update(soundness_manifest=4), "consumer soundness_manifest is required"),
+        (lambda consumer: consumer.pop("omp_config"), "consumer omp_config is required"),
+        (lambda consumer: consumer.update(omp_config="  "), "consumer omp_config is required"),
+        (lambda consumer: consumer.update(unknown="x"), r"consumer has unknown keys \['unknown'\]"),
+        (lambda consumer: consumer.update(bot_login="x", extra=1), "consumer has unknown keys"),
+    ],
+)
+def test_an_invalid_consumer_section_is_rejected(mutate: Callable[[dict[str, Any]], Any], message: str) -> None:
+    raw = copy.deepcopy(_raw())
+    mutate(raw["consumer"])
+    with pytest.raises(PolicyError, match=message):
+        parse_policy(raw)
+
+
+@pytest.mark.parametrize("key", ["soundness_manifest", "omp_config", "inert_manifest", "omp_fixture_prefix"])
+@pytest.mark.parametrize(
+    "path", ["/etc/passwd", "../outside.txt", "a/../b.txt", ".github/../x", "a//b", "./a.txt", "a\\b.txt"]
+)
+def test_a_consumer_path_must_be_repository_relative(key: str, path: str) -> None:
+    raw = _raw()
+    raw["consumer"][key] = path
+    with pytest.raises(PolicyError, match=f"consumer {key} must be a repository-relative path"):
+        parse_policy(raw)
+
+
+def test_a_consumer_fixture_prefix_is_normalised_to_one_trailing_slash() -> None:
+    for prefix in ("fixtures/omp", "fixtures/omp/"):
+        raw = _raw()
+        raw["consumer"]["omp_fixture_prefix"] = prefix
+        assert parse_policy(raw).consumer.omp_fixture_prefix == "fixtures/omp/"

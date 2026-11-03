@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, github
-from _project.scripts.oracle_reviewers.retry import State
+from theseus_reviewer import cli, github
+from theseus_reviewer.retry import State
 
 from .conftest import POLICY_PATH
 from .test_cli_plan import (
@@ -27,7 +27,7 @@ from .test_cli_plan import (
     _verdict_run,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.fast]
+pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 
 def test_a_failure_on_another_head_is_not_retried(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

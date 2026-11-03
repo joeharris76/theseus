@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import redaction_check
+from theseus_reviewer import redaction_check
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -39,7 +39,7 @@ def test_sanitize_keeps_unrelated_split_text(tmp_path: Path, monkeypatch: pytest
 def test_sanitize_keeps_every_line_of_a_deferred_summary_when_one_holds_a_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from _project.scripts.oracle_reviewers import cli
+    from theseus_reviewer import cli
 
     monkeypatch.setenv("OMP_GATEWAY_TOKEN", TOKEN)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
@@ -56,7 +56,7 @@ def test_sanitize_keeps_every_line_of_a_deferred_summary_when_one_holds_a_secret
 
 
 def _marked(title: str) -> str:
-    from _project.scripts.oracle_reviewers import protocol
+    from theseus_reviewer import protocol
 
     record = {
         "v": protocol.MARKER_VERSION,

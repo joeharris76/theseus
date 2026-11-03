@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import attempts, cli, recovery, report, retry, selection
-from _project.scripts.oracle_reviewers.absence import Absence
-from _project.scripts.oracle_reviewers.jev import JevError, JevSession
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.recovery import ESCALATE, FALLBACK, JEV, RETRY, STOP, Recovery
-from _project.scripts.oracle_reviewers.selection import ABSENT, PENDING, REVIEW, Attempt, SelectionInput, next_step
+from theseus_reviewer import attempts, cli, recovery, report, retry, selection
+from theseus_reviewer.absence import Absence
+from theseus_reviewer.jev import JevError, JevSession
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.recovery import ESCALATE, FALLBACK, JEV, RETRY, STOP, Recovery
+from theseus_reviewer.selection import ABSENT, PENDING, REVIEW, Attempt, SelectionInput, next_step
 
 from .test_attempts import HEAD, RUN_ID, _plan, _v, _write
 from .test_selection import _input, _reviewer
@@ -22,7 +22,7 @@ from .test_selection import _input, _reviewer
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
-ANSWERS = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "oracle_reviewers" / "jev_recovery_answers.json"
+ANSWERS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "oracle_reviewers" / "jev_recovery_answers.json"
 CASES = json.loads(ANSWERS.read_text(encoding="utf-8"))["cases"]
 RAW = "RAW-REPLY-SENTINEL-" + "k3Jd9sLq" * 3
 JEV_STOP = Recovery(STOP, JEV, STOP, 0.95, 0.9)

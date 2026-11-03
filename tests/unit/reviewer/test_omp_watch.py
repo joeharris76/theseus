@@ -7,23 +7,23 @@ import subprocess
 import zipfile
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.conftest import ALPHA_POLICY as POLICY_PATH
+from tests.conftest import FIXTURES
 
-from _project.scripts.oracle_reviewers import absence, omp_pin, omp_watch
-from _project.scripts.oracle_reviewers.omp_watch import PinChange, PolicyCommit, Record
-
-from .conftest import POLICY_PATH, REPO_ROOT
+from theseus_reviewer import absence, omp_pin, omp_watch
+from theseus_reviewer.omp_watch import PinChange, PolicyCommit, Record
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-CAPTURED = json.loads(
-    (REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "omp_watch" / "attempts.json").read_text(encoding="utf-8")
-)
-MERGED_AT = datetime(2026, 10, 29, 3, 17, 50, tzinfo=timezone.utc)
+CAPTURED = json.loads((FIXTURES / "oracle_reviewers" / "omp_watch" / "attempts.json").read_text(encoding="utf-8"))
+BRANCH = "develop"
+WATCH_WORKFLOW = ".github/workflows/omp-pin-watch.yml"
+MERGED_AT = datetime(2026, 10, 29, 3, 17, 50, tzinfo=UTC)
 POLICY = POLICY_PATH.read_text(encoding="utf-8")
 PREVIOUS_POLICY = POLICY.replace("18.13.3", "18.12.1")
 CHANGE = PinChange(
@@ -62,7 +62,7 @@ BEFORE = [record for record in CAPTURE if record.created_at < MERGED_AT]
 
 
 def _stretch(day: int, hour: int) -> list[Record]:
-    start = datetime(2026, 10, day, hour, tzinfo=timezone.utc)
+    start = datetime(2026, 10, day, hour, tzinfo=UTC)
     runs: list[int] = []
     chosen: list[Record] = []
     for record in CAPTURE:
@@ -111,7 +111,7 @@ def test_the_captured_week_before_the_pin_change_sets_the_baseline() -> None:
 
 
 def test_the_reviews_observed_after_the_real_pin_change_are_clean_and_settle_the_watch() -> None:
-    result = omp_watch.assess(CAPTURE, CHANGE, datetime(2026, 10, 29, 13, 30, tzinfo=timezone.utc))
+    result = omp_watch.assess(CAPTURE, CHANGE, datetime(2026, 10, 29, 13, 30, tzinfo=UTC))
     assert result.state == omp_watch.CLEAR and not result.reasons
     assert result.reviews == omp_watch.WINDOW_REVIEWS and result.window.attempts == 10 and result.window.counted == 0
     assert result.baseline.attempts == 1208
@@ -174,9 +174,7 @@ def test_one_failure_after_a_clean_week_is_not_enough() -> None:
     clean = [
         record
         for record in BEFORE
-        if datetime(2026, 10, 28, tzinfo=timezone.utc)
-        <= record.created_at
-        < datetime(2026, 10, 29, tzinfo=timezone.utc)
+        if datetime(2026, 10, 28, tzinfo=UTC) <= record.created_at < datetime(2026, 10, 29, tzinfo=UTC)
     ]
     assert omp_watch._mix(clean).counted == 0
     stretch = _mutate(_stretch(28, 0), [absence.INVALID])
@@ -321,7 +319,7 @@ def test_the_revert_body_states_the_numbers_and_the_evidence_the_pin_gate_demand
     result = _assess(_after_the_merge(_mutate(_stretch(28, 0), [absence.ERROR] * 4)))
     body = omp_watch.render_revert_body(CHANGE, result)
     assert "Restores the pinned omp build 18.12.1 after 18.13.3 merged" in body
-    assert "make omp-candidate-check VERSION=18.12.1" in body
+    assert "theseus omp-candidate-check check` for version 18.12.1" in body
     assert "more than 2 times the baseline" in body and "oracle-gate" in body
     assert "does not mirror builds" in body
 
@@ -374,7 +372,7 @@ def test_an_attempt_becomes_a_record_stamped_with_when_its_run_started_and_a_cli
     record = omp_watch.parse_attempt(_artifact(7, "2026-10-29T05:00:00Z", 11), _attempt(), _run(11))
     assert record is not None
     assert (record.artifact_id, record.run_id, record.reviewer, record.slot) == (7, 11, "large", 1)
-    assert record.created_at == datetime(2026, 10, 29, 4, 0, tzinfo=timezone.utc)
+    assert record.created_at == datetime(2026, 10, 29, 4, 0, tzinfo=UTC)
     assert (record.kind, record.counted) == ("error", True)
     assert len(record.detail) == omp_watch.DETAIL_LIMIT
     verdict = omp_watch.parse_attempt(
@@ -468,9 +466,10 @@ class _Host:
 def _collect(host: _Host, known: Sequence[int] = ()) -> list[Record]:
     return omp_watch.collect(
         "o/r",
-        datetime(2026, 10, 22, tzinfo=timezone.utc),
+        datetime(2026, 10, 22, tzinfo=UTC),
         known,
         reviewers=frozenset({"large"}),
+        branch=BRANCH,
         getter=host.getter,
         downloader=host.downloader,
     )
@@ -558,14 +557,19 @@ def test_a_pull_request_target_run_counts_only_when_its_pull_request_targets_dev
     host = _Host({}, {}, pulls={} if titled is None else {3700: titled})
     title = "oracle-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
     run = _run(1, event="pull_request_target", head_branch="feature/x", pull_requests=listed, display_title=title)
-    assert omp_watch.produced_by(run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, host.getter) is trusted
+    assert (
+        omp_watch.produced_by(run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, BRANCH, host.getter)
+        is trusted
+    )
 
 
 def test_a_pull_request_target_run_whose_pull_request_cannot_be_read_is_not_trusted() -> None:
     host = _Host({}, {})
     title = "oracle-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
     run = _run(1, event="pull_request_target", head_branch="feature/x", display_title=title)
-    assert not omp_watch.produced_by(run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, host.getter)
+    assert not omp_watch.produced_by(
+        run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, BRANCH, host.getter
+    )
 
 
 def test_the_ledger_is_restored_from_the_newest_live_artifact_of_a_trusted_run_or_starts_empty() -> None:
@@ -594,12 +598,33 @@ def test_the_ledger_is_restored_from_the_newest_live_artifact_of_a_trusted_run_o
         asked.append(path)
         return _zip(omp_watch.LEDGER_FILE, omp_watch.dump_ledger(records))
 
-    assert omp_watch.restore_ledger("o/r", getter, downloader) == records
+    assert (
+        omp_watch.restore_ledger(
+            "o/r", branch=BRANCH, watch_workflow=WATCH_WORKFLOW, getter=getter, downloader=downloader
+        )
+        == records
+    )
     assert asked == ["repos/o/r/actions/artifacts/2/zip"]
-    assert omp_watch.restore_ledger("o/r", lambda _: {"artifacts": []}, downloader) == []
+    assert (
+        omp_watch.restore_ledger(
+            "o/r",
+            branch=BRANCH,
+            watch_workflow=WATCH_WORKFLOW,
+            getter=lambda _: {"artifacts": []},
+            downloader=downloader,
+        )
+        == []
+    )
     forged = {"artifacts": [listing["artifacts"][3]]}
     assert (
-        omp_watch.restore_ledger("o/r", lambda path: forged if "name=" in path else host.getter(path), downloader) == []
+        omp_watch.restore_ledger(
+            "o/r",
+            branch=BRANCH,
+            watch_workflow=WATCH_WORKFLOW,
+            getter=lambda path: forged if "name=" in path else host.getter(path),
+            downloader=downloader,
+        )
+        == []
     )
 
 
@@ -610,14 +635,27 @@ def _evaluate(
     change: PinChange | None = CHANGE,
 ) -> tuple[int, Path, dict[str, str]]:
     history = [PolicyCommit("sha", MERGED_AT, "subject", POLICY)]
-    monkeypatch.setattr(omp_watch, "policy_history", lambda: history)
+    monkeypatch.setattr(omp_watch, "policy_history", lambda path: history)
+    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/oracle-reviewers.yml")
     monkeypatch.setattr(omp_watch, "latest_pin_change", lambda _: change)
-    monkeypatch.setattr(omp_watch, "restore_ledger", lambda *_: list(BEFORE))
+    monkeypatch.setattr(omp_watch, "restore_ledger", lambda *_, **__: list(BEFORE))
     monkeypatch.setattr(omp_watch, "collect", lambda *_args, **_kwargs: list(window))
     published: dict[str, str] = {}
     monkeypatch.setattr(omp_watch, "_publish", published.update)
     out = tmp_path / "out"
-    code = omp_watch.main(["evaluate", "--repo", "o/r", "--policy", str(POLICY_PATH), "--out-dir", str(out)])
+    code = omp_watch.main(
+        [
+            "evaluate",
+            "--repo",
+            "o/r",
+            "--policy",
+            str(POLICY_PATH),
+            "--watch-workflow",
+            WATCH_WORKFLOW,
+            "--out-dir",
+            str(out),
+        ]
+    )
     return code, out, published
 
 
@@ -629,7 +667,7 @@ def test_an_anomalous_window_writes_the_restored_policy_the_report_and_the_ledge
     assert code == 0
     assert published == {"state": "revert", "version": "18.13.3", "previous": "18.12.1"}
     assert omp_pin.pin_from_text((out / "policy.yml").read_text(encoding="utf-8")).version == "18.12.1"
-    assert "make omp-candidate-check VERSION=18.12.1" in (out / "pr-body.md").read_text(encoding="utf-8")
+    assert "theseus omp-candidate-check check` for version 18.12.1" in (out / "pr-body.md").read_text(encoding="utf-8")
     assert "revert" in (out / "assessment.txt").read_text(encoding="utf-8")
     assert len(omp_watch.load_ledger((out / omp_watch.LEDGER_FILE).read_text(encoding="utf-8"))) >= len(window)
 
@@ -650,14 +688,27 @@ def test_a_revert_is_not_watched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 def test_a_ledger_that_cannot_be_restored_fails_the_run_instead_of_judging_a_partial_baseline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    def broken(*_args: Any) -> list[Record]:
+    def broken(*_args: Any, **_kwargs: Any) -> list[Record]:
         raise omp_watch.WatchError("the ledger is not JSON")
 
-    monkeypatch.setattr(omp_watch, "policy_history", list)
+    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/oracle-reviewers.yml")
+    monkeypatch.setattr(omp_watch, "policy_history", lambda path: [])
     monkeypatch.setattr(omp_watch, "latest_pin_change", lambda _: CHANGE)
     monkeypatch.setattr(omp_watch, "restore_ledger", broken)
     monkeypatch.setattr(omp_watch, "_publish", lambda _: None)
-    code = omp_watch.main(["evaluate", "--repo", "o/r", "--policy", str(POLICY_PATH), "--out-dir", str(tmp_path)])
+    code = omp_watch.main(
+        [
+            "evaluate",
+            "--repo",
+            "o/r",
+            "--policy",
+            str(POLICY_PATH),
+            "--watch-workflow",
+            WATCH_WORKFLOW,
+            "--out-dir",
+            str(tmp_path),
+        ]
+    )
     assert code == 1
 
 
@@ -687,7 +738,12 @@ def test_a_flood_of_foreign_ledger_artifacts_cannot_push_the_trusted_ledger_off_
         asked.append(path)
         return _zip(omp_watch.LEDGER_FILE, omp_watch.dump_ledger(records))
 
-    assert omp_watch.restore_ledger("o/r", getter, downloader) == records
+    assert (
+        omp_watch.restore_ledger(
+            "o/r", branch=BRANCH, watch_workflow=WATCH_WORKFLOW, getter=getter, downloader=downloader
+        )
+        == records
+    )
     assert asked == ["repos/o/r/actions/artifacts/1/zip"]
 
 
@@ -722,7 +778,7 @@ def test_the_policy_history_carries_each_commit_author_subject_and_the_policy_it
         target.write_text(POLICY.replace("18.13.3", version), encoding="utf-8")
         run("add", ".github/oracle-reviewers.yml")
         run("commit", "-q", "-m", subject, GIT_AUTHOR_NAME="a", GIT_AUTHOR_EMAIL=author)
-    history = omp_watch.policy_history()
+    history = omp_watch.policy_history(".github/oracle-reviewers.yml")
     assert [(commit.author_email, commit.subject) for commit in history] == [
         (omp_watch.BOT_AUTHOR_EMAIL, "chore(oracle): pin omp 18.13.3 (#1)"),
         ("a@example.com", "chore(oracle): pin omp 18.12.1"),
@@ -730,3 +786,20 @@ def test_the_policy_history_carries_each_commit_author_subject_and_the_policy_it
     change = omp_watch.latest_pin_change(history)
     assert change is not None and (change.version, change.previous_version) == ("18.13.3", "18.12.1")
     assert change.merged_at == MERGED_AT and not change.is_revert
+
+
+@pytest.mark.parametrize(("head_branch", "branch", "trusted"), [("main", "main", True), ("develop", "main", False)])
+def test_the_trusted_branch_is_the_one_the_consumer_gates(head_branch: str, branch: str, trusted: bool) -> None:
+    run = _run(1, event="schedule", head_branch=head_branch)
+    host = _Host({}, {})
+    assert omp_watch.produced_by(
+        run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, branch, host.getter
+    ) is (trusted)
+
+
+def test_a_policy_that_git_does_not_track_cannot_be_watched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "policy.yml").write_text(POLICY, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(omp_watch.WatchError, match="is not tracked by git"):
+        omp_watch._policy_git_path("policy.yml")

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import evidence
-from _project.scripts.oracle_reviewers.verdict import MAX_EVIDENCE, validate
+from theseus_reviewer import evidence
+from theseus_reviewer.verdict import MAX_EVIDENCE, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

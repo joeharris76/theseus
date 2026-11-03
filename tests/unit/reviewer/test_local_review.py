@@ -15,11 +15,13 @@ import pytest
 
 pytest.importorskip("fcntl")
 
-from _project.scripts.oracle_reviewers import credentials, local, protocol, selection
-from _project.scripts.oracle_reviewers.commands import gateway_proxy, omp_env
-from _project.scripts.oracle_reviewers.verdict import validate
+from tests.conftest import ALPHA_POLICY as POLICY_PATH
+from tests.conftest import CONSUMER_ALPHA
 
-from .conftest import POLICY_PATH, REPO_ROOT
+from theseus_reviewer import credentials, local, protocol, selection
+from theseus_reviewer.commands import gateway_proxy, omp_env
+from theseus_reviewer.verdict import validate
+
 from .test_attempts import _finding, _v
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -30,9 +32,19 @@ CLOUD_URL = "https://cloud-gateway.example.ts.net:4000"
 TYPESAFE_KEY = "tsk-live-" + "Zy9Xw8Vu" * 4
 TS_AUTHKEY = "tskey-auth-" + "Pq7Lm2Nv" * 4
 GITHUB_ACCESS = {"GH_TOKEN": "ghp_" + "a1B2c3D4" * 4, "GITHUB_TOKEN": "ghs_" + "e5F6g7H8" * 4}
+POLICY_RELATIVE = ".github/oracle-reviewers.yml"
+SOUNDNESS_RELATIVE = ".github/soundness-paths.txt"
+INERT_RELATIVE = ".github/inert-paths.txt"
+OMP_CONFIG_RELATIVE = ".github/oracle-omp-config.yml"
 POLICY_TEXT = POLICY_PATH.read_text(encoding="utf-8")
-MANIFEST_TEXT = (REPO_ROOT / local.SOUNDNESS_MANIFEST).read_text(encoding="utf-8")
-INERT_TEXT = (REPO_ROOT / local.INERT_MANIFEST).read_text(encoding="utf-8")
+MANIFEST_TEXT = (CONSUMER_ALPHA / SOUNDNESS_RELATIVE).read_text(encoding="utf-8")
+INERT_TEXT = (CONSUMER_ALPHA / INERT_RELATIVE).read_text(encoding="utf-8")
+OMP_CONFIG_TEXT = (CONSUMER_ALPHA / OMP_CONFIG_RELATIVE).read_text(encoding="utf-8")
+TRUSTED_FILES = (
+    (SOUNDNESS_RELATIVE, MANIFEST_TEXT),
+    (INERT_RELATIVE, INERT_TEXT),
+    (OMP_CONFIG_RELATIVE, OMP_CONFIG_TEXT),
+)
 HOST_TOKENS = {"ORACLE_HOST_TOKEN_LOCAL": LOCAL_TOKEN, "ORACLE_HOST_TOKEN_CLOUD": CLOUD_TOKEN}
 WITHHELD_VALUES = {
     "TYPESAFE_API_KEY": TYPESAFE_KEY,
@@ -49,7 +61,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "home"
     directory.mkdir()
     monkeypatch.setenv("HOME", str(directory))
-    for name in (*WITHHELD_VALUES, "BENCHBOX_EPHEMERAL_CLONE", "GH_ENTERPRISE_TOKEN"):
+    for name in (*WITHHELD_VALUES, "THESEUS_EPHEMERAL_CLONE", "GH_ENTERPRISE_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(local, "_handed_over", {})
     return directory
@@ -82,8 +94,8 @@ def _judged(findings: list[dict[str, Any]], decision: str | None = None, max_def
 def test_the_state_directory_is_fixed_per_user_with_no_environment_override(
     home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("BENCHBOX_LOCAL_ORACLE_DIR", str(tmp_path / "elsewhere"))
-    assert local.state_dir() == home / ".cache" / "benchbox" / "local-oracle"
+    monkeypatch.setenv("THESEUS_LOCAL_ORACLE_DIR", str(tmp_path / "elsewhere"))
+    assert local.state_dir() == home / ".cache" / "theseus" / "local-oracle"
     assert not hasattr(local, "STATE_DIR_ENV")
 
 
@@ -178,8 +190,18 @@ def _plan() -> dict[str, Any]:
     }
 
 
+def _trusted(policy: str = POLICY_TEXT, files: tuple[tuple[str, str], ...] = TRUSTED_FILES) -> local.Trusted:
+    return local.Trusted(policy, files)
+
+
+def _edited(index: int, suffix: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (path, text + suffix if position == index else text) for position, (path, text) in enumerate(TRUSTED_FILES)
+    )
+
+
 def test_the_cache_key_follows_the_shared_digest_and_every_trusted_input() -> None:
-    trusted = local.Trusted(POLICY_TEXT, MANIFEST_TEXT, INERT_TEXT)
+    trusted = _trusted()
     base = local.cache_key(_plan(), "tree", trusted)
 
     same = {
@@ -197,21 +219,67 @@ def test_the_cache_key_follows_the_shared_digest_and_every_trusted_input() -> No
     assert local.cache_key({**_plan(), "base_sha": "b2"}, "tree", trusted) != base
     assert local.cache_key(_plan(), "other-tree", trusted) != base
     for changed in (
-        local.Trusted(POLICY_TEXT + "\n# changed\n", MANIFEST_TEXT, INERT_TEXT),
-        local.Trusted(POLICY_TEXT, MANIFEST_TEXT + "\nfile\textra.txt\n", INERT_TEXT),
-        local.Trusted(POLICY_TEXT, MANIFEST_TEXT, INERT_TEXT + "\nfile\textra.txt\n"),
+        _trusted(POLICY_TEXT + "\n# changed\n"),
+        _trusted(files=_edited(0, "\nfile\textra.txt\n")),
+        _trusted(files=_edited(1, "\nfile\textra.txt\n")),
+        _trusted(files=_edited(2, "# remapped\n")),
     ):
         assert local.cache_key(_plan(), "tree", changed) != base
 
 
-def test_the_trusted_digest_covers_the_model_mapping_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    trusted = local.Trusted(POLICY_TEXT, MANIFEST_TEXT, INERT_TEXT)
-    before = trusted.digest()
-    config = tmp_path / "oracle-omp-config.yml"
-    config.write_text(local.cli.OMP_CONFIG_SOURCE.read_text(encoding="utf-8") + "# remapped\n", encoding="utf-8")
-    monkeypatch.setattr(local.cli, "OMP_CONFIG_SOURCE", config)
+def test_the_trusted_digest_covers_every_consumer_input_and_the_model_mapping_config() -> None:
+    before = _trusted().digest()
 
-    assert trusted.digest() != before
+    assert _trusted().digest() == before
+    for index, (path, _) in enumerate(TRUSTED_FILES):
+        assert _trusted(files=_edited(index, "# remapped\n")).digest() != before, path
+    assert _trusted(files=TRUSTED_FILES[:2]).digest() != before
+
+
+def test_the_trusted_digest_covers_the_installed_package_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    package = tmp_path / "theseus_reviewer"
+    (package / "templates").mkdir(parents=True)
+    (package / "local.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "templates" / "prompt.md").write_text("review\n", encoding="utf-8")
+    monkeypatch.setattr(local, "__file__", str(package / "local.py"))
+    trusted = _trusted()
+    before = trusted.digest()
+
+    assert trusted.digest() == before
+    (package / "templates" / "prompt.md").write_text("review differently\n", encoding="utf-8")
+    changed_template = trusted.digest()
+    assert changed_template != before
+    (package / "local.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert trusted.digest() not in (before, changed_template)
+    (package / "added.py").write_text("", encoding="utf-8")
+    assert trusted.digest() not in (before, changed_template)
+
+
+def test_trusted_inputs_are_read_from_the_base_commit_and_materialised_under_the_trusted_root(
+    tmp_path: Path,
+) -> None:
+    repo = _member_repo(tmp_path / "repo")
+    trusted = local.Trusted.read(repo, "develop", POLICY_RELATIVE)
+    (repo / SOUNDNESS_RELATIVE).write_text(MANIFEST_TEXT + "file\textra.txt\n", encoding="utf-8")
+    _git(repo, "commit", "--quiet", "-am", "head edits the manifest")
+
+    assert trusted.policy == POLICY_TEXT
+    assert dict(trusted.files) == dict(TRUSTED_FILES)
+    root = tmp_path / "trusted"
+    policy = trusted.write(root)
+    assert policy == root / local.TRUSTED_POLICY_FILE and policy.read_text(encoding="utf-8") == POLICY_TEXT
+    for relative, text in TRUSTED_FILES:
+        assert (root / relative).read_text(encoding="utf-8") == text
+    assert local.Trusted.read(repo, "HEAD", POLICY_RELATIVE).digest() != trusted.digest()
+
+
+def test_a_trusted_policy_that_does_not_parse_is_unavailable(tmp_path: Path) -> None:
+    repo = _member_repo(tmp_path / "repo")
+    (repo / POLICY_RELATIVE).write_text("consumer: {}\n", encoding="utf-8")
+    _git(repo, "commit", "--quiet", "-am", "break the policy")
+
+    with pytest.raises(local.Unavailable, match="the trusted review policy at HEAD is invalid"):
+        local.Trusted.read(repo, "HEAD", POLICY_RELATIVE)
 
 
 def test_an_outcome_round_trips_through_the_cache_and_a_bad_record_is_ignored(tmp_path: Path) -> None:
@@ -245,8 +313,7 @@ def _run(tmp_path: Path, key: str = TYPESAFE_KEY) -> local.Run:
         root=tmp_path / "repo",
         work=tmp_path / "work",
         policy=tmp_path / "policy.yml",
-        soundness=tmp_path / "soundness.txt",
-        inert=tmp_path / "inert.txt",
+        trusted_root=tmp_path / "trusted",
         repository="o/r",
         head="h" * 40,
         base_ref="origin/develop",
@@ -319,14 +386,13 @@ def test_the_scan_roots_name_the_gateway_directory_without_its_canonical_files(h
 def test_withheld_secrets_leave_the_process_environment_but_stay_available(tmp_path: Path) -> None:
     script = (
         "import json, os\n"
-        "from _project.scripts.oracle_reviewers import local\n"
+        "from theseus_reviewer import local\n"
         "local.withhold_secrets()\n"
         "print(json.dumps({'environ': sorted(set(os.environ) & set(local.SCRUBBED_AT_START)), "
         "'held': local._held('TYPESAFE_API_KEY'), 'url': local.resolve_credentials().url}))\n"
     )
     environ = {
         **{name: value for name, value in os.environ.items() if name not in local.SCRUBBED_AT_START},
-        "PYTHONPATH": str(REPO_ROOT),
         "HOME": str(tmp_path),
         **WITHHELD_VALUES,
     }
@@ -391,6 +457,7 @@ def _pin_environment(tmp_path: Path) -> local.LocalEnvironment:
         local.WORK_ENV: str(tmp_path / "work"),
         local.REPOSITORY_ENV: "o/r",
         local.ROOT_ENV: str(tmp_path / "repo"),
+        local.TRUSTED_ENV: str(tmp_path / "trusted"),
         local.BASE_ENV: "origin/develop",
         local.HEAD_ENV: "h" * 40,
         local.STATE_ENV: str(tmp_path / "state"),
@@ -456,6 +523,7 @@ def test_the_local_environment_reads_its_adapter_values_and_posts_nothing(tmp_pa
         local.WORK_ENV: str(tmp_path / "work"),
         local.REPOSITORY_ENV: "o/r",
         local.ROOT_ENV: str(tmp_path / "repo"),
+        local.TRUSTED_ENV: str(tmp_path / "trusted"),
         local.BASE_ENV: "origin/develop",
         local.HEAD_ENV: "h" * 40,
         local.STATE_ENV: str(tmp_path / "state"),
@@ -635,7 +703,7 @@ def test_no_phase_environment_carries_the_gateway_proxy_as_a_proxy_variable(
 def test_a_secret_left_in_the_environment_is_still_withheld_when_a_handover_arrives(tmp_path: Path) -> None:
     script = (
         "import os, json\n"
-        "from _project.scripts.oracle_reviewers import local\n"
+        "from theseus_reviewer import local\n"
         "if 'STAGED' not in os.environ:\n"
         "    os.environ['STAGED'] = '1'\n"
         "    r, w = os.pipe()\n"
@@ -649,8 +717,8 @@ def test_a_secret_left_in_the_environment_is_still_withheld_when_a_handover_arri
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
-        cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        cwd=tmp_path,
+        env={**os.environ},
         capture_output=True,
         text=True,
         check=True,
@@ -667,9 +735,8 @@ def _member_repo(path: Path, changed: str = CHECKER) -> Path:
     path.mkdir()
     _git(path, "init", "--quiet", "--initial-branch=develop")
     for relative, text in (
-        (local.DEFAULT_POLICY, POLICY_TEXT),
-        (local.SOUNDNESS_MANIFEST, MANIFEST_TEXT),
-        (local.INERT_MANIFEST, INERT_TEXT),
+        (POLICY_RELATIVE, POLICY_TEXT),
+        *TRUSTED_FILES,
         ("README.md", "seed\n"),
     ):
         seeded = path / relative
@@ -688,13 +755,14 @@ def _member_repo(path: Path, changed: str = CHECKER) -> Path:
 
 def _member_args(repo: Path, result: Path, **overrides: str) -> argparse.Namespace:
     values = {
-        "policy": local.DEFAULT_POLICY,
+        "policy": POLICY_RELATIVE,
         "base_ref": _git(repo, "rev-parse", "develop"),
         "trusted_ref": _git(repo, "rev-parse", "develop"),
         "head": _git(repo, "rev-parse", "HEAD"),
         "rebuttals": "",
         "adjudicate": "",
         "member": True,
+        "repo": "o/r",
         "result_json": str(result),
         **overrides,
     }
@@ -704,7 +772,7 @@ def _member_args(repo: Path, result: Path, **overrides: str) -> argparse.Namespa
 def _stored(repo: Path, outcome: str, reason: str = "r") -> dict[str, Any]:
     base, head, trusted = (_git(repo, "rev-parse", ref) for ref in ("develop", "HEAD", "develop"))
     record = local._member_record(repo, base, head, trusted, outcome, reason)
-    key = local._member_key(base, head, trusted, local.Trusted.read(repo, trusted, local.DEFAULT_POLICY))
+    key = local._member_key(base, head, trusted, local.Trusted.read(repo, trusted, POLICY_RELATIVE))
     local._write_json_atomic(local._member_path(local.state_dir(), key), record)
     return record
 
@@ -724,14 +792,14 @@ def test_a_member_result_binds_the_patch_tree_and_trusted_commit(home: Path, tmp
 def test_a_stored_member_result_is_returned_only_for_exactly_that_patch(home: Path, tmp_path: Path) -> None:
     repo = _member_repo(tmp_path / "repo")
     base, head, trusted = (_git(repo, "rev-parse", ref) for ref in ("develop", "HEAD", "develop"))
-    assert local.member_review_result(repo, base, head, trusted) is None
+    assert local.member_review_result(repo, base, head, trusted, POLICY_RELATIVE) is None
 
     record = _stored(repo, "findings")
 
-    assert local.member_review_result(repo, base, head, trusted) == record
+    assert local.member_review_result(repo, base, head, trusted, POLICY_RELATIVE) == record
     (repo / CHECKER).write_text("value = 2\n", encoding="utf-8")
     _git(repo, "commit", "--quiet", "-am", "feat: change it")
-    assert local.member_review_result(repo, base, _git(repo, "rev-parse", "HEAD"), trusted) is None
+    assert local.member_review_result(repo, base, _git(repo, "rev-parse", "HEAD"), trusted, POLICY_RELATIVE) is None
 
 
 def test_a_stored_member_result_is_not_reused_under_another_trusted_commit_or_manifest(
@@ -743,25 +811,30 @@ def test_a_stored_member_result_is_not_reused_under_another_trusted_commit_or_ma
     _git(repo, "switch", "--quiet", "-c", "same-manifests", "develop")
     _git(repo, "commit", "--quiet", "--allow-empty", "-m", "another trusted commit")
     _git(repo, "switch", "--quiet", "-c", "changed-manifest", "develop")
-    (repo / local.SOUNDNESS_MANIFEST).write_text(MANIFEST_TEXT + "file\textra.txt\n", encoding="utf-8")
+    (repo / SOUNDNESS_RELATIVE).write_text(MANIFEST_TEXT + "file\textra.txt\n", encoding="utf-8")
     _git(repo, "commit", "--quiet", "-am", "extend the manifest")
     _git(repo, "switch", "--quiet", "feat/x")
 
-    assert local.member_review_result(repo, base, head, _git(repo, "rev-parse", "same-manifests")) is None
-    assert local.member_review_result(repo, base, head, _git(repo, "rev-parse", "changed-manifest")) is None
+    assert (
+        local.member_review_result(repo, base, head, _git(repo, "rev-parse", "same-manifests"), POLICY_RELATIVE) is None
+    )
+    assert (
+        local.member_review_result(repo, base, head, _git(repo, "rev-parse", "changed-manifest"), POLICY_RELATIVE)
+        is None
+    )
 
 
 def test_a_tampered_member_result_is_not_returned(home: Path, tmp_path: Path) -> None:
     repo = _member_repo(tmp_path / "repo")
     base, head, trusted = (_git(repo, "rev-parse", ref) for ref in ("develop", "HEAD", "develop"))
-    key = local._member_key(base, head, trusted, local.Trusted.read(repo, trusted, local.DEFAULT_POLICY))
+    key = local._member_key(base, head, trusted, local.Trusted.read(repo, trusted, POLICY_RELATIVE))
     record = _stored(repo, "findings")
     path = local._member_path(local.state_dir(), key)
 
     path.write_text(json.dumps({**record, "patch_digest": "0" * 64}), encoding="utf-8")
-    assert local.member_review_result(repo, base, head, trusted) is None
+    assert local.member_review_result(repo, base, head, trusted, POLICY_RELATIVE) is None
     path.write_text(json.dumps({**record, "outcome": "approved"}), encoding="utf-8")
-    assert local.member_review_result(repo, base, head, trusted) is None
+    assert local.member_review_result(repo, base, head, trusted, POLICY_RELATIVE) is None
 
 
 @pytest.mark.parametrize("moving", ["develop", "origin/develop", "HEAD", "feat/x", "", "abc1234"])
@@ -826,7 +899,7 @@ def test_an_exempt_only_or_empty_member_is_not_reviewed_rather_than_clear(
     written = json.loads(result.read_text(encoding="utf-8"))
     assert written["outcome"] == "not-reviewed" and written["reason"]
     base, head = args.base_ref, args.head
-    assert local.member_review_result(repo, base, head, args.trusted_ref) == written
+    assert local.member_review_result(repo, base, head, args.trusted_ref, POLICY_RELATIVE) == written
 
 
 def test_member_outcomes_keep_not_reviewed_clear_findings_and_override_apart() -> None:
@@ -849,3 +922,103 @@ def test_the_default_review_shows_no_member_marker_on_a_skipped_outcome(capsys: 
     assert local._decide(skipped, local.Reporter()) == local.EXIT_PROCEED
     assert local.Outcome.from_json(skipped.to_json()) == local.Outcome(False, "SHIP", "", "", ())
     assert "pr-open may proceed" in capsys.readouterr().out
+
+
+def test_a_phase_runs_the_installed_package_from_the_trusted_root_with_the_trusted_policy(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    run = _run(tmp_path)
+    run.work.mkdir()
+    run.trusted_root.mkdir()
+    seen: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(argv=argv, cwd=kwargs["cwd"], env=kwargs["env"])
+        return subprocess.CompletedProcess(argv, 0, "slot 1: started\noracle-local: hello\n", "")
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+
+    code, values = run.phase("prepare")
+
+    assert (code, values) == (0, {})
+    assert seen["argv"] == [
+        sys.executable,
+        "-P",
+        "-m",
+        "theseus_reviewer",
+        "drive",
+        "--policy",
+        str(run.policy),
+        "--environment",
+        local.driver.LOCAL,
+        "prepare",
+    ]
+    assert seen["cwd"] == run.trusted_root
+    assert seen["env"][local.TRUSTED_ENV] == str(run.trusted_root)
+    assert seen["env"][local.REPOSITORY_ENV] == "o/r"
+
+
+def test_the_package_entry_point_withholds_secrets_before_dispatching_local_review(tmp_path: Path) -> None:
+    script = (
+        "import json, os\n"
+        "from theseus_reviewer import cli, local, main\n"
+        "def dispatched(argv):\n"
+        "    print(json.dumps({'argv': argv, 'environ': sorted(set(os.environ) & set(local.SCRUBBED_AT_START)),"
+        " 'held': local._held('TYPESAFE_API_KEY')}))\n"
+        "    return 0\n"
+        "cli.main = dispatched\n"
+        "raise SystemExit(main.main(['local-review', '--policy', 'p']))\n"
+    )
+    environ = {
+        **{name: value for name, value in os.environ.items() if name not in local.SCRUBBED_AT_START},
+        "HOME": str(tmp_path),
+        **WITHHELD_VALUES,
+    }
+
+    result = subprocess.run([sys.executable, "-c", script], env=environ, capture_output=True, text=True, check=True)
+
+    seen = json.loads(result.stdout.splitlines()[-1])
+    assert seen == {"argv": ["local-review", "--policy", "p"], "environ": [], "held": TYPESAFE_KEY}
+
+
+def test_the_theseus_module_entry_refuses_an_unreadable_policy_without_a_base_ref(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    environ = {name: value for name, value in os.environ.items() if name not in local.SCRUBBED_AT_START}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "theseus_reviewer", "local-review", "--policy", "missing.yml"],
+        cwd=repo,
+        env={**environ, "HOME": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == local.EXIT_REFUSED
+    assert "--base-ref was not given and the gated base cannot be read from missing.yml" in result.stderr
+
+
+def test_an_empty_base_ref_defaults_to_the_origin_of_the_policy_gated_base() -> None:
+    args = argparse.Namespace(base_ref="", policy=str(POLICY_PATH))
+
+    local._default_base_ref(args)
+
+    assert args.base_ref == "origin/develop"
+    args.base_ref = "origin/other"
+    local._default_base_ref(args)
+    assert args.base_ref == "origin/other"
+
+
+def test_the_repository_comes_from_the_flag_then_the_environment_then_the_origin_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path / "repo")
+    monkeypatch.delenv(local.REPOSITORY_ENV, raising=False)
+
+    with pytest.raises(local.Refused, match="pass --repo or set ORACLE_LOCAL_REPOSITORY"):
+        local._repository(repo)
+    _git(repo, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+    assert local._repository(repo) == "acme/widgets"
+    monkeypatch.setenv(local.REPOSITORY_ENV, "env/repo")
+    assert local._repository(repo) == "env/repo"
+    assert local._repository(repo, "flag/repo") == "flag/repo"

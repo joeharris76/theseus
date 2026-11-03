@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
-from _project.scripts.oracle_reviewers import promotion, protocol
+from theseus_reviewer import promotion, protocol
 
 from .fake_github import OWNER_TOKEN
 from .harness import SLUG, Harness, git
@@ -120,7 +120,11 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     new_hash, new_art, new_urls, _, _ = _register_release(harness, "0.2.0", NEW_COMMIT, new_files)
     delta_hash = promotion.compute_delta_sha256(old_files, new_files)
     policy_data = yaml.safe_load(harness.policy_file.read_text(encoding="utf-8"))
-    policy_data.setdefault("promotion", {})["dependencies"] = {"pyyaml==6.0.3": deps[0]["sha256"]}
+    policy_data["promotion"] = {
+        "repository": "BenchBox-dev/theseus",
+        "bootstrap_reviewers": ["joeharris76"],
+        "dependencies": {"pyyaml==6.0.3": deps[0]["sha256"]},
+    }
     dumped_policy = yaml.safe_dump(policy_data, sort_keys=False)
     harness.policy_file.write_text(dumped_policy, encoding="utf-8")
 

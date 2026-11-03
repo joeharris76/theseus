@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import protocol, report
-from _project.scripts.oracle_reviewers.policy import Policy
+from theseus_reviewer import protocol, report
+from theseus_reviewer.policy import Policy
 
 from .test_attempts import CHECKER, _v
 from .test_rounds import OTHER, _final, _protocol_plan, _record
@@ -69,7 +69,7 @@ def test_a_body_that_fits_is_left_untouched(policy: Policy, tmp_path: Path) -> N
 
 
 def test_enormous_line_numbers_are_clamped_and_the_finding_is_kept() -> None:
-    from _project.scripts.oracle_reviewers import verdict
+    from theseus_reviewer import verdict
 
     huge = 10**4000
     found = verdict._finding(
@@ -100,7 +100,7 @@ def test_a_review_with_thousand_digit_line_numbers_still_fits_and_lists_every_de
 
 @pytest.mark.parametrize("harness", ["text", "omp", "claude"])
 def test_a_number_beyond_the_integer_conversion_limit_is_invalid_reviewer_output(harness: str) -> None:
-    from _project.scripts.oracle_reviewers import verdict
+    from theseus_reviewer import verdict
 
     text = '{"status": "complete", "line": ' + "9" * 5000 + "}"
     with pytest.raises(verdict.VerdictError, match="not JSON"):
@@ -109,7 +109,7 @@ def test_a_number_beyond_the_integer_conversion_limit_is_invalid_reviewer_output
 
 @pytest.mark.parametrize("harness", ["text", "claude"])
 def test_a_duplicate_key_in_the_reviewer_output_is_rejected_not_retried_as_a_stream(harness: str) -> None:
-    from _project.scripts.oracle_reviewers import verdict
+    from theseus_reviewer import verdict
 
     text = '{"type": "result", "structured_output": {"decision": "DO_NOT_SHIP", "decision": "SHIP"}}'
     with pytest.raises(verdict.VerdictError, match="duplicate JSON object key"):

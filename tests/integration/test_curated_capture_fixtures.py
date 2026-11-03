@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import credentials, redaction_check, verdict
+from theseus_reviewer import credentials, redaction_check, verdict
 
 from .harness import REPO_ROOT
 

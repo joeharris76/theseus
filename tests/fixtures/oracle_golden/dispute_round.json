@@ -204,6 +204,7 @@
     "max_attempts": 5,
     "max_defects": 10,
     "mode": "enforce",
+    "omp_config": ".github/oracle-omp-config.yml",
     "omp_sha256": "<volatile>",
     "open_findings": {
       "a59dafa92c57121d": "High"

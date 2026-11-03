@@ -6,12 +6,12 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import credentials, dedup, protocol, report, selection
-from _project.scripts.oracle_reviewers.diff import commentable_lines
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.retry import INTEGRITY, MARKER_LIMIT, OVERSIZE, UNREPORTED
-from _project.scripts.oracle_reviewers.selection import Attempt, Step
-from _project.scripts.oracle_reviewers.verdict import Finding, validate
+from theseus_reviewer import credentials, dedup, protocol, report, selection
+from theseus_reviewer.diff import commentable_lines
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.retry import INTEGRITY, MARKER_LIMIT, OVERSIZE, UNREPORTED
+from theseus_reviewer.selection import Attempt, Step
+from theseus_reviewer.verdict import Finding, validate
 
 from .test_attempts import CHECKER, DIFF, HEAD, _finding, _plan, _v
 from .test_dispute_keyed_evidence import _dispute
@@ -53,7 +53,10 @@ def _comment_plan(policy: Policy, **over: Any) -> dict[str, Any]:
 
 def _assert_shape(text: str) -> None:
     lines = [line for line in text.split("\n") if not line.startswith(protocol.MARKER_OPEN)]
-    listing = lambda line: line.startswith(("- ", "  "))
+
+    def listing(line: str) -> bool:
+        return line.startswith(("- ", "  "))
+
     for current, following in zip(lines, lines[1:], strict=False):
         if not current:
             continue

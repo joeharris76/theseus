@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import absence, cli, omp_pin, redaction_check, runner
-from _project.scripts.oracle_reviewers.commands import Invocation
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.verdict import RESPONSE_PLACEHOLDERS
+from theseus_reviewer import absence, cli, omp_pin, redaction_check, runner
+from theseus_reviewer.commands import Invocation
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.verdict import RESPONSE_PLACEHOLDERS
 
 pytestmark = [pytest.mark.unit, pytest.mark.medium]
 skip_on_windows = pytest.mark.skipif(
@@ -686,8 +686,8 @@ def test_a_reviewer_that_reports_incomplete_is_absent_with_its_reason(
 def test_a_miscited_defect_is_kept_and_marked_so_the_change_still_fails(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, defect: dict, note: str
 ) -> None:
-    from _project.scripts.oracle_reviewers import protocol
-    from _project.scripts.oracle_reviewers.verdict import validate
+    from theseus_reviewer import protocol
+    from theseus_reviewer.verdict import validate
 
     workspace, head = _workspace(tmp_path)
     _omp_says(tmp_path, monkeypatch, decision="SHIP", defects=[{**DEFECT, **defect}])
@@ -851,8 +851,8 @@ def _two_files(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _judged(outcome: runner.ReviewOutcome, rules: dict):
-    from _project.scripts.oracle_reviewers import protocol
-    from _project.scripts.oracle_reviewers.verdict import validate
+    from theseus_reviewer import protocol
+    from theseus_reviewer.verdict import validate
 
     assert outcome.missing is None and outcome.verdict is not None
     return protocol.judge_planned(validate(outcome.verdict, trusted=True), {"max_defects": 10, "protocol": rules})
@@ -1195,7 +1195,7 @@ def test_an_incomplete_reply_without_a_reason_reports_the_default_incomplete_rea
     )
 
 
-FIXTURE_EVENTS = Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
+FIXTURE_EVENTS = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
 DUMMY_GATEWAY_TOKEN = "dummy-gateway-token-for-tests-0123456789ABCDEFGHIJKLMNOP"
 
 

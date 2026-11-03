@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import protocol, report
-from _project.scripts.oracle_reviewers.retry import State
+from theseus_reviewer import protocol, report
+from theseus_reviewer.retry import State
 
 from .test_cli_plan import (
     DEFECT,
@@ -23,7 +23,7 @@ from .test_cli_plan import (
     _review,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.fast]
+pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 RUN = "1" * 32
 COMMENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}

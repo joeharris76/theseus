@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import omp_pin
+from theseus_reviewer import omp_pin
+from theseus_reviewer.policy import Policy
 
-from .test_attempt_loop import Loop, loop
+from .test_attempt_loop import Loop
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
+
+
+@pytest.fixture
+def loop(tmp_path: Path, policy: Policy, monkeypatch: pytest.MonkeyPatch) -> Loop:
+    return Loop(tmp_path, policy, monkeypatch)
 
 
 def test_real_execute_survives_deleted_cached_tempdir_across_slots(loop: Loop, monkeypatch: pytest.MonkeyPatch) -> None:

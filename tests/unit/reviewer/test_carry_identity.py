@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, github, local, protocol
+from theseus_reviewer import cli, github, local, protocol
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

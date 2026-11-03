@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import omp_pin
+from conftest import CONSUMER_ALPHA, CONSUMER_BETA
+from theseus_reviewer import gate, omp_pin
+from theseus_reviewer import review_check as check
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = REPO_ROOT / "_project/scripts/oracle_review_check.py"
-sys.path.insert(0, str(SCRIPT.parent))
-SPEC = importlib.util.spec_from_file_location("oracle_review_check", SCRIPT)
-assert SPEC and SPEC.loader
-check = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = check
-SPEC.loader.exec_module(check)
+ALPHA = gate.load_gate_config(".github/oracle-reviewers.yml", CONSUMER_ALPHA)
+BETA = gate.load_gate_config(".github/oracle-reviewers.yml", CONSUMER_BETA)
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -59,10 +52,32 @@ def texts(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     return served
 
 
-def _gate(comments: list[dict[str, Any]], files: list[str] | None = None) -> tuple[int, str]:
+def _refusals(
+    comments: list[dict[str, Any]],
+    files: list[str],
+    pull: dict[str, Any] | None = None,
+    listed: int | None = None,
+    config: gate.GateConfig = ALPHA,
+) -> list[str]:
+    return check.fetch_bump_refusals(
+        "t",
+        "o/r",
+        _pull(len(files)) if pull is None else pull,
+        files,
+        len(files) if listed is None else listed,
+        comments,
+        policy_path=POLICY_PATH,
+        fixture_prefix=config.consumer.omp_fixture_prefix,
+        attesters=config.binding.attesters,
+    )
+
+
+def _gate(
+    comments: list[dict[str, Any]], files: list[str] | None = None, config: gate.GateConfig = ALPHA
+) -> tuple[int, str]:
     files = [POLICY_PATH] if files is None else files
-    refusals = check.fetch_bump_refusals("t", "o/r", _pull(len(files)), files, len(files), comments)
-    return check.decide(HEAD, files, [], lambda _f: True, None, [], bump_refusals=refusals)
+    refusals = _refusals(comments, files, config=config)
+    return check.decide(HEAD, files, [], lambda _f: True, None, [], binding=config.binding, bump_refusals=refusals)
 
 
 def test_a_pin_bump_with_no_owner_evidence_is_held(texts: dict[str, str]) -> None:
@@ -103,7 +118,7 @@ def test_a_bump_that_changes_other_files_is_held_even_with_evidence(texts: dict[
 
 def test_a_pull_request_that_leaves_the_pin_alone_is_not_held(texts: dict[str, str]) -> None:
     texts[HEAD] = OLD.replace("retry: 1", "retry: 2")
-    assert check.fetch_bump_refusals("t", "o/r", _pull(), [POLICY_PATH], 1, []) == []
+    assert _refusals([], [POLICY_PATH], _pull()) == []
 
 
 def test_a_pull_request_without_the_policy_file_reads_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,16 +126,16 @@ def test_a_pull_request_without_the_policy_file_reads_nothing(monkeypatch: pytes
         raise AssertionError("no read expected")
 
     monkeypatch.setattr(check, "fetch_text", boom)
-    assert check.fetch_bump_refusals("t", "o/r", _pull(), ["README.md"], 1, []) == []
+    assert _refusals([], ["README.md"], _pull()) == []
 
 
 def test_a_truncated_file_list_still_checks_the_pin(texts: dict[str, str]) -> None:
-    reasons = " ".join(check.fetch_bump_refusals("t", "o/r", _pull(5000), ["README.md"], 3000, []))
+    reasons = " ".join(_refusals([], ["README.md"], _pull(5000), 3000))
     assert "has no owner evidence" in reasons and "file list is incomplete" in reasons
 
 
 def test_a_truncated_file_list_holds_the_bump_even_with_matching_owner_evidence(texts: dict[str, str]) -> None:
-    reasons = check.fetch_bump_refusals("t", "o/r", _pull(5000), [POLICY_PATH], 3000, [_evidence()])
+    reasons = _refusals([_evidence()], [POLICY_PATH], _pull(5000), 3000)
     assert len(reasons) == 1 and "file list is incomplete" in reasons[0]
 
 
@@ -128,7 +143,7 @@ def test_evidence_for_an_earlier_head_does_not_survive_a_later_push(texts: dict[
     later = "f" * 40
     pull = {**_pull(), "head": {"sha": later, "repo": {"full_name": "o/r"}}}
     texts[later] = NEW
-    reasons = check.fetch_bump_refusals("t", "o/r", pull, [POLICY_PATH], 1, [_evidence()])
+    reasons = _refusals([_evidence()], [POLICY_PATH], pull)
     assert len(reasons) == 1 and "has no owner evidence" in reasons[0] and later[:9] in reasons[0]
 
 
@@ -138,10 +153,28 @@ def test_an_unreadable_policy_fails_closed(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(check, "fetch_text", unreadable)
     with pytest.raises(check.CheckError):
-        check.fetch_bump_refusals("t", "o/r", _pull(), [POLICY_PATH], 1, [])
+        _refusals([], [POLICY_PATH], _pull())
 
 
-def test_the_attester_lists_agree() -> None:
-    from oracle_reviewers import omp_bump_gate
+def test_the_owner_evidence_attesters_come_from_the_binding(texts: dict[str, str]) -> None:
+    owner = _evidence()
+    beta_owner = _evidence(login="beta-owner")
+    assert "has no owner evidence" not in " ".join(_refusals([owner], [POLICY_PATH]))
+    assert "has no owner evidence" in " ".join(_refusals([beta_owner], [POLICY_PATH]))
+    assert "has no owner evidence" in " ".join(_refusals([owner], [POLICY_PATH], config=BETA))
+    for attester in ("beta-owner", "beta-deputy"):
+        evidence = _evidence(login=attester)
+        assert "has no owner evidence" not in " ".join(_refusals([evidence], [POLICY_PATH], config=BETA))
+    status, message = _gate([_evidence(login="beta-deputy")], config=BETA)
+    assert status == check.WAITING and "omp pin bump refused" not in message
 
-    assert omp_bump_gate.ATTESTERS == check.STANDIN_ATTESTERS
+
+def test_captured_fixtures_under_the_consumer_prefix_ride_along_with_a_bump(texts: dict[str, str]) -> None:
+    prefix = ALPHA.consumer.omp_fixture_prefix
+    assert prefix
+    fixture = f"{prefix}capture.jsonl"
+    assert _refusals([_evidence()], [POLICY_PATH, fixture]) == []
+    assert "also changes" in " ".join(_refusals([_evidence()], [POLICY_PATH, f"{prefix}capture.txt"]))
+    assert "also changes" in " ".join(_refusals([_evidence()], [POLICY_PATH, fixture], config=BETA))
+    beta_fixture = f"{BETA.consumer.omp_fixture_prefix}capture.jsonl"
+    assert _refusals([_evidence(login="beta-owner")], [POLICY_PATH, beta_fixture], config=BETA) == []

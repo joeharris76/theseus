@@ -4,17 +4,17 @@ import json
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers.diff import binary_files as diff_binary_files
-from _project.scripts.oracle_reviewers.evidence import (
+from theseus_reviewer.diff import binary_files as diff_binary_files
+from theseus_reviewer.evidence import (
     CITATION_PREFIX,
     INLINE,
     UNVERIFIED_WITHDRAWAL,
     Gap,
     Trace,
-    check,
     describe,
     glob_match,
     mark_citations,
@@ -22,12 +22,28 @@ from _project.scripts.oracle_reviewers.evidence import (
     trace,
     unread,
 )
-from _project.scripts.oracle_reviewers.verdict import Finding, PriorDefect, Verdict
+from theseus_reviewer.evidence import (
+    check as _check,
+)
+from theseus_reviewer.matchers import load_matchers
+from theseus_reviewer.policy import load_policy
+from theseus_reviewer.verdict import Finding, PriorDefect, Verdict
+
+from .conftest import POLICY_PATH
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
+CONSUMER = load_policy(POLICY_PATH).consumer
+MATCHERS = load_matchers(CONSUMER, POLICY_PATH.parents[1])
+
+
+def check(*args: Any, **kwargs: Any) -> Any:
+    kwargs.setdefault("is_protected", MATCHERS.is_protected)
+    return _check(*args, **kwargs)
+
+
 OMP_STREAM = (
-    Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
+    Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
 ).read_text(encoding="utf-8")
 
 
@@ -622,9 +638,7 @@ def _exposure(workspace: Path, required: list[str], run: Trace | None = None, **
 
 
 def _policy_exemptions() -> tuple[str, ...]:
-    from _project.scripts.oracle_reviewers.policy import load_policy
-
-    return load_policy(Path(__file__).resolve().parents[4] / ".github" / "oracle-reviewers.yml").evidence.exempt_paths
+    return load_policy(POLICY_PATH).evidence.exempt_paths
 
 
 READ = Trace(("seed.txt",))
@@ -805,11 +819,9 @@ def test_an_unread_all_exempt_change_still_needs_one_successful_read(tmp_path: P
 
 
 def test_a_gitattributes_change_is_a_soundness_path_change() -> None:
-    from _project.scripts.soundness_paths import is_soundness_path
-
-    assert is_soundness_path(".gitattributes")
-    assert is_soundness_path("docs/.gitattributes")
-    assert not is_soundness_path("docs/gitattributes.md")
+    assert MATCHERS.is_soundness_path(".gitattributes")
+    assert MATCHERS.is_soundness_path("docs/.gitattributes")
+    assert not MATCHERS.is_soundness_path("docs/gitattributes.md")
 
 
 @pytest.mark.parametrize(
@@ -859,7 +871,7 @@ def test_prose_globs_do_not_cover_other_files(path: str) -> None:
     ],
 )
 def test_binary_detection_uses_diff_metadata(body: str, expected: frozenset[str]) -> None:
-    from _project.scripts.oracle_reviewers.diff import binary_files
+    from theseus_reviewer.diff import binary_files
 
     assert binary_files("diff --git a/blob b/blob\n" + body) == expected
 

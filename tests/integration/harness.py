@@ -12,25 +12,26 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from _project.scripts.oracle_reviewers import omp_pin
+from theseus_reviewer import omp_pin
 
 from .fake_github import APP_TOKEN, GH_HOST, JOB_TOKEN, OWNER_TOKEN, FakeGitHub
 from .fake_jev import FakeJev
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ALPHA_ROOT = REPO_ROOT / "tests" / "fixtures" / "consumer" / "alpha"
 SLUG = "BenchBox-dev/BenchBox"
 CHECKER = "benchbox/core/equivalence/checker.py"
 RECORDED_STREAM = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
 POLICY = ".github/oracle-reviewers.yml"
-PINNED_OMP = omp_pin.pin_from_text((REPO_ROOT / POLICY).read_text(encoding="utf-8")).version
+WORKFLOW = ".github/workflows/oracle-verdict.yml"
+PINNED_OMP = omp_pin.pin_from_text((ALPHA_ROOT / POLICY).read_text(encoding="utf-8")).version
 TRUSTED_FILES = (
-    POLICY,
-    ".github/workflows/oracle-verdict.yml",
+    ".github/oracle-omp-config.yml",
+    WORKFLOW,
     ".github/soundness-paths.txt",
     ".github/inert-paths.txt",
 )
+PACKAGE = [sys.executable, "-m", "theseus_reviewer"]
 GATEWAY_TOKEN = "gwtok-" + "Q7mZ4kLp" * 5
 HELD_SECRET = "oauth-secret-" + "W3xT9vNb" * 4
 JEV_KEY = "jevk-" + "T5nB8wXc" * 4
@@ -38,9 +39,6 @@ OAUTH_CLIENT_ID = "oauth-client-" + "H6dK2sRq" * 3
 APP_PRIVATE_KEY = "app-private-key-" + "M8vC4zJf" * 6
 SHA256_LINE = re.compile(r"sha256: [0-9a-f]{64}")
 URL_LINE = re.compile(r"url: https://\S+")
-BUMP_WORKFLOW = ".github/workflows/omp-pin-bump.yml"
-BUMP_STEP = "Open the bump pull request"
-WORKFLOW = ".github/workflows/oracle-verdict.yml"
 UNREACHABLE_BUILD = "https://127.0.0.1:9/omp"
 STEP_TIMEOUT = 120
 COMMIT_AGE = timedelta(hours=2)
@@ -115,9 +113,15 @@ class Harness:
         self.bin = root / "bin"
         for folder in (self.home, self.bin, root / "gh-config"):
             folder.mkdir(parents=True)
+        self.trusted = root / "trusted"
         self._install_omp()
-        self.policy_file = root / "oracle-reviewers.yml"
+        self.policy_file = self.trusted / POLICY
+        self.policy_file.parent.mkdir(parents=True)
         self.policy_file.write_text(self._pinned_policy(), encoding="utf-8")
+        for path in TRUSTED_FILES:
+            target = self.trusted / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text((ALPHA_ROOT / path).read_text(encoding="utf-8"), encoding="utf-8")
         self._seed()
         self.github = FakeGitHub(SLUG, self.repo).start()
         self.jev = FakeJev().start()
@@ -131,7 +135,7 @@ class Harness:
         self.jev.stop()
 
     def _pinned_policy(self) -> str:
-        text = (REPO_ROOT / POLICY).read_text(encoding="utf-8")
+        text = (ALPHA_ROOT / POLICY).read_text(encoding="utf-8")
         text = SHA256_LINE.sub(f"sha256: {omp_pin.sha256_of(self.bin / 'omp')}", text)
         return URL_LINE.sub(f"url: {UNREACHABLE_BUILD}", text)
 
@@ -142,7 +146,7 @@ class Harness:
     def _seed(self) -> None:
         self.repo.mkdir()
         git(self.repo, "init", "--quiet", "--initial-branch=develop")
-        trusted = {path: (REPO_ROOT / path).read_text(encoding="utf-8") for path in TRUSTED_FILES}
+        trusted = {path: (ALPHA_ROOT / path).read_text(encoding="utf-8") for path in TRUSTED_FILES}
         trusted[POLICY] = self.policy_file.read_text(encoding="utf-8")
         self.write({"README.md": "seed\n", CHECKER: "def checker(a, b):\n    return a == b\n", **trusted}, "seed")
 
@@ -258,38 +262,25 @@ class Harness:
         return env
 
     def run(
-        self, name: str, argv: list[str], env: dict[str, str], cwd: Path = REPO_ROOT, stdin: str | None = None
+        self, name: str, argv: list[str], env: dict[str, str], cwd: Path | None = None, stdin: str | None = None
     ) -> Step:
         output = Path(env["GITHUB_OUTPUT"]) if "GITHUB_OUTPUT" in env else None
         if output is not None:
             output.write_text("", encoding="utf-8")
         result = subprocess.run(
-            argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=STEP_TIMEOUT, input=stdin, check=False
+            argv,
+            cwd=cwd or self.trusted,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=STEP_TIMEOUT,
+            input=stdin,
+            check=False,
         )
         return Step(name, result.returncode, result.stdout, result.stderr, outputs(output) if output else {})
 
-    def open_bump_pull(self, version: str, policy: str) -> Step:
-        workflow = yaml.safe_load((REPO_ROOT / BUMP_WORKFLOW).read_text(encoding="utf-8"))
-        steps = workflow["jobs"]["open-pr"]["steps"]
-        script = next(step["run"] for step in steps if step.get("name") == BUMP_STEP)
-        checkout = self.root / "bump-checkout"
-        if not checkout.exists():
-            git(self.root, "clone", "--quiet", str(self.repo), str(checkout))
-        out_dir = self.root / "omp-bump"
-        out_dir.mkdir(exist_ok=True)
-        (out_dir / "policy.yml").write_text(policy, encoding="utf-8")
-        (out_dir / "pr-body.md").write_text(f"Bump omp to {version}.\n", encoding="utf-8")
-        env = {
-            **self.base_env(),
-            "GH_TOKEN": JOB_TOKEN,
-            "GH_ENTERPRISE_TOKEN": JOB_TOKEN,
-            "OUT_DIR": str(out_dir),
-            "VERSION": version,
-        }
-        return self.run("bump", ["bash", "-e", "-c", script], env, cwd=checkout)
-
     def cli(self, name: str, args: list[str], env: dict[str, str]) -> Step:
-        return self.run(name, [sys.executable, "-m", "_project.scripts.oracle_reviewers.cli", *args], env)
+        return self.run(name, [*PACKAGE, *args], env)
 
     def gh(self, name: str, args: list[str], env: dict[str, str], token: str) -> Step:
         return self.run(name, ["gh", *args], {**env, "GH_TOKEN": token, "GH_ENTERPRISE_TOKEN": token})
@@ -345,7 +336,7 @@ class Harness:
 
     def gate(self, pr: int, head_sha: str | None = None, *, pending_first: bool = False) -> Step:
         env = {**self.base_env(), "GITHUB_TOKEN": APP_TOKEN, "GH_TOKEN": APP_TOKEN}
-        args = [sys.executable, "_project/scripts/oracle_gate.py", "--repo", SLUG, "--pr", str(pr)]
+        args = [*PACKAGE, "gate", "--repo", SLUG, "--pr", str(pr), "--policy", POLICY, "--root", str(self.trusted)]
         if head_sha:
             args += ["--head-sha", head_sha]
         if pending_first:
@@ -362,46 +353,6 @@ class Harness:
         summary = Path(env["GITHUB_STEP_SUMMARY"])
         step.outputs["summary"] = summary.read_text(encoding="utf-8") if summary.is_file() else ""
         return step
-
-    def arm(self, pr: int, branch: str) -> Step:
-        checkout = self.root / f"checkout-{pr}"
-        if not checkout.exists():
-            git(self.root, "clone", "--quiet", str(self.repo), str(checkout))
-            git(checkout, "switch", "--quiet", branch)
-        head = git(checkout, "rev-parse", "HEAD")
-        env = {**self.base_env(), "GH_TOKEN": OWNER_TOKEN, "GH_ENTERPRISE_TOKEN": OWNER_TOKEN}
-        argv = [sys.executable, str(REPO_ROOT / "scripts" / "pr_arm.py"), "--pr", str(pr), "--head", head]
-        return self.run("arm", [*argv, "--repo", SLUG], env, cwd=checkout)
-
-    def landing_ready(self, pr: int, branch: str, evidence: dict[str, Any]) -> Step:
-        checkout = self.root / f"landing-{pr}"
-        origin = f"https://github.com/{SLUG}.git"
-        if not checkout.exists():
-            git(self.root, "clone", "--quiet", str(self.repo), str(checkout))
-            git(checkout, "switch", "--quiet", branch)
-            git(checkout, "config", f"url.{self.repo}.insteadOf", origin)
-            git(checkout, "remote", "set-url", "origin", origin)
-        head = git(checkout, "rev-parse", "HEAD")
-        evidence_file = self.root / f"landing-{pr}-evidence.json"
-        evidence_file.write_text(json.dumps(evidence), encoding="utf-8")
-        env = {
-            **self.base_env(),
-            "GH_TOKEN": OWNER_TOKEN,
-            "GH_ENTERPRISE_TOKEN": OWNER_TOKEN,
-            "BENCHBOX_PR_LANDING_DIR": str(self.root / "landing-state"),
-        }
-        argv = [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "pr_landing.py"),
-            "--repo",
-            SLUG,
-            "--worktree",
-            str(checkout),
-        ]
-        started = self.run("landing-start", [*argv, "start"], env, cwd=checkout)
-        assert started.code == 0, started.stdout + started.stderr
-        ready = ["ready", "--pr", str(pr), "--expected-head", head, "--evidence-json", str(evidence_file), "--arm"]
-        return self.run("landing-ready", [*argv, *ready], env, cwd=checkout)
 
     def local_review(
         self,
@@ -453,7 +404,6 @@ class Harness:
             git(checkout, "branch", "--quiet", "-f", "develop", "origin/develop")
         values = {
             **self.base_env(),
-            "PYTHONPATH": str(REPO_ROOT),
             "ORACLE_GATEWAY_URL": self.github.url,
             "ORACLE_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
             "GH_TOKEN": OWNER_TOKEN,
@@ -462,12 +412,12 @@ class Harness:
             **({"TYPESAFE_API_KEY": JEV_KEY} if key else {}),
             **(env or {}),
         }
-        argv = [sys.executable, "-m", "_project.scripts.oracle_reviewers.cli", "local-review", "--policy", POLICY]
+        argv = [*PACKAGE, "local-review", "--policy", POLICY, "--repo", SLUG]
         return [*argv, "--base-ref", "develop"], values, checkout
 
     @property
     def local_state(self) -> Path:
-        return self.home / ".cache" / "benchbox" / "local-oracle"
+        return self.home / ".cache" / "theseus" / "local-oracle"
 
     def local_captures(self) -> list[dict[str, Any]]:
         paths = sorted((self.local_state / "captures").glob("*/capture-*.json"))

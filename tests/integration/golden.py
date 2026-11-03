@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import protocol
-from _project.scripts.oracle_reviewers.policy import load_policy
+from theseus_reviewer import protocol
+from theseus_reviewer.policy import load_policy
 
 from .harness import PINNED_OMP, REPO_ROOT, Harness, ReviewRun, Step
 

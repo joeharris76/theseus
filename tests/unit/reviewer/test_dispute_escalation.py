@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import adjudication, protocol, report
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.retry import State
+from theseus_reviewer import adjudication, protocol, report
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.retry import State
 
 from .test_attempts import _v
 from .test_cli_plan import (
@@ -32,7 +32,7 @@ from .test_cli_plan import (
 )
 from .test_rounds import _decided, _final, _forced, _plan_same_head, _prior, _protocol_plan, _with_priors
 
-pytestmark = [pytest.mark.unit, pytest.mark.fast]
+pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 COMMENT_EVENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
 RULING = "Oracle adjudication: WITHDRAW D1 - the helper keeps the row, see pkg/kept.py:12"

@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-TEMPLATES = Path(__file__).resolve().parents[4] / "_project" / "scripts" / "oracle_reviewers" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[3] / "src" / "theseus_reviewer" / "templates"
 
 
 @pytest.mark.parametrize("name", ["gate", "standard", "deep"])

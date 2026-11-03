@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import protocol
-from _project.scripts.oracle_reviewers.protocol import (
+from theseus_reviewer import protocol
+from theseus_reviewer.protocol import (
     DO_NOT_SHIP_SUMMARY,
     MarkerError,
     decode_marker,
@@ -21,7 +21,7 @@ from _project.scripts.oracle_reviewers.protocol import (
     judge,
     judge_planned,
 )
-from _project.scripts.oracle_reviewers.verdict import MAX_LINE, validate
+from theseus_reviewer.verdict import MAX_LINE, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

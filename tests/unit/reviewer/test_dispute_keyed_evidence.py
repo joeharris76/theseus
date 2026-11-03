@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, evidence, protocol, report
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.verdict import MAX_REPLAYED_EVIDENCE, validate
+from theseus_reviewer import cli, evidence, protocol, report
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.verdict import MAX_REPLAYED_EVIDENCE, validate
 
 from .test_attempts import CHECKER
 from .test_rounds import _final, _follow_up, _prior
@@ -468,7 +468,7 @@ def test_disposition_evidence_truncates_before_any_line_drops(
 
 
 def test_replay_fixtures_produce_published_dispositions(policy: Policy, tmp_path: Path) -> None:
-    fixtures = Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers"
+    fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers"
     for name in ("dispute_3465.json", "dispute_3407.json"):
         case = json.loads((fixtures / name).read_text(encoding="utf-8"))
         plan = _plan_with_dispute(policy, case["dispute"])

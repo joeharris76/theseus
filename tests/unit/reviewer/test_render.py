@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers.classify import Classification, FileRow
-from _project.scripts.oracle_reviewers.render import (
+from theseus_reviewer.classify import Classification, FileRow
+from theseus_reviewer.render import (
     SLOT_MAX_BYTES,
     OversizeError,
     dispute_listing,
@@ -18,7 +18,7 @@ from _project.scripts.oracle_reviewers.render import (
     response_template,
     select_prior_rule,
 )
-from _project.scripts.oracle_reviewers.verdict import RESPONSE_PLACEHOLDERS, VERDICT_KEYS, VerdictError, validate
+from theseus_reviewer.verdict import RESPONSE_PLACEHOLDERS, VERDICT_KEYS, VerdictError, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

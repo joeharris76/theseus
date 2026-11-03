@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import omp_pin
-from _project.scripts.oracle_reviewers.commands import build
-from _project.scripts.oracle_reviewers.policy import Policy
+from theseus_reviewer import omp_pin
+from theseus_reviewer.commands import build
+from theseus_reviewer.policy import Policy
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

@@ -11,11 +11,11 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, edits, github, protocol, report
-from _project.scripts.oracle_reviewers.absence import Absence
-from _project.scripts.oracle_reviewers.classify import Classification
-from _project.scripts.oracle_reviewers.diff import commentable_lines
-from _project.scripts.oracle_reviewers.policy import Policy
+from theseus_reviewer import cli, edits, github, protocol, report
+from theseus_reviewer.absence import Absence
+from theseus_reviewer.classify import Classification
+from theseus_reviewer.diff import commentable_lines
+from theseus_reviewer.policy import Policy
 
 from .test_attempts import CHECKER, DIFF, HEAD, _decide, _finding, _plan, _run_cli, _v, _write
 
@@ -692,11 +692,11 @@ def test_a_forced_round_never_follows_do_not_ship() -> None:
     assert _plan_same_head(carried, force=True).kind == protocol.CARRY
 
 
-FIXTURE = Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers" / "pr2769_history.json"
+FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "pr2769_history.json"
 
 
 def _replay_verdict(defects: list[dict[str, Any]], prior: list[dict[str, Any]], changed: frozenset[str]) -> Any:
-    from _project.scripts.oracle_reviewers.verdict import validate
+    from theseus_reviewer.verdict import validate
 
     statuses = [
         {"id": item["id"], "status": "fixed" if item["file"] in changed else "not_fixed", "evidence": "replay"}
@@ -783,7 +783,7 @@ def test_replaying_the_real_pr_2769_history_reviews_each_patch_once_and_scopes_f
     assert threads < original
 
 
-REPLAY_3222 = Path(__file__).resolve().parents[3] / "fixtures" / "oracle_reviewers" / "pr3222_replay.json"
+REPLAY_3222 = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "pr3222_replay.json"
 
 
 def test_a_docs_only_rebuttal_push_is_rejudged_not_carried() -> None:

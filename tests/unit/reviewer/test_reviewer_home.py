@@ -7,18 +7,17 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.conftest import ALPHA_POLICY, CONSUMER_ALPHA
 
-from _project.scripts.oracle_reviewers import cli
-from _project.scripts.oracle_reviewers.classifier import matching
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.soundness_paths import is_soundness_path
-
-from .conftest import REPO_ROOT
+from theseus_reviewer import cli
+from theseus_reviewer.classifier import matching
+from theseus_reviewer.matchers import load_matchers
+from theseus_reviewer.policy import Policy
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-CONFIG_PATH = REPO_ROOT / ".github" / "oracle-omp-config.yml"
-POLICY_PATH = REPO_ROOT / ".github" / "oracle-reviewers.yml"
+CONFIG_PATH = CONSUMER_ALPHA / ".github" / "oracle-omp-config.yml"
+POLICY_PATH = ALPHA_POLICY
 GATEWAY_URL = "https://example.ts.net:4000"
 PROVIDERS = {"anthropic", "openai-codex", "muse-code", "google-antigravity"}
 TOKEN = "t" * 48
@@ -41,7 +40,7 @@ def _gateway_clients(tmp_path: Path, token: str = TOKEN, accounts: dict | None =
     token_file = tmp_path / "client.token"
     token_file.write_text(token, encoding="utf-8")
     out = tmp_path / "clients.json"
-    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(out)]
+    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(out), "--omp-config", str(CONFIG_PATH)]
     if accounts is not None:
         accounts_file = tmp_path / "accounts.json"
         accounts_file.write_text(json.dumps(accounts), encoding="utf-8")
@@ -51,7 +50,12 @@ def _gateway_clients(tmp_path: Path, token: str = TOKEN, accounts: dict | None =
 
 
 def test_reviewer_home_writes_the_config_and_the_gateway_providers(tmp_path: Path) -> None:
-    assert cli.main(["reviewer-home", "--home", str(tmp_path), "--gateway-url", GATEWAY_URL]) == 0
+    assert (
+        cli.main(
+            ["reviewer-home", "--home", str(tmp_path), "--gateway-url", GATEWAY_URL, "--omp-config", str(CONFIG_PATH)]
+        )
+        == 0
+    )
     agent = tmp_path / ".omp" / "agent"
     assert _load(agent / "config.yml") == _load(CONFIG_PATH)
     providers = _load(agent / "models.yml")["providers"]
@@ -63,7 +67,7 @@ def test_reviewer_home_writes_the_config_and_the_gateway_providers(tmp_path: Pat
 @pytest.mark.parametrize("url", ["", "   ", "http://example.ts.net:4000", "example.ts.net:4000", "https://"])
 def test_reviewer_home_refuses_a_missing_or_insecure_gateway_url(tmp_path: Path, url: str) -> None:
     with pytest.raises(SystemExit) as refused:
-        cli.main(["reviewer-home", "--home", str(tmp_path), "--gateway-url", url])
+        cli.main(["reviewer-home", "--home", str(tmp_path), "--gateway-url", url, "--omp-config", str(CONFIG_PATH)])
     assert "gateway URL" in str(refused.value)
     assert not (tmp_path / ".omp").exists()
 
@@ -91,10 +95,13 @@ def test_fallback_walks_only_on_usage_limits() -> None:
     assert _load(CONFIG_PATH)["retry"]["fallbackOn"] == "usage-limit"
 
 
+def test_the_consumer_omp_config_is_a_fixture_file() -> None:
+    assert CONFIG_PATH.is_file()
+
+
 @pytest.mark.parametrize("path", [".github/oracle-omp-config.yml", "_project/scripts/oracle_gateway_host.sh"])
 def test_reviewer_credential_scope_files_are_soundness_and_gate_paths(policy: Policy, path: str) -> None:
-    assert (REPO_ROOT / path).is_file()
-    assert is_soundness_path(path)
+    assert load_matchers(policy.consumer, CONSUMER_ALPHA).is_soundness_path(path)
     assert matching([path], policy.classifier.gate_paths) == [path]
 
 
@@ -149,7 +156,7 @@ def _named_gateway_clients(tmp_path: Path, tokens: dict[str, str | None], accoun
     token_file = tmp_path / "client.token"
     token_file.write_text(TOKEN, encoding="utf-8")
     out = tmp_path / "clients.json"
-    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(out)]
+    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(out), "--omp-config", str(CONFIG_PATH)]
     for name, token in tokens.items():
         named_file = tmp_path / f"{name}.token"
         if token is not None:
@@ -234,7 +241,15 @@ def test_gateway_clients_refuse_a_token_shared_between_clients(tmp_path: Path) -
 def test_gateway_clients_refuse_a_malformed_or_reserved_client_spec(tmp_path: Path, spec: str) -> None:
     token_file = tmp_path / "client.token"
     token_file.write_text(TOKEN, encoding="utf-8")
-    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(tmp_path / "clients.json")]
+    argv = [
+        "gateway-clients",
+        "--token-file",
+        str(token_file),
+        "--out",
+        str(tmp_path / "clients.json"),
+        "--omp-config",
+        str(CONFIG_PATH),
+    ]
     with pytest.raises(SystemExit, match="--client expects|duplicate gateway client"):
         cli.main([*argv, "--client", spec])
     assert not (tmp_path / "clients.json").exists()
@@ -243,7 +258,15 @@ def test_gateway_clients_refuse_a_malformed_or_reserved_client_spec(tmp_path: Pa
 def test_gateway_clients_refuse_a_repeated_client_name(tmp_path: Path) -> None:
     token_file = tmp_path / "client.token"
     token_file.write_text(TOKEN, encoding="utf-8")
-    argv = ["gateway-clients", "--token-file", str(token_file), "--out", str(tmp_path / "clients.json")]
+    argv = [
+        "gateway-clients",
+        "--token-file",
+        str(token_file),
+        "--out",
+        str(tmp_path / "clients.json"),
+        "--omp-config",
+        str(CONFIG_PATH),
+    ]
     with pytest.raises(SystemExit, match="duplicate gateway client name oracle-local"):
         cli.main([*argv, "--client", "oracle-local=a", "--client", "oracle-local=b"])
     assert not (tmp_path / "clients.json").exists()
@@ -252,25 +275,14 @@ def test_gateway_clients_refuse_a_repeated_client_name(tmp_path: Path) -> None:
 def _gate_machinery_files() -> list[str]:
     declared = [
         line.split("\t", 1)[1]
-        for line in (REPO_ROOT / ".github" / "soundness-paths.txt").read_text(encoding="utf-8").splitlines()
+        for line in (CONSUMER_ALPHA / ".github" / "soundness-paths.txt").read_text(encoding="utf-8").splitlines()
         if line.startswith("file\t") and "oracle" in line and not line.split("\t", 1)[1].startswith("tests/")
     ]
-    on_disk = [
-        path.relative_to(REPO_ROOT).as_posix()
-        for pattern in (
-            ".github/workflows/oracle-*.yml",
-            ".github/workflows/omp-pin-bump.yml",
-            ".github/workflows/omp-pin-watch.yml",
-            "_project/scripts/oracle_gate.py",
-        )
-        for path in REPO_ROOT.glob(pattern)
-    ]
-    return sorted({*declared, *on_disk})
+    return sorted(set(declared))
 
 
 @pytest.mark.parametrize("path", _gate_machinery_files())
 def test_every_gate_machinery_file_is_classified_as_gate(policy: Policy, path: str) -> None:
-    assert (REPO_ROOT / path).is_file()
     assert matching([path], policy.classifier.gate_paths) == [path]
 
 
@@ -278,4 +290,4 @@ def test_gate_machinery_discovery_includes_the_gate_workflow_and_entrypoint() ->
     found = _gate_machinery_files()
     assert ".github/workflows/oracle-gate.yml" in found
     assert "_project/scripts/oracle_gate.py" in found
-    assert ".github/workflows/omp-pin-bump.yml" in found
+    assert ".github/workflows/oracle-verdict.yml" in found

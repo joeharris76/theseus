@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers.brief import (
+from theseus_reviewer.brief import (
     FILE_LIST_DIFF_LINE,
     FULL_DIFF_LINE,
     FULL_DIFF_PLACEHOLDER,

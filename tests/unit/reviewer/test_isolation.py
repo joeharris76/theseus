@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from _project.scripts.oracle_reviewers import isolation
+from theseus_reviewer import isolation
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

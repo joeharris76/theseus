@@ -14,8 +14,10 @@ from typing import Any
 
 import pytest
 import yaml
+from tests.conftest import ALPHA_POLICY, CONSUMER_ALPHA
+from tests.conftest import FIXTURES as DATA_FIXTURES
 
-from _project.scripts.oracle_reviewers import (
+from theseus_reviewer import (
     candidate_canaries,
     candidate_chain,
     candidate_checks,
@@ -24,11 +26,13 @@ from _project.scripts.oracle_reviewers import (
     omp_candidate,
     omp_pin,
 )
-from _project.scripts.oracle_reviewers.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientRun
+from theseus_reviewer.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientRun
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-FIXTURES = omp_candidate.FIXTURE_DIR
+FIXTURES = DATA_FIXTURES / "oracle_reviewers" / "omp_candidate"
+OMP_CONFIG = CONSUMER_ALPHA / ".github" / "oracle-omp-config.yml"
+CONFIG_TEXT = OMP_CONFIG.read_text(encoding="utf-8")
 STATIC = json.loads((FIXTURES / "static_outputs.json").read_text(encoding="utf-8"))
 VERSION = "18.12.1"
 OTHER = "unlisted-host-platform"
@@ -79,7 +83,7 @@ def _static(
     tmp_path: Path, mutate: Callable[[dict[str, Any]], None] | None = None
 ) -> dict[str, candidate_checks.Check]:
     binary, home = _fake(tmp_path, mutate)
-    return {check.name: check for check in candidate_checks.static_checks(binary, home, VERSION)}
+    return {check.name: check for check in candidate_checks.static_checks(binary, home, VERSION, CONFIG_TEXT)}
 
 
 def _read(name: str) -> str:
@@ -264,7 +268,7 @@ def test_a_retry_policy_value_the_build_no_longer_accepts_is_red(tmp_path: Path)
 
 def test_a_renamed_chain_key_setting_in_the_reviewer_config_is_reported(tmp_path: Path) -> None:
     binary, home = _fake(tmp_path)
-    text = (candidate_checks.REVIEWER_CONFIG).read_text(encoding="utf-8").replace("fallbackChains", "fallbackChain")
+    text = CONFIG_TEXT.replace("fallbackChains", "fallbackChain")
     check = candidate_checks.check_reviewer_config_schema(binary, home, text)
     assert check.failures == ("the build has no setting retry.fallbackChain; it would be ignored",)
 
@@ -480,6 +484,8 @@ def test_a_platform_that_was_only_hash_checked_is_unverified_and_never_green(tmp
     binary, _ = _fake(tmp_path)
     report = omp_candidate.check_candidate(
         _pin_for_host(binary),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
         fetch=_fetcher(binary),
         chain_factory=lambda *_: _chain_from(_good_runs()),
     )
@@ -498,6 +504,8 @@ def test_a_run_limited_to_some_platforms_is_partial_and_never_green(tmp_path: Pa
     binary, _ = _fake(tmp_path)
     report = omp_candidate.check_candidate(
         _pin_for_host(binary),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
         targets=[omp_pin.current_platform()],
         fetch=_fetcher(binary),
         chain_factory=lambda *_: _chain_from(_good_runs()),
@@ -512,6 +520,8 @@ def test_a_platform_build_that_does_not_hash_to_the_pin_turns_the_report_red(tmp
     binary, _ = _fake(tmp_path)
     report = omp_candidate.check_candidate(
         _pin_for_host(binary, other="0" * 64),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
         fetch=_fetcher(binary),
         chain_factory=lambda *_: _chain_from(_good_runs()),
     )
@@ -529,7 +539,11 @@ def test_a_host_build_that_does_not_hash_to_the_pin_is_never_executed(tmp_path: 
         return _chain_from(_good_runs())
 
     report = omp_candidate.check_candidate(
-        _pin_for_host(binary, host="0" * 64), fetch=_fetcher(binary), chain_factory=factory
+        _pin_for_host(binary, host="0" * 64),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
+        fetch=_fetcher(binary),
+        chain_factory=factory,
     )
     assert not report.ok and started == []
     assert not (binary.parent / "executed").exists()
@@ -545,7 +559,9 @@ def test_a_candidate_failing_a_static_probe_never_starts_the_loopback_chain(tmp_
         started.append(True)
         return _chain_from(_good_runs())
 
-    report = omp_candidate.check_candidate(_pin_for_host(binary), fetch=_fetcher(binary), chain_factory=factory)
+    report = omp_candidate.check_candidate(
+        _pin_for_host(binary), omp_config=OMP_CONFIG, fixtures=FIXTURES, fetch=_fetcher(binary), chain_factory=factory
+    )
     assert not report.ok and started == []
     failed = _failed(list(report.checks))
     assert "version-format" in failed and "live-chain" in failed
@@ -559,14 +575,31 @@ def test_a_chain_that_cannot_start_is_a_red_check_not_a_crash(tmp_path: Path) ->
         raise RuntimeError("the candidate auth-gateway did not listen")
         yield
 
-    report = omp_candidate.check_candidate(_pin_for_host(binary), fetch=_fetcher(binary), chain_factory=broken)
+    report = omp_candidate.check_candidate(
+        _pin_for_host(binary), omp_config=OMP_CONFIG, fixtures=FIXTURES, fetch=_fetcher(binary), chain_factory=broken
+    )
     assert "the candidate auth-gateway did not listen" in _failed(list(report.checks))["live-chain"][0]
 
 
 def test_a_version_that_the_pin_does_not_name_is_refused_with_the_way_forward(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert omp_candidate.main(["check", "--version", "99.0.0"]) == omp_candidate.USAGE_ERROR
+    assert (
+        omp_candidate.main(
+            [
+                "check",
+                "--version",
+                "99.0.0",
+                "--pin",
+                str(ALPHA_POLICY),
+                "--omp-config",
+                str(OMP_CONFIG),
+                "--fixtures",
+                str(FIXTURES),
+            ]
+        )
+        == omp_candidate.USAGE_ERROR
+    )
     assert "pass --pin with a file whose omp section names the candidate" in capsys.readouterr().err
 
 
@@ -627,6 +660,8 @@ def test_a_run_with_unobserved_disabled_providers_is_partial_even_with_every_pla
     binary, _ = _fake(tmp_path)
     report = omp_candidate.check_candidate(
         _pin_for_host(binary, only_host=True),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
         fetch=_fetcher(binary),
         chain_factory=lambda *_: _chain_from(_good_runs()),
     )
@@ -711,7 +746,11 @@ def test_a_blind_canary_makes_the_report_partial_and_names_the_canary(tmp_path: 
     name = candidate_canaries.control_name(canary.group)
     runs[name] = _without(runs[name], canary)
     report = omp_candidate.check_candidate(
-        _pin_for_host(binary, only_host=True), fetch=_fetcher(binary), chain_factory=lambda *_: _chain_from(runs)
+        _pin_for_host(binary, only_host=True),
+        omp_config=OMP_CONFIG,
+        fixtures=FIXTURES,
+        fetch=_fetcher(binary),
+        chain_factory=lambda *_: _chain_from(runs),
     )
     assert report.passed and not report.ok
     assert report.unprobed_providers == ("omp-plugins", "agent-plugins", "claude-plugins", "cursor", "ssh-json")
@@ -798,7 +837,7 @@ def test_every_planted_canary_carries_its_token_or_its_marker(tmp_path: Path) ->
 
 
 def test_probe_scenarios_plant_only_their_own_canaries_and_leave_the_workspace_pristine(tmp_path: Path) -> None:
-    chain = candidate_chain.LoopbackChain(tmp_path / "omp", tmp_path / "chain")
+    chain = candidate_chain.LoopbackChain(tmp_path / "omp", tmp_path / "chain", CONFIG_TEXT)
     chain.workspace.mkdir(parents=True)
     (chain.workspace / "keep.py").write_text("x = 1\n", encoding="utf-8")
     before = candidate_chain._digest(chain.workspace)

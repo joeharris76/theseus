@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from _project.scripts.oracle_reviewers import protocol
+from theseus_reviewer import protocol
 
 from .harness import CHECKER, GATEWAY_TOKEN, HELD_SECRET, Harness
 

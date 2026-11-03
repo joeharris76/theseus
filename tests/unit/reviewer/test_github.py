@@ -11,14 +11,15 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import edits, github
-from _project.scripts.oracle_reviewers.retry import State
+from theseus_reviewer import edits, github
+from theseus_reviewer.retry import State
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 REPO = "BenchBox-dev/BenchBox"
 SHA = "d" * 40
 PR = 7
+BASE = "develop"
 
 
 def _run(**over: Any) -> dict[str, Any]:
@@ -33,11 +34,11 @@ def _run(**over: Any) -> dict[str, Any]:
     return run
 
 
-def _always(repo: str, sha: str) -> bool:
+def _always(repo: str, sha: str, base: str) -> bool:
     return True
 
 
-def _never(repo: str, sha: str) -> bool:
+def _never(repo: str, sha: str, base: str) -> bool:
     return False
 
 
@@ -56,29 +57,29 @@ def _target_run(base_ref: str = "develop", **over: Any) -> dict[str, Any]:
 
 
 def test_trusted_run_accepts_this_workflow_from_develop() -> None:
-    assert github.trusted_run(_run(), REPO, PR, _always)
-    assert github.trusted_run(_target_run(), REPO, PR, _never, [_head_pull()])
+    assert github.trusted_run(_run(), REPO, PR, BASE, _always)
+    assert github.trusted_run(_target_run(), REPO, PR, BASE, _never, [_head_pull()])
 
 
 def test_trusted_run_accepts_a_pull_request_target_run_whose_head_is_the_pr_head() -> None:
-    assert github.trusted_run(_target_run(), REPO, PR, lambda repo, sha: False, [_head_pull()])
+    assert github.trusted_run(_target_run(), REPO, PR, BASE, lambda repo, sha, base: False, [_head_pull()])
 
 
 @pytest.mark.parametrize("event", ["issue_comment", "schedule", "workflow_dispatch"])
 def test_trusted_run_checks_develop_ancestry_for_other_events(event: str) -> None:
-    assert github.trusted_run(_run(event=event), REPO, PR, _always)
-    assert not github.trusted_run(_run(event=event), REPO, PR, _never)
+    assert github.trusted_run(_run(event=event), REPO, PR, BASE, _always)
+    assert not github.trusted_run(_run(event=event), REPO, PR, BASE, _never)
 
 
 @pytest.mark.parametrize("pull_requests", [None, [], [_pull("release/1.0")], [_pull("main"), _pull("feature")]])
 def test_trusted_run_rejects_a_pull_request_target_run_not_based_on_develop(pull_requests: Any) -> None:
     run = _run(event="pull_request_target", pull_requests=pull_requests)
-    assert not github.trusted_run(run, REPO, PR, _always)
+    assert not github.trusted_run(run, REPO, PR, BASE, _always)
 
 
 def test_trusted_run_accepts_a_pull_request_target_run_for_several_develop_pulls() -> None:
     run = _run(event="pull_request_target", pull_requests=[_pull("develop", 3), _pull("develop")])
-    assert github.trusted_run(run, REPO, PR, _never, [_head_pull(3), _head_pull()])
+    assert github.trusted_run(run, REPO, PR, BASE, _never, [_head_pull(3), _head_pull()])
 
 
 @pytest.mark.parametrize(
@@ -88,19 +89,19 @@ def test_trusted_run_accepts_a_pull_request_target_run_for_several_develop_pulls
 )
 def test_trusted_run_rejects_a_pull_request_target_run_that_also_targets_another_base(pull_requests: Any) -> None:
     run = _run(event="pull_request_target", pull_requests=pull_requests)
-    assert not github.trusted_run(run, REPO, PR, _always)
+    assert not github.trusted_run(run, REPO, PR, BASE, _always)
 
 
 def test_trusted_run_rejects_a_pull_request_target_run_for_another_pull_request() -> None:
-    assert not github.trusted_run(_target_run(), REPO, PR + 1, _always)
+    assert not github.trusted_run(_target_run(), REPO, PR + 1, BASE, _always)
     run = _run(event="pull_request_target", pull_requests=[_pull("develop", 3)])
-    assert not github.trusted_run(run, REPO, PR, _always)
+    assert not github.trusted_run(run, REPO, PR, BASE, _always)
 
 
 def test_trusted_run_rejects_a_pull_request_target_run_from_another_workflow() -> None:
-    assert not github.trusted_run(_target_run(path=".github/workflows/other.yml"), REPO, PR, _always)
-    assert not github.trusted_run(_target_run(head_sha="not-a-sha"), REPO, PR, _always)
-    assert not github.trusted_run(_target_run(repository={"full_name": "someone/BenchBox"}), REPO, PR, _always)
+    assert not github.trusted_run(_target_run(path=".github/workflows/other.yml"), REPO, PR, BASE, _always)
+    assert not github.trusted_run(_target_run(head_sha="not-a-sha"), REPO, PR, BASE, _always)
+    assert not github.trusted_run(_target_run(repository={"full_name": "someone/BenchBox"}), REPO, PR, BASE, _always)
 
 
 @pytest.mark.parametrize(
@@ -114,11 +115,11 @@ def test_trusted_run_rejects_a_pull_request_target_run_from_another_workflow() -
     ],
 )
 def test_trusted_run_rejects_other_sources(run: dict[str, Any]) -> None:
-    assert not github.trusted_run(run, REPO, PR, _always)
+    assert not github.trusted_run(run, REPO, PR, BASE, _always)
 
 
 def test_trusted_run_rejects_workflow_code_that_is_not_on_develop() -> None:
-    assert not github.trusted_run(_run(), REPO, PR, _never)
+    assert not github.trusted_run(_run(), REPO, PR, BASE, _never)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +134,7 @@ def test_on_develop_reads_the_compare_status(monkeypatch: pytest.MonkeyPatch, st
         return {"status": status}
 
     monkeypatch.setattr(github, "get_json", get_json)
-    assert github.on_develop(REPO, SHA) is expected
+    assert github.on_base(REPO, SHA, BASE) is expected
     assert paths == [f"repos/{REPO}/compare/{SHA}...develop"]
 
 
@@ -167,7 +168,7 @@ def test_latest_state_skips_untrusted_runs(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(github, "get_json", get_json)
     monkeypatch.setattr(github, "get_paginated", lambda path: [])
     monkeypatch.setattr(github.subprocess, "run", fake_run)
-    assert github.latest_state(REPO, 7) == state
+    assert github.latest_state(REPO, 7, BASE) == state
     assert downloaded == ["1"]
 
 
@@ -185,7 +186,7 @@ def test_latest_state_skips_a_pull_request_target_run_not_based_on_develop(monke
     monkeypatch.setattr(github, "get_json", get_json)
     monkeypatch.setattr(github, "get_paginated", lambda path: [])
     monkeypatch.setattr(github.subprocess, "run", no_download)
-    assert github.latest_state(REPO, 7) is None
+    assert github.latest_state(REPO, 7, BASE) is None
 
 
 BEFORE_RUN = datetime(2026, 10, 7, 23, 5, 38, tzinfo=UTC)
@@ -200,45 +201,45 @@ def _head_pull(
 
 
 def test_trusted_run_needs_the_head_pulls_for_a_pull_request_target_run() -> None:
-    assert github.trusted_run(_target_run(), REPO, PR, _never, [_head_pull()])
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, None)
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, [])
+    assert github.trusted_run(_target_run(), REPO, PR, BASE, _never, [_head_pull()])
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, None)
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, [])
 
 
 def test_trusted_run_rejects_a_sibling_pull_request_into_another_base() -> None:
     sibling = _head_pull(9, BEFORE_RUN, "release/1.0")
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(), sibling])
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(), sibling])
 
 
 def test_trusted_run_rejects_a_sibling_that_was_closed_after_the_run() -> None:
     sibling = _head_pull(9, BEFORE_RUN, "evil")
     run = _run(event="pull_request_target", pull_requests=[_pull("develop")])
-    assert not github.trusted_run(run, REPO, PR, _always, [_head_pull(), sibling])
+    assert not github.trusted_run(run, REPO, PR, BASE, _always, [_head_pull(), sibling])
 
 
 def test_trusted_run_ignores_a_pull_request_opened_after_the_run() -> None:
     later = _head_pull(9, AFTER_RUN, "main")
-    assert github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(), later])
+    assert github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(), later])
 
 
 def test_trusted_run_needs_this_pull_request_to_predate_the_run() -> None:
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(created_at=AFTER_RUN)])
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(number=9)])
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(created_at=AFTER_RUN)])
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(number=9)])
 
 
 def test_trusted_run_rejects_a_base_change_after_the_run_started() -> None:
-    assert not github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(base_changed_at=AFTER_RUN)])
-    assert github.trusted_run(_target_run(), REPO, PR, _always, [_head_pull(base_changed_at=BEFORE_PULL)])
+    assert not github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(base_changed_at=AFTER_RUN)])
+    assert github.trusted_run(_target_run(), REPO, PR, BASE, _always, [_head_pull(base_changed_at=BEFORE_PULL)])
 
 
 @pytest.mark.parametrize("created_at", [None, "", "not a time"])
 def test_trusted_run_rejects_an_unreadable_start_time(created_at: Any) -> None:
-    assert not github.trusted_run(_target_run(created_at=created_at), REPO, PR, _always, [_head_pull()])
+    assert not github.trusted_run(_target_run(created_at=created_at), REPO, PR, BASE, _always, [_head_pull()])
 
 
 def test_a_retarget_does_not_affect_events_that_run_develop_code() -> None:
     run = _run(created_at="2026-10-07T20:00:00Z")
-    assert github.trusted_run(run, REPO, PR, _always, [_head_pull(base_changed_at=AFTER_RUN)])
+    assert github.trusted_run(run, REPO, PR, BASE, _always, [_head_pull(base_changed_at=AFTER_RUN)])
 
 
 def _pulls_api(pulls: list[dict[str, Any]], timelines: dict[int, list[dict[str, Any]]]) -> Any:
@@ -343,7 +344,7 @@ def test_latest_state_skips_a_run_with_a_sibling_pull_request_into_another_base(
     api = _pulls_api([_api_pull(7), _api_pull(9, base="evil")], {7: [], 9: []})
     monkeypatch.setattr(github, "get_paginated", api)
     monkeypatch.setattr(github.subprocess, "run", _no_download)
-    assert github.latest_state(REPO, 7) is None
+    assert github.latest_state(REPO, 7, BASE) is None
 
 
 def test_latest_state_fails_closed_when_the_pull_requests_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -353,7 +354,7 @@ def test_latest_state_fails_closed_when_the_pull_requests_cannot_be_read(monkeyp
     _serve(monkeypatch, _full_run())
     monkeypatch.setattr(github, "get_paginated", broken)
     monkeypatch.setattr(github.subprocess, "run", _no_download)
-    assert github.latest_state(REPO, 7) is None
+    assert github.latest_state(REPO, 7, BASE) is None
 
 
 def test_latest_state_downloads_a_run_whose_head_pull_requests_all_target_develop(
@@ -369,12 +370,12 @@ def test_latest_state_downloads_a_run_whose_head_pull_requests_all_target_develo
     _serve(monkeypatch, _full_run())
     monkeypatch.setattr(github, "get_paginated", _pulls_api([_api_pull(7)], {7: []}))
     monkeypatch.setattr(github.subprocess, "run", fake_run)
-    assert github.latest_state(REPO, 7) == state
+    assert github.latest_state(REPO, 7, BASE) == state
 
 
 def test_latest_state_without_artifacts_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(github, "get_json", lambda path: {"artifacts": []})
-    assert github.latest_state(REPO, 7) is None
+    assert github.latest_state(REPO, 7, BASE) is None
 
 
 def test_review_threads_pages_and_keeps_the_first_comment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -632,7 +633,7 @@ def _artifact(run_id: int) -> dict[str, Any]:
 def test_latest_state_downloads_matching_verdict_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
     name = github.state_artifact_name(7, github.STATE_ARTIFACT_PREFIX)
     downloaded = _state_sources(monkeypatch, {name: [_artifact(1)]}, {"1": _run(path=github.WORKFLOW_PATH)})
-    state = github.latest_state(REPO, 7)
+    state = github.latest_state(REPO, 7, BASE)
     assert state is not None and state.strikes == 1
     assert downloaded == [name]
 
@@ -640,7 +641,7 @@ def test_latest_state_downloads_matching_verdict_artifact(monkeypatch: pytest.Mo
 def test_latest_state_falls_back_to_the_attempt_state_when_publishing_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     attempt = github.attempt_state_artifact_name(7)
     downloaded = _state_sources(monkeypatch, {attempt: [_artifact(1)]}, {"1": _run(path=github.WORKFLOW_PATH)})
-    assert github.latest_state(REPO, 7) is not None
+    assert github.latest_state(REPO, 7, BASE) is not None
     assert downloaded == [attempt]
 
 
@@ -652,14 +653,14 @@ def test_latest_state_prefers_the_published_state_over_a_same_second_attempt(mon
         {attempt: [_artifact(1)], published: [_artifact(1)]},
         {"1": _run(path=github.WORKFLOW_PATH)},
     )
-    assert github.latest_state(REPO, 7) is not None
+    assert github.latest_state(REPO, 7, BASE) is not None
     assert downloaded == [published]
 
 
 def test_latest_state_ignores_artifacts_from_another_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
     name = github.state_artifact_name(7, github.STATE_ARTIFACT_PREFIX)
     downloaded = _state_sources(monkeypatch, {name: [_artifact(1)]}, {"1": _run(path=".github/workflows/other.yml")})
-    assert github.latest_state(REPO, 7) is None
+    assert github.latest_state(REPO, 7, BASE) is None
     assert downloaded == []
 
 
@@ -969,7 +970,7 @@ def test_dispatch_gate_runs_the_gate_workflow_from_develop_with_the_given_token(
 ) -> None:
     calls = _recording_run(monkeypatch)
 
-    github.dispatch_gate(REPO, 7, SHA, "job-token")
+    github.dispatch_gate(REPO, 7, SHA, "job-token", BASE)
 
     argv, env = calls[0]
     assert argv == [
@@ -992,58 +993,60 @@ def test_dispatch_gate_runs_the_gate_workflow_from_develop_with_the_given_token(
 def test_dispatch_gate_and_base_read_raise_on_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     _recording_run(monkeypatch, returncode=1)
     with pytest.raises(github.GitHubError, match="could not dispatch the gate for #7"):
-        github.dispatch_gate(REPO, 7, SHA, "job-token")
+        github.dispatch_gate(REPO, 7, SHA, "job-token", BASE)
     with pytest.raises(github.GitHubError, match="could not read the base of #7"):
         github.pull_base_ref(REPO, 7, "app-token")
 
 
-def _fake_gate_module(monkeypatch: pytest.MonkeyPatch, code: int) -> list[Any]:
-    import types
-
-    requests: list[Any] = []
-    module = types.ModuleType("oracle_gate")
-    module.ERROR = 2
-    module.post_gate = lambda request, token: requests.append((request, token)) or code
-    monkeypatch.setitem(sys.modules, "oracle_gate", module)
-    return requests
-
-
-@pytest.mark.parametrize("code", [0, 1])
-def test_post_gate_evaluates_and_posts_the_head_with_the_given_token(
-    monkeypatch: pytest.MonkeyPatch, code: int
-) -> None:
-    requests = _fake_gate_module(monkeypatch, code)
-
-    github.post_gate(REPO, 7, SHA, "app-token")
-
-    request, token = requests[0]
-    assert token == "app-token"
-    assert (request.repo, request.pr, request.head_sha) == (REPO, 7, SHA)
-    assert request.no_post is False and request.pending_first is False
-
-
-def test_post_gate_runs_the_gate_code_and_policy_from_the_configured_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    scripts = tmp_path / "_project" / "scripts"
-    scripts.mkdir(parents=True)
-    (scripts / "oracle_gate.py").write_text(
-        "import os\nERROR = 2\n\n\ndef post_gate(request, token):\n    return 0 if os.getcwd() == os.environ['EXPECTED'] else 2\n",
+def _fake_gate_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, code: int) -> Path:
+    record = tmp_path / "gate-call.json"
+    stub = tmp_path / "fake_gate.py"
+    stub.write_text(
+        "import json, os, sys\n"
+        f"open({str(record)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], 'token': os.environ.get('GITHUB_TOKEN')}}))\n"
+        f"print('gate output')\nsys.exit({code})\n",
         encoding="utf-8",
     )
-    monkeypatch.delitem(sys.modules, "oracle_gate", raising=False)
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.setenv(github.GATE_ROOT_ENV, str(tmp_path))
-    monkeypatch.setenv("EXPECTED", str(tmp_path.resolve()))
-    github.post_gate(REPO, 7, SHA, "app-token")
-    assert Path(sys.modules["oracle_gate"].__file__).resolve() == (scripts / "oracle_gate.py").resolve()
-    monkeypatch.delitem(sys.modules, "oracle_gate", raising=False)
+    monkeypatch.setenv(github.GATE_COMMAND_ENV, f"{sys.executable} {stub}")
+    return record
 
 
-def test_post_gate_raises_when_the_gate_could_not_be_posted(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_gate_module(monkeypatch, 2)
-    with pytest.raises(github.GitHubError, match="could not post oracle-gate for #7"):
-        github.post_gate(REPO, 7, SHA, "app-token")
+@pytest.mark.parametrize("code", [0, 3])
+def test_post_gate_runs_the_gate_subprocess_with_the_head_policy_and_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, code: int
+) -> None:
+    record = _fake_gate_command(monkeypatch, tmp_path, code)
+    policy = tmp_path / "policy.yml"
+
+    github.post_gate(REPO, 7, SHA, "app-token", policy)
+
+    call = json.loads(record.read_text(encoding="utf-8"))
+    assert call["token"] == "app-token"
+    assert call["argv"] == ["gate", "--repo", REPO, "--pr", "7", "--head-sha", SHA, "--policy", str(policy)]
+
+
+def test_post_gate_defaults_to_the_installed_package_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(github.GATE_COMMAND_ENV, raising=False)
+    assert github.gate_command() == [sys.executable, "-m", "theseus_reviewer"]
+    monkeypatch.setenv(github.GATE_COMMAND_ENV, "uv run theseus")
+    assert github.gate_command() == ["uv", "run", "theseus"]
+
+
+@pytest.mark.parametrize("code", [1, 2])
+def test_post_gate_raises_when_the_gate_could_not_be_posted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, code: int
+) -> None:
+    _fake_gate_command(monkeypatch, tmp_path, code)
+    with pytest.raises(
+        github.GitHubError, match=f"could not post oracle-gate for #7 at {SHA}: exit {code}: gate output"
+    ):
+        github.post_gate(REPO, 7, SHA, "app-token", tmp_path / "policy.yml")
+
+
+def test_post_gate_raises_when_the_gate_command_cannot_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(github.GATE_COMMAND_ENV, str(tmp_path / "missing-gate"))
+    with pytest.raises(github.GitHubError, match="could not run the gate for #7"):
+        github.post_gate(REPO, 7, SHA, "app-token", tmp_path / "policy.yml")
 
 
 def _page(runs: int, total: int | None) -> dict[str, Any]:
@@ -1112,7 +1115,7 @@ def test_dispatch_passes_the_pull_request_and_its_head(
         "run",
         lambda argv, **kwargs: (calls.append(argv), subprocess.CompletedProcess(argv, 0, "", ""))[1],
     )
-    github.dispatch(REPO, "oracle-verdict.yml", 7, SHA, reason)
+    github.dispatch(REPO, "oracle-verdict.yml", 7, SHA, BASE, reason)
     assert calls == [
         [
             "gh",

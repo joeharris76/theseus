@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import adjudication, dedup, findings, protocol
-from _project.scripts.oracle_reviewers.verdict import PriorDefect, validate
+from theseus_reviewer import adjudication, dedup, findings, protocol
+from theseus_reviewer.verdict import PriorDefect, validate
 
 from .test_attempts import _finding, _v
 
@@ -386,15 +386,12 @@ def test_the_adjudication_option_uses_the_ci_grammar_and_cap() -> None:
 
 
 def test_the_override_line_is_gone_from_code_and_docs() -> None:
-    root = Path(__file__).resolve().parents[4]
+    root = Path(__file__).resolve().parents[3]
     phrase = "Local oracle " + "override"
     sources = [
-        *(root / "_project" / "scripts" / "oracle_reviewers").rglob("*.py"),
+        *(root / "src" / "theseus_reviewer").rglob("*.py"),
         *(root / ("do" + "cs")).rglob("*.md"),
-        root / "CONTRIBUTING.md",
-        root / "Makefile",
-        root / "scripts" / "oracle_local_review.py",
-        root / "scripts" / "pr_open_rest.py",
+        *root.glob("*.md"),
     ]
 
     assert [str(path) for path in sources if phrase in path.read_text(encoding="utf-8")] == []
@@ -438,7 +435,7 @@ def test_the_claimed_exemption_is_not_written_into_the_protocol_record() -> None
 
 
 def test_a_finding_maintained_in_every_escalation_round_or_by_the_owner_is_not_replayed_as_a_dispute() -> None:
-    from _project.scripts.oracle_reviewers import findings, protocol
+    from theseus_reviewer import findings, protocol
 
     base = {"severity": "High", "file": "a.py", "line": 1, "end_line": None, "title": "t", "status": findings.OPEN}
     escalated = {**base, "id": "D1", "rebuttals": ["Dispute: no"], "rounds": protocol.ESCALATION_ROUNDS}
@@ -457,7 +454,7 @@ def test_a_finding_maintained_in_every_escalation_round_or_by_the_owner_is_not_r
 
 
 def test_a_claimed_first_round_prompt_carries_one_scope_and_limit_rule() -> None:
-    from _project.scripts.oracle_reviewers import render
+    from theseus_reviewer import render
 
     prior = [{"id": "D1"}]
     plain = render.select_prior_rule(prior, None, 10)

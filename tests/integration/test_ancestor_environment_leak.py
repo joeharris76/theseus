@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from _project.scripts.oracle_reviewers import omp_pin
+from theseus_reviewer import omp_pin
 
 from .fake_github import APP_TOKEN, JOB_TOKEN
 from .harness import (
@@ -52,7 +52,7 @@ PHASE_SECRETS = {
         "TS_OAUTH_CI_SECRET",
         "JOB_TOKEN",
     },
-    "publish": {"GH_TOKEN", "JOB_TOKEN", "ORACLE_GATE_ROOT"},
+    "publish": {"GH_TOKEN", "JOB_TOKEN"},
     "dispatch": {"GH_TOKEN", "JOB_TOKEN"},
 }
 

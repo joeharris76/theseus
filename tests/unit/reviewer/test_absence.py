@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from _project.scripts.oracle_reviewers import absence
-from _project.scripts.oracle_reviewers.absence import classify, parse_reset
+from theseus_reviewer import absence
+from theseus_reviewer.absence import classify, parse_reset
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

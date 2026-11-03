@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import dedup, findings
+from theseus_reviewer import dedup, findings
 
 from .harness import CHECKER, Harness
 

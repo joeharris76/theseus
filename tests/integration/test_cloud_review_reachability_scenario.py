@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -10,7 +9,7 @@ from typing import Any
 import pytest
 
 from .fake_github import OWNER_TOKEN
-from .harness import CHECKER, GATEWAY_TOKEN, JEV_KEY, POLICY, REPO_ROOT, Harness, Step, git
+from .harness import CHECKER, GATEWAY_TOKEN, JEV_KEY, PACKAGE, POLICY, SLUG, Harness, Step, git
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
@@ -48,12 +47,11 @@ def _cloud_review(harness: Harness, branch: str, proxy: str | None) -> Step:
     git(checkout, "branch", "--quiet", "-f", "develop", "origin/develop")
     if proxy:
         git_dir = Path(git(checkout, "rev-parse", "--absolute-git-dir").strip())
-        (git_dir / "benchbox-cloud-gateway.status").write_text(
+        (git_dir / "theseus-cloud-gateway.status").write_text(
             f"gateway=reachable\ngateway_detail=ok\ngateway_proxy={proxy}\nomp=installed\n", encoding="utf-8"
         )
     env = {
         **harness.base_env(),
-        "PYTHONPATH": str(REPO_ROOT),
         "ORACLE_GATEWAY_URL": UNROUTABLE_GATEWAY,
         "ORACLE_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
         "GH_TOKEN": OWNER_TOKEN,
@@ -61,7 +59,7 @@ def _cloud_review(harness: Harness, branch: str, proxy: str | None) -> Step:
         "TYPESAFE_BASE_URL": harness.jev.url,
         "TYPESAFE_API_KEY": JEV_KEY,
     }
-    argv = [sys.executable, "-m", "_project.scripts.oracle_reviewers.cli", "local-review", "--policy", POLICY]
+    argv = [*PACKAGE, "local-review", "--policy", POLICY, "--repo", SLUG]
     return harness.run("cloud-review", [*argv, "--base-ref", "develop"], env, cwd=checkout)
 
 
@@ -93,5 +91,5 @@ def test_a_cloud_review_without_the_recorded_proxy_refuses_and_says_how_to_start
     review = _cloud_review(harness, "feat/cloud", None)
 
     assert review.code == 2, review.stdout + review.stderr
-    assert "unreachable" in review.stderr and "make cloud-gateway" in review.stderr
+    assert "unreachable" in review.stderr and "start the cloud gateway" in review.stderr
     assert harness.omp_calls() == 0

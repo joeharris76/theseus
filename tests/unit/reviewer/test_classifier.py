@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from _project.scripts.oracle_reviewers.classifier import ChangedFile, SoundnessScope, matching, soundness_scope
-from _project.scripts.oracle_reviewers.policy import ClassifierRules, Policy
+from conftest import CONSUMER_ALPHA
+from theseus_reviewer.classifier import ChangedFile, SoundnessScope, matching, soundness_scope
+from theseus_reviewer.matchers import load_matchers
+from theseus_reviewer.policy import ClassifierRules, Policy
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -15,12 +19,16 @@ RULES = ClassifierRules(
 )
 
 
+def _matchers(pred: bool) -> SimpleNamespace:
+    return SimpleNamespace(is_soundness_path=lambda path: pred, is_inert_path=lambda path: False)
+
+
 def _file(path: str, previous: str | None = None) -> ChangedFile:
     return ChangedFile(path, previous, 5, 0)
 
 
 def _scope(*files: ChangedFile, pred: bool = True) -> SoundnessScope:
-    return soundness_scope(list(files), RULES, lambda path: pred)
+    return soundness_scope(list(files), RULES, _matchers(pred))
 
 
 def test_docs_only_and_markdown_only_changes_are_out_of_scope() -> None:
@@ -33,7 +41,7 @@ def test_docs_only_and_markdown_only_changes_are_out_of_scope() -> None:
 
 
 def test_empty_file_list_is_out_of_scope() -> None:
-    result = soundness_scope([], RULES, lambda path: True)
+    result = soundness_scope([], RULES, _matchers(True))
     assert result.soundness is False
     assert result.reasons == ("only exempt paths changed",)
     assert result.paths == ()
@@ -66,7 +74,9 @@ def test_gate_template_matching_the_markdown_exemption_still_needs_review() -> N
 
 def test_soundness_manifest_beats_the_markdown_exemption() -> None:
     path = ".github/PULL_REQUEST_TEMPLATE.md"
-    result = soundness_scope([_file(path)], RULES, lambda candidate: candidate == path)
+    result = soundness_scope(
+        [_file(path)], RULES, SimpleNamespace(is_soundness_path=lambda c: c == path, is_inert_path=lambda c: False)
+    )
     assert result.soundness is True
     assert result.gate_paths == ()
     assert result.reasons == (
@@ -76,7 +86,11 @@ def test_soundness_manifest_beats_the_markdown_exemption() -> None:
 
 
 def test_exempt_docs_stay_out_of_scope() -> None:
-    result = soundness_scope([_file("docs/foo.md")], RULES, lambda candidate: candidate == "other")
+    result = soundness_scope(
+        [_file("docs/foo.md")],
+        RULES,
+        SimpleNamespace(is_soundness_path=lambda c: c == "other", is_inert_path=lambda c: False),
+    )
     assert result.soundness is False
     assert result.reasons == ("only exempt paths changed",)
 
@@ -140,11 +154,10 @@ def test_rename_within_exempt_paths_stays_out_of_scope() -> None:
 
 
 def test_live_policy_data_answer_uses_the_fallback_reason(policy: Policy) -> None:
-    from _project.scripts.soundness_paths import is_soundness_path
-
+    matchers = load_matchers(policy.consumer, CONSUMER_ALPHA)
     path = "_sources/tpc-h/dbgen/answers/q1.out"
-    assert is_soundness_path(path) is True
-    result = soundness_scope([_file(path)], policy.classifier, is_soundness_path)
+    assert matchers.is_soundness_path(path) is True
+    result = soundness_scope([_file(path)], policy.classifier, matchers)
     assert result.soundness is True
     assert result.gate_paths == ()
     assert result.logic_paths == ()

@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 import yaml
 
-from _project.scripts.oracle_reviewers.policy import Reviewer, load_policy
-from _project.scripts.oracle_reviewers.selection import (
+from theseus_reviewer.policy import Reviewer, load_policy
+from theseus_reviewer.selection import (
     ABSENT,
     FAIL,
     PASS,

@@ -147,3 +147,11 @@ evidence:
     - "CHANGELOG*.md"
     - "**/CHANGELOG*.md"
     - "docs/*.md"
+consumer:
+  gated_base: develop
+  attesters:
+    - joeharris76
+  soundness_manifest: .github/soundness-paths.txt
+  inert_manifest: .github/inert-paths.txt
+  omp_config: .github/oracle-omp-config.yml
+  omp_fixture_prefix: tests/fixtures/oracle_reviewers/omp_candidate

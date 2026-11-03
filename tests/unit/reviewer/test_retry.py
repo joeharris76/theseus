@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from _project.scripts.oracle_reviewers.policy import Policy
-from _project.scripts.oracle_reviewers.retry import (
+from theseus_reviewer.policy import Policy
+from theseus_reviewer.retry import (
     ALL_ABSENT,
     INTEGRITY,
     OMP_INSTALL,
@@ -18,7 +18,7 @@ from _project.scripts.oracle_reviewers.retry import (
     recent_retries,
     reset_applies,
 )
-from _project.scripts.oracle_reviewers.selection import QUOTA_BACKOFF, PoolBlock, effective_until
+from theseus_reviewer.selection import QUOTA_BACKOFF, PoolBlock, effective_until
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

@@ -12,16 +12,16 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, github, protocol, render, sweep
-from _project.scripts.oracle_reviewers.classify import Classification
-from _project.scripts.oracle_reviewers.dedup import fingerprint
-from _project.scripts.oracle_reviewers.render import dispute_listing
-from _project.scripts.oracle_reviewers.retry import State
-from _project.scripts.oracle_reviewers.selection import PoolBlock
+from theseus_reviewer import cli, github, protocol, sweep
+from theseus_reviewer.classify import Classification
+from theseus_reviewer.dedup import fingerprint
+from theseus_reviewer.render import dispute_listing
+from theseus_reviewer.retry import State
+from theseus_reviewer.selection import PoolBlock
 
 from .conftest import POLICY_PATH
 
-pytestmark = [pytest.mark.unit, pytest.mark.fast]
+pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 REPO = "BenchBox-dev/BenchBox"
 HEAD = "a" * 40
@@ -143,7 +143,7 @@ class FakeGitHub:
         self.timeout_lookups.append(run_id)
         return run_id in self.timed_out
 
-    def _latest_state(self, repo: str, pr: int) -> State | None:
+    def _latest_state(self, repo: str, pr: int, base: str) -> State | None:
         if self.state_error is not None:
             raise self.state_error
         return self.state
@@ -162,7 +162,7 @@ class FakeGitHub:
             raise self.fallback_error
         return frozenset(self.busy_fallback)
 
-    def _dispatch(self, repo: str, workflow: str, pr: int, head: str, reason: str | None = None) -> None:
+    def _dispatch(self, repo: str, workflow: str, pr: int, head: str, base: str, reason: str | None = None) -> None:
         if pr in self.failing_prs:
             raise github.GitHubError(f"could not dispatch {workflow} for #{pr}")
         self.dispatched.append(pr)
@@ -774,7 +774,7 @@ def test_a_state_that_cannot_be_read_isolates_to_its_pull_request(
     fake._paginated = lambda path: pulls if path.startswith(f"repos/{REPO}/pulls?") else []
     fake.install(monkeypatch)
 
-    def latest(repo: str, pr: int) -> State | None:
+    def latest(repo: str, pr: int, base: str) -> State | None:
         if pr == 21:
             raise github.GitHubError("artifact unreadable")
         return None
@@ -1109,7 +1109,7 @@ def test_sweep_degrades_to_due_only_when_the_runs_listing_fails(
     fake._paginated = lambda path: pulls if path.startswith(f"repos/{REPO}/pulls?") else []
     fake.install(monkeypatch)
 
-    def latest(repo: str, pr: int) -> State | None:
+    def latest(repo: str, pr: int, base: str) -> State | None:
         if pr == 31:
             return State(31, HEAD, "pending", datetime.now(UTC) - timedelta(hours=2), pending_cause="all-absent")
         return None

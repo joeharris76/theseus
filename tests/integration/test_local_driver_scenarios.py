@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from _project.scripts.oracle_reviewers import cli, local, report
+from theseus_reviewer import cli, local, report
 
 from .fake_github import OWNER_TOKEN
 from .harness import CHECKER, GATEWAY_TOKEN, JEV_KEY, Harness
@@ -273,7 +273,9 @@ def test_the_ci_and_local_adapters_plan_judge_and_map_the_same_patch_identically
 
     local_plan, local_final = _planned_and_judged(harness, "feat/local", monkeypatch)
 
-    keep = lambda plan: {key: value for key, value in plan.items() if key not in ADAPTER_FIELDS}
+    def keep(plan: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in plan.items() if key not in ADAPTER_FIELDS}
+
     assert keep(local_plan) == keep(ci_plan)
     assert local_final.judgement == ci_final.judgement
     assert local_final.judgement is not None

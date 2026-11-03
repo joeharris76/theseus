@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 import pytest
 
-from _project.scripts.oracle_reviewers.classify import (
+from theseus_reviewer.classify import (
     Classification,
     _choice,
     _score_to_int,
@@ -13,7 +13,7 @@ from _project.scripts.oracle_reviewers.classify import (
     file_state,
     pr_state,
 )
-from _project.scripts.oracle_reviewers.jev import JevSession
+from theseus_reviewer.jev import JevSession
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
