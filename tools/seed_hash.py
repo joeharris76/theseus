@@ -25,7 +25,9 @@ def _git_show(repo: Path, revision: str, path: str) -> bytes:
 
 def digest(entries: list[dict], read: Callable[[dict], bytes], kinds: frozenset[str]) -> str:
     lines = sorted(
-        f"{entry['theseus']}\t{hashlib.sha256(read(entry)).hexdigest()}\n" for entry in entries if entry["kind"] in kinds
+        f"{entry['theseus']}\t{hashlib.sha256(read(entry)).hexdigest()}\n"
+        for entry in entries
+        if entry["kind"] in kinds
     )
     return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
 
