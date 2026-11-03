@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import csv
 import email.parser
 import hashlib
@@ -20,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -632,11 +633,15 @@ def build_plan(lock: Lock, cache: Path, fetch: Fetch, *, verify_all: bool = Fals
     ]
     infos = [main_info]
     queue = [main_info]
-    resolved: set[str] = {normalize(lock.package)}
+    resolved: dict[str, str] = {normalize(lock.package): lock.version}
     while queue:
         current = queue.pop(0)
         for name, specifier in sorted(required_distributions(current, environment).items()):
             if name in resolved:
+                _require(
+                    not specifier or satisfies(resolved[name], specifier),
+                    f"locked {name} {resolved[name]} does not satisfy {current.name}'s requirement {specifier!r}",
+                )
                 continue
             dep = locked.get(name)
             _require(dep is not None, f"{current.name} requires {name}, which the lock has no hash for")
@@ -654,7 +659,7 @@ def build_plan(lock: Lock, cache: Path, fetch: Fetch, *, verify_all: bool = Fals
                     satisfies(".".join(str(p) for p in sys.version_info[:3]), info.requires_python),
                     f"locked {dep.name} requires Python {info.requires_python}",
                 )
-            resolved.add(name)
+            resolved[name] = dep.version
             wheels.append((dep.name, dep.version, dep.sha256, dep.urls, raw))
             infos.append(info)
             queue.append(info)
@@ -731,7 +736,6 @@ def manifest_text(key: str, lock: Lock, interpreter: Mapping[str, Any], platform
             "package": lock.package,
             "version": lock.version,
             "source_commit": lock.source_commit,
-            "lock_sha256": lock.text_sha256,
             "artifact_sha256": lock.artifact_sha256,
             "dependencies": [
                 {"name": d.name, "version": d.version, "sha256": d.sha256}
@@ -780,6 +784,30 @@ def install(
     _require(
         bool(name) and any(script[0] == name for script in scripts), f"{lock.package} has no console script {entry!r}"
     )
+    try:
+        with _key_lock(cache, key):
+            return _settle(root, key, name, expected, manifest, reinstall)
+    except OSError as exc:
+        raise BootstrapError(f"cannot install into {root}: {exc}") from exc
+
+
+@contextlib.contextmanager
+def _key_lock(cache: Path, key: str) -> Iterator[None]:
+    import fcntl
+
+    directory = cache / "installs"
+    directory.mkdir(parents=True, exist_ok=True)
+    with open(directory / f".lock-{key}", "a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _settle(
+    root: Path, key: str, name: str, expected: Mapping[str, bytes], manifest: str, reinstall: bool
+) -> Installed:
     if root.exists() and not reinstall:
         recorded = root / MANIFEST
         if recorded.is_file():
@@ -791,7 +819,7 @@ def install(
             if content_matches(root / "tree", expected):
                 return Installed(root / "tree" / "bin" / name, root, key, False)
     reconstructed = root.exists()
-    staging = cache / "installs" / f".build-{key}-{os.getpid()}-{secrets.token_hex(4)}"
+    staging = root.parent / f".build-{key}-{os.getpid()}-{secrets.token_hex(4)}"
     try:
         staging.mkdir(parents=True)
         (staging / "tree").mkdir()
@@ -848,6 +876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _common(verify_parser)
     run_parser = commands.add_parser("run", help="Verify, install and execute with the remaining arguments.")
     _common(run_parser)
+    run_parser.add_argument("--reinstall", action="store_true", help="Discard a mismatched warm install.")
     run_parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     cache = Path(args.cache_dir) if args.cache_dir else None

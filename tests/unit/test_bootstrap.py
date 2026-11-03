@@ -567,3 +567,83 @@ def _stop_servers():
         server = _SERVERS.pop()
         server.shutdown()
         server.server_close()
+
+
+def test_a_lock_text_edit_that_keeps_the_same_artifacts_reuses_the_warm_install(world, repo, cache):
+    first = bootstrap.install(_lock(world, repo), cache, world.net)
+    extra_mirror = "https://github.com/acme/theseus/releases/download/v1/mirror-copy.whl"
+    world.net.add(extra_mirror, world.main_wheel)
+
+    def edit(data):
+        data["artifact"]["urls"].append(extra_mirror)
+
+    second = bootstrap.install(_lock(world, repo, edit), cache, world.net)
+    assert (second.key, second.reconstructed) == (first.key, False)
+    assert _run(second.executable).stdout.strip() == "fakepkg ok 7 1 1"
+
+
+def test_cli_run_accepts_reinstall_and_discards_a_mismatched_warm_install(world, repo, cache, tmp_path):
+    commit = commit_lock(repo, world.lock)
+    env = {**os.environ, "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
+    flags = ["--repo", str(repo), "--commit", commit]
+    base = [sys.executable, "-m", "theseus_reviewer", "bootstrap"]
+    first = subprocess.run([*base, "install", *flags], capture_output=True, text=True, env=env, check=False)
+    manifest = Path(first.stdout.strip()).parents[2] / bootstrap.MANIFEST
+    recorded = json.loads(manifest.read_text(encoding="utf-8"))
+    recorded["platform"] = "elsewhere"
+    manifest.write_text(json.dumps(recorded, indent=2, sort_keys=True), encoding="utf-8")
+    refused = subprocess.run([*base, "run", *flags, "--"], capture_output=True, text=True, env=env, check=False)
+    assert refused.returncode == 1 and "--reinstall" in refused.stderr
+    rebuilt = subprocess.run(
+        [*base, "run", *flags, "--reinstall", "--"], capture_output=True, text=True, env=env, check=False
+    )
+    assert rebuilt.stdout.strip() == "fakepkg ok 7 1 1"
+
+
+def test_concurrent_cold_installs_of_one_key_all_succeed_and_leave_a_valid_install(world, repo, cache):
+    import threading
+
+    lock = _lock(world, repo)
+    results: list[object] = []
+
+    def install() -> None:
+        try:
+            results.append(bootstrap.install(lock, cache, world.net))
+        except BaseException as exc:
+            results.append(exc)
+
+    threads = [threading.Thread(target=install) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert all(isinstance(item, bootstrap.Installed) for item in results), results
+    assert len({item.root for item in results}) == 1
+    assert _run(results[0].executable).stdout.strip() == "fakepkg ok 7 1 1"
+    assert [path for path in (cache.resolve() / "installs").iterdir() if path.name.startswith(".build-")] == []
+
+
+def test_filesystem_failures_surface_as_a_refusal(world, repo, cache, monkeypatch):
+    lock = _lock(world, repo)
+
+    def broken(*args, **kwargs):
+        raise PermissionError("read-only cache")
+
+    monkeypatch.setattr(bootstrap, "_write_tree", broken)
+    with pytest.raises(bootstrap.BootstrapError, match="cannot install into .*read-only cache"):
+        bootstrap.install(lock, cache, world.net)
+
+
+def test_every_requirers_specifier_is_checked_against_the_locked_version(repo, cache):
+    other = build_world(main_requires=("fakedep>=2,<3", "middle"))
+    middle = make_wheel("middle", "1.0.0", {"middle/__init__.py": ""}, requires=("fakedep>=3",))
+    middle_url = other.net.add("https://files.pythonhosted.org/packages/mi/dd/middle-1.0.0-py3-none-any.whl", middle)
+    other.lock["dependencies"].append(
+        {"name": "middle", "version": "1.0.0", "sha256": sha(middle), "urls": [middle_url]}
+    )
+    with pytest.raises(bootstrap.BootstrapError, match=r"locked fakedep 2\.3\.0 does not satisfy middle's requirement"):
+        bootstrap.install(_lock(other, repo), cache, other.net)
+    compatible = make_wheel("middle", "1.0.0", {"middle/__init__.py": ""}, requires=("fakedep>=2.1",))
+    other.net.blobs[middle_url] = compatible
+    other.lock["dependencies"][-1]["sha256"] = sha(compatible)
+    assert bootstrap.install(_lock(other, repo), cache / "ok", other.net).executable.is_file()
