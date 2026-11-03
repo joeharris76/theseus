@@ -1,6 +1,12 @@
 # Theseus
 
-Independent oracle reviewer and merge gate, extracted from BenchBox.
+Theseus reviews pull requests with AI models and blocks merging until a review of
+the exact commit being merged has passed.
+
+The name comes from the Ship of Theseus, the ship that was rebuilt one plank at a
+time until none of its original wood remained. A long-lived codebase is that ship:
+every pull request swaps out a plank. Theseus decides which replacement planks are
+sound enough to go in, so the ship can keep changing without losing what it is.
 
 Distribution `theseus-reviewer`, import package `theseus_reviewer`, console script `theseus`. Requires Python 3.11+.
 
