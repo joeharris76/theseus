@@ -45,16 +45,18 @@
   },
   "entries": [
     {
-      "commit": "b78c2f2fbefa3b192ae472c25d19365245232a17",
-      "disposition": "noop",
-      "rationale": "BenchBox's own policy gains its promotion section (repository, baseline commit, path map, bootstrap reviewer, empty dependency allowlist), which is consumer-owned data Theseus ships none of; the test_theseus_promotion_scenario slug change to joeharris76/theseus is already in Theseus's promotion fixtures (67df15f)."
+      "commit": "ee619c3536a1996973d2fe17d3dfa900f3e509cb",
+      "disposition": "port",
+      "port_commit": "c6f2feda670f0ef9dd8757fe2d15223b71213dd1",
+      "effects": "interface: local.member_review_result, _member_key, _member_path and MEMBER_DIR are removed and member_binding(root, base, head) is exposed; a member review writes only the --result-json file and no longer keeps a result under the local state directory. The member record schema string and fields are unchanged; findings, dispute and review-cache state are untouched. The rest of the commit (pr_arm, pr_landing, remote_closeout, batch skills and docs, the tracker discovery routes in the BenchBox fake GitHub) is consumer-owned and not ported.",
+      "evidence": "tests/unit/reviewer/test_local_review.py (member record binding, no result store, member-mode refusals) and the local-review scenario suite."
     },
     {
-      "commit": "8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9",
+      "commit": "ef52509983e1e3e345ec0b76b8c0f79c7d863867",
       "disposition": "port",
       "port_commit": "7d01388d3fb86bf4255e68c54f564d7846631dec",
-      "effects": "interface: SourceLoader takes an optional prefixes tuple and extract_tar_tree, load_tree_from_dir, _git_archive_tree and default_source_loader's load thread it through (skipping entries outside the prefixes before the count and size limits); archive member names lose only a literal ./ prefix. No policy, lock, cache or persisted-format effect; promotion records and hashes are unchanged for rooted archives.",
-      "evidence": "test_baseline_archive_is_bounded_only_by_the_mapped_paths and test_unrooted_archive_keeps_leading_dot_paths in tests/unit/reviewer/test_promotion.py, the promotion scenario suite, and the parity run recorded in PROVENANCE.md. Ported ahead: the BenchBox commit is on branch feat/theseus-promotion-policy, not yet on develop; when it merges its SHA changes, so rewrite this entry to the develop commit."
+      "effects": "interface: SourceLoader takes an optional prefixes tuple and extract_tar_tree, load_tree_from_dir, _git_archive_tree and default_source_loader's load thread it through (skipping entries outside the prefixes before the count and size limits); archive member names lose only a literal ./ prefix. No policy, lock, cache or persisted-format effect; promotion records and hashes are unchanged for rooted archives. The same squash commit adds BenchBox's own promotion policy section (repository, baseline commit, path map, bootstrap reviewer, empty dependency allowlist) and repoints its promotion scenario at joeharris76/theseus: consumer-owned policy data that Theseus ships none of (no-op), with the slug already in Theseus's promotion fixtures (67df15f).",
+      "evidence": "test_baseline_archive_is_bounded_only_by_the_mapped_paths and test_unrooted_archive_keeps_leading_dot_paths in tests/unit/reviewer/test_promotion.py and the promotion scenario suite."
     }
   ]
 }
