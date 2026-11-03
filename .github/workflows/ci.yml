@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run -- ruff check .
+      - run: uv run -- ruff format --check .
+      - run: uv run -- pytest
+
+  build:
+    name: build and installed-wheel smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          python-version: "3.11"
+      - run: uv sync --locked
+      - run: uv build --out-dir "$RUNNER_TEMP/dist"
+      - name: Install wheel into a clean venv outside the checkout and smoke it
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          uv venv --python 3.11 smoke-venv
+          uv pip install --python smoke-venv/bin/python dist/theseus_reviewer-*.whl
+          smoke-venv/bin/theseus --help
+          smoke-venv/bin/python -I -c "import theseus_reviewer; print(theseus_reviewer.__file__)"
