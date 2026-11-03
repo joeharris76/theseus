@@ -34,7 +34,7 @@ dev = [
 packages = ["src/theseus_reviewer"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/theseus_reviewer", "tests", "tools", "LICENSE", "README.md", "PROVENANCE.md", "pyproject.toml"]
+include = ["src/theseus_reviewer", "tests", "tools", "docs", "examples", ".github/workflows", "LICENSE", "README.md", "PROVENANCE.md", "UPSTREAM.md", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
