@@ -49,10 +49,17 @@ def _ledger(repo: Path, entries: list[dict] | None = None) -> dict:
     return {**ledger, "baseline": _git(repo, "rev-parse", "HEAD"), "entries": entries or []}
 
 
-def test_the_recorded_ledger_names_the_seed_baseline_and_starts_without_entries() -> None:
+def test_the_recorded_ledger_names_the_seed_baseline_and_holds_only_resolved_entries() -> None:
     ledger = upstream_ledger.load_ledger(upstream_ledger.LEDGER_PATH)
     assert ledger["baseline"] == seed_hash.load_map()["baseline_commit"]
-    assert ledger["entries"] == []
+    commits = [entry["commit"] for entry in ledger["entries"]]
+    assert len(commits) == len(set(commits))
+    for entry in ledger["entries"]:
+        assert len(entry["commit"]) == 40 and entry["disposition"] in ("port", "noop")
+        if entry["disposition"] == "port":
+            assert len(entry["port_commit"]) == 40 and entry["effects"] and entry["evidence"]
+        else:
+            assert entry["rationale"].strip()
 
 
 def test_a_range_without_inventory_changes_is_current(repo: Path) -> None:
