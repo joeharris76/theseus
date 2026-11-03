@@ -27,7 +27,7 @@ A called workflow sees the caller's `github` context: `github.event_name`, `gith
 | `theseus_repository` | no | `joeharris76/theseus` | Repository checked out at `theseus_ref` |
 | `gated_base` | yes | | Branch the review and gate apply to; its tip supplies the trusted policy and lock |
 | `policy_path` | no | `.github/oracle-reviewers.yml` | Consumer policy, read from the trusted checkout |
-| `trusted_paths` | no | `.github` | Sparse-checkout patterns for the trusted checkout; add the directories of any `consumer` manifest outside `.github` |
+| `trusted_paths` | no | `.github` | Sparse-checkout patterns for the trusted checkout; add the directories of any `consumer` manifest outside `.github`. The example gate caller reruns on every push to the gated branch (no `paths:` filter), so a manifest change outside `.github` re-evaluates standing gate statuses immediately rather than at the next hourly sweep |
 | `caller_workflow` | no | `oracle-verdict.yml` / `oracle-gate.yml` | File name of the caller; the guard compares it with `github.workflow_ref`, and the bridge dispatches it |
 | `review_workflow_name` | no (`gate.yml`) | `oracle-review` | `name:` of the workflow whose completion bridges into the gate |
 

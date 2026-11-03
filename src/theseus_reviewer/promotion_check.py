@@ -18,6 +18,12 @@ def command_check(args: argparse.Namespace) -> int:
         if (lock.package, lock.repository) != (rules.package, rules.repository):
             raise promotion.PromotionError("theseus lock package or repository does not match consumer policy")
         tree = promotion.load_tree_from_dir(Path(args.source))
+        actual = promotion.tree_sha256(tree)
+        if actual != lock.source_sha256:
+            raise promotion.PromotionError(
+                f"the source tree under {args.source} hashes to {actual}, but the lock pins source_sha256 "
+                f"{lock.source_sha256}"
+            )
         promotion.verify_lock_artifacts(lock, tree, promotion.default_artifact_loader(), rules)
     except (OSError, PolicyError, promotion.PromotionError) as exc:
         print(f"theseus promotion-check: refused: {exc}", file=sys.stderr)
