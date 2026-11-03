@@ -173,6 +173,14 @@ def build_installed(scratch: Path, python: str, wheel: Path | None) -> tuple[Pat
     return wheel, interpreter
 
 
+def build_baseline_interpreter(scratch: Path, python: str) -> Path:
+    venv = scratch / "venv-baseline"
+    run(["uv", "venv", "--python", python, str(venv)], scratch)
+    interpreter = venv / "bin" / "python"
+    run(["uv", "pip", "install", "--python", str(interpreter), "pyyaml==6.0.3"], scratch)
+    return interpreter
+
+
 def run_target(name: str, interpreter: Path, tree: Path, out: Path) -> dict[str, Any]:
     target_out = out / name
     target_out.mkdir(parents=True)
@@ -353,8 +361,9 @@ def main(argv: list[str] | None = None) -> int:
         if baseline_hash != recorded_seed_source_hash():
             raise SystemExit(f"parity failed: the extracted baseline hashes to {baseline_hash}, not the recorded seed")
         wheel, interpreter = build_installed(scratch, args.python, args.wheel)
+        baseline_interpreter = build_baseline_interpreter(scratch, args.python)
         results = {
-            "baseline": run_target("baseline", interpreter, tree, scratch / "out"),
+            "baseline": run_target("baseline", baseline_interpreter, tree, scratch / "out"),
             "installed": run_target("installed", interpreter, tree, scratch / "out"),
         }
         report = compare(results["baseline"], results["installed"])
