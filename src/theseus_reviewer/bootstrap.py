@@ -876,10 +876,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     install_parser.add_argument("--reinstall", action="store_true", help="Discard a mismatched warm install.")
     verify_parser = commands.add_parser("verify", help="Verify an existing install without creating one.")
     _common(verify_parser)
-    run_parser = commands.add_parser("run", help="Verify, install and execute with the remaining arguments.")
-    _common(run_parser)
-    run_parser.add_argument("--reinstall", action="store_true", help="Discard a mismatched warm install.")
-    run_parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     cache = Path(args.cache_dir) if args.cache_dir else None
     try:
@@ -897,9 +893,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"theseus bootstrap: refused: {exc}", file=sys.stderr)
         return 1
-    if args.command == "run":
-        rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest
-        os.execv(str(installed.executable), [str(installed.executable), *rest])
     print(installed.executable)
     return 0
 

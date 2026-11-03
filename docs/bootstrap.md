@@ -6,10 +6,9 @@
 theseus bootstrap install --repo CONSUMER_CHECKOUT --commit FULL_SHA [--lock-path .github/theseus-lock.json]
                           [--cache-dir DIR] [--entry theseus] [--verify-all-sources] [--reinstall]
 theseus bootstrap verify  --repo ... --commit ...     # verify an existing install, create nothing
-theseus bootstrap run     --repo ... --commit ... -- ARGS...   # verify, install, exec
 ```
 
-`install` prints the verified executable path. The cache root is `--cache-dir`, then `THESEUS_INSTALL_CACHE`, then `~/.cache/theseus/installs`.
+`install` prints the verified executable path; callers run that path. The first stage never executes the installed package itself, so a consumer can carry it verbatim under strict process-launch policies. The cache root is `--cache-dir`, then `THESEUS_INSTALL_CACHE`, then `~/.cache/theseus/installs`.
 
 ## Lock
 

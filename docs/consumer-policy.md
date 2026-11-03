@@ -43,7 +43,7 @@ Protocol identities are not consumer settings and do not change: the `oracle-ver
 | `theseus plan/select/review/finalize/guard/sweep/...` | The reviewer engine commands used by the hosted review job; `--policy` is required wherever a policy is read. |
 | `theseus local-review --policy PATH [--repo OWNER/NAME] [--base-ref REF] [--head REF]` | Local pre-submission review. An empty `--base-ref` means `origin/<gated_base>`; the repository comes from `--repo`, `ORACLE_LOCAL_REPOSITORY` or the origin remote. |
 | `theseus promotion-check --policy PATH --lock FILE --source DIR` | Verify a lock's artifact bytes and dependency closure against the reviewed source tree. |
-| `theseus bootstrap install|verify|run` | Install Theseus from a lock at a trusted consumer commit; see [bootstrap.md](bootstrap.md). |
+| `theseus bootstrap install|verify` | Install Theseus from a lock at a trusted consumer commit and print the executable; see [bootstrap.md](bootstrap.md). |
 | `theseus matcher check|verify|digest` | Soundness-path predicate and vendored-copy drift check; see [matcher.md](matcher.md). |
 | `theseus install-omp --policy PATH` | Install the OMP build pinned in the policy. |
 | `theseus omp-bump`, `omp-watch`, `omp-candidate-check` | OMP maintenance; every policy, config and fixture path is a required flag. |
