@@ -37,6 +37,7 @@ EXCLUDED_MODULES = (
     "tests/integration/test_two_consumers.py",
     "tests/integration/test_gateway_host.py",
     "tests/integration/test_hosted_pins.py",
+    "tests/integration/test_launcher_local_review.py",
 )
 
 
@@ -95,7 +96,8 @@ CONFIGURATION_DIFFERENCES = (
     "the BENCHBOX_ variables and the cloud gateway status file is theseus-cloud-gateway.status; the baseline side maps "
     "each to its old name",
     "scenarios with no baseline counterpart are excluded: test_two_consumers (consumer identity isolation), "
-    "test_hosted_pins (separate reviewer and gate pins), test_gateway_host (installed commands), and the in-process "
+    "test_hosted_pins (separate reviewer and gate pins), test_gateway_host (installed commands), "
+    "test_launcher_local_review (phases run through the bootstrap launcher), and the in-process "
     "CI-versus-local adapter comparison in test_local_driver_scenarios, which runs Theseus code on both sides",
 )
 
