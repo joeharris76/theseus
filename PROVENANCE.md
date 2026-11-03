@@ -66,7 +66,7 @@ Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-s
 
 ## Upstream port ledger
 
-[UPSTREAM.md](UPSTREAM.md) and `tools/upstream_ledger.json` map every BenchBox commit since the baseline that touches the extraction inventory to a port commit, a reasoned no-op or a pending entry. Checked with `python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop` against `origin/develop` at `db4cd9da9b2f91ae1da5502bb3b0fc3aed0d992c` (confirmed equal to `git ls-remote origin develop`): one commit since the baseline (`db4cd9d`, the vendored SQLGlot adoption), none touching the inventory, no pending entries, exit 0.
+[UPSTREAM.md](UPSTREAM.md) and `tools/upstream_ledger.json` map every BenchBox commit since the baseline that touches the extraction inventory to a port commit, a reasoned no-op or a pending entry. Checked with `python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref feat/theseus-promotion-policy` against `8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9`: two inventory-touching commits, both recorded (`b78c2f2` no-op; `8cebb19` ported ahead in `7d01388`, the first-promotion path-bounded source loader and leading-dot fix), no pending entries, exit 0. Those commits are on a BenchBox branch, not `develop`; the entries must be rewritten to the `develop` commits when that pull request merges (see UPSTREAM.md).
 
 ## Parity and frozen source
 

@@ -49,4 +49,9 @@ An urgent BenchBox fix after a freeze lands in BenchBox, is ported here, and inv
 
 ## Status
 
-The check against BenchBox `origin/develop` at `db4cd9da9b2f91ae1da5502bb3b0fc3aed0d992c` reports one commit since the baseline (a vendored SQLGlot adoption), none touching the inventory, and no pending entries.
+Checked against BenchBox branch `feat/theseus-promotion-policy` at `8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9` (`python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref feat/theseus-promotion-policy`): five commits since the baseline, two touching the inventory, both recorded, none pending, exit 0.
+
+- `b78c2f2` (BenchBox's own promotion policy section): no-op, consumer-owned data; the slug change in its promotion scenario is already in Theseus's fixtures.
+- `8cebb19` (read only the mapped baseline paths; keep leading dots in archive paths): ported ahead in Theseus commit `7d01388`.
+
+Both commits are on a BenchBox branch that is not on `develop` yet, so the same check against `origin/develop` (`c1c42a15940855e62b64dc2be0382179eb302160`) reports these two entries as not matching a commit in range. When the BenchBox pull request merges its SHAs change: rewrite both entries to the `develop` commits (the Theseus port stands) and rerun the check against `origin/develop` before relying on the claim.

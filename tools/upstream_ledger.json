@@ -43,5 +43,18 @@
       "tests/unit/workflows/test_omp_pin_"
     ]
   },
-  "entries": []
+  "entries": [
+    {
+      "commit": "b78c2f2fbefa3b192ae472c25d19365245232a17",
+      "disposition": "noop",
+      "rationale": "BenchBox's own policy gains its promotion section (repository, baseline commit, path map, bootstrap reviewer, empty dependency allowlist), which is consumer-owned data Theseus ships none of; the test_theseus_promotion_scenario slug change to joeharris76/theseus is already in Theseus's promotion fixtures (67df15f)."
+    },
+    {
+      "commit": "8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9",
+      "disposition": "port",
+      "port_commit": "7d01388d3fb86bf4255e68c54f564d7846631dec",
+      "effects": "interface: SourceLoader takes an optional prefixes tuple and extract_tar_tree, load_tree_from_dir, _git_archive_tree and default_source_loader's load thread it through (skipping entries outside the prefixes before the count and size limits); archive member names lose only a literal ./ prefix. No policy, lock, cache or persisted-format effect; promotion records and hashes are unchanged for rooted archives.",
+      "evidence": "test_baseline_archive_is_bounded_only_by_the_mapped_paths and test_unrooted_archive_keeps_leading_dot_paths in tests/unit/reviewer/test_promotion.py, the promotion scenario suite, and the parity run recorded in PROVENANCE.md. Ported ahead: the BenchBox commit is on branch feat/theseus-promotion-policy, not yet on develop; when it merges its SHA changes, so rewrite this entry to the develop commit."
+    }
+  ]
 }
