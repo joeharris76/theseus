@@ -77,11 +77,11 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `aefc1f5835e74de697d5cb9679f433123f9a676e` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `886e0a60249c9f436801e43d8afe38afc32f47c8` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
 
 ```
-frozen source hash   d2e4bbe6c69fedf694542803071e2da9cfd7dda65254f4c9165fec5e4fc38a78
-wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 b99123e550cef99a422e54b48d7fcb18688a9d3b83ec566471b214f80e77877c
+frozen source hash   c38a3d165dbf613641bf1175bc85878be79dd793685cfbc9298b7d4994afdc16
+wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 a1e3e00632df36d7db5e6fb29a0b52f20c0cc2edbf3b0e2b3a6aca1fc87bbcd0
 scenario tests       223 on each side, all passing or identically skipped, except the one listed below
 captures compared    44: 18 identical, 26 differing only as listed
 unexplained differences  0
@@ -95,7 +95,9 @@ Differences, each intentional and listed in `tools/parity.py`:
 - Output: the `plan` capture carries `omp_config`, the consumer-configured omp config path the baseline hard-coded (26 captures).
 - Outcome: `test_a_cloud_review_without_the_recorded_proxy_refuses_and_says_how_to_start_it` passes on Theseus and fails on the baseline, whose remedy text names the consumer command `make cloud-gateway`; Theseus says `start the cloud gateway`.
 - Configuration: the policy `consumer` section, the `--policy`/`--root`, `--repo`, `--omp-config` and `--manifest` flags, the neutral local-state and OMP-cache roots, the `THESEUS_*` environment names and `theseus-cloud-gateway.status`, and cache file names keyed by the installed package digest. The baseline side maps each to its own name or flag.
-- Excluded for having no baseline counterpart: `test_two_consumers`, `test_hosted_pins`, `test_gateway_host`, and the in-process CI-versus-local adapter comparison in `test_local_driver_scenarios`.
+- Runtime: the installed side runs from a wheel with no dependencies in a clean venv without PyYAML (its YAML parser is the vendored copy); the baseline side runs in its own venv with PyYAML 6.0.3 because the baseline imports it. Review and gate outputs are unchanged by the vendoring.
+- Process model: local-review phase children re-exec the running interpreter with `-I -B -S` and the verified package directory (the baseline ran `python -m` with `PYTHONPATH` set to its export), and `THESEUS_GATE_COMMAND` is required with no fallback. Neither changes a captured output; `tests/integration/test_launcher_local_review.py` covers the launcher path.
+- Excluded for having no baseline counterpart: `test_two_consumers`, `test_hosted_pins`, `test_gateway_host`, `test_launcher_local_review`, and the in-process CI-versus-local adapter comparison in `test_local_driver_scenarios`.
 
 `tools/smoke_wheel.py` against the same wheel, from a scratch directory outside the checkout with the package imported from the installed venv: 72 scenario tests passed (hosted review, two consumers, promotion, local review, findings and disputes, concurrency, cloud reachability, redaction and the gateway-host call sites).
 
