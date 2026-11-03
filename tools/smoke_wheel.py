@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         if str(ROOT) in location:
             raise SystemExit(f"smoke failed: the package imported from the checkout: {location.strip()}")
         shutil.copytree(ROOT / "tests", scratch / "tests", ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(ROOT / ".github" / "workflows", scratch / ".github" / "workflows")
         env = {"PATH": f"{venv / 'bin'}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(scratch / "home")}
         (scratch / "home").mkdir()
         run([str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider", "-n", "0", *SCENARIOS], scratch, env)

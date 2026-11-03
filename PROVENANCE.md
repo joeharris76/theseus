@@ -58,9 +58,46 @@ These stay because they are protocol, persisted-format or service contracts, not
 
 ## Not carried
 
-BenchBox keeps: `soundness_merge_digest.py`, `soundness_drain_report.py`, `oracle_gateway_host.sh`, `oracle_local_review.py`, `pr_arm.py`, `pr_landing.py`, remote closeout and review wrappers, the inert-path read-index scanner and symlink guard, selectors and CI workflow YAML. Removed tests: `test_oracle_local_review.py`, `test_soundness_merge_digest*.py`, `test_gateway_host.py`, `test_pr_arm_scenario.py`, `test_pr_landing_soundness_scenario.py`, the five BenchBox bump-workflow shell scenarios in `test_omp_pin_scenarios.py`, and the scanner, symlink, reader-index, selector and workflow-parity tests from `test_inert_paths.py`, `test_soundness_paths.py` and `test_scan_scratch.py`.
+BenchBox keeps: `soundness_merge_digest.py`, `soundness_drain_report.py`, `oracle_gateway_host.sh`, `oracle_local_review.py`, `pr_arm.py`, `pr_landing.py`, remote closeout and review wrappers, the inert-path read-index scanner and symlink guard, selectors and CI workflow YAML. Removed tests: `test_oracle_local_review.py`, `test_soundness_merge_digest*.py`, `test_gateway_host.py` (the shell-script test; `tests/integration/test_gateway_host.py` now covers the installed `install-omp` and `gateway-clients` call sites), `test_pr_arm_scenario.py`, `test_pr_landing_soundness_scenario.py`, the five BenchBox bump-workflow shell scenarios in `test_omp_pin_scenarios.py`, and the scanner, symlink, reader-index, selector and workflow-parity tests from `test_inert_paths.py`, `test_soundness_paths.py` and `test_scan_scratch.py`.
 
 Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-shaped consumer data: the baseline policy and manifests plus a rewritten `oracle-verdict.yml` for the scenario runner) and `tests/fixtures/consumer/beta/` (a synthetic second consumer with its own App, attesters and base branch). Nineteen golden plans gained the `omp_config` plan field.
+
+## Upstream port ledger
+
+[UPSTREAM.md](UPSTREAM.md) and `tools/upstream_ledger.json` map every BenchBox commit since the baseline that touches the extraction inventory to a port commit, a reasoned no-op or a pending entry. Checked with `python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop` against `origin/develop` at `db4cd9da9b2f91ae1da5502bb3b0fc3aed0d992c` (confirmed equal to `git ls-remote origin develop`): one commit since the baseline (`db4cd9d`, the vendored SQLGlot adoption), none touching the inventory, no pending entries, exit 0.
+
+## Parity and frozen source
+
+`tools/parity.py` builds the wheel, installs it into a clean virtual environment outside the checkout, extracts the baseline scripts from `95c423c` with `git archive`, and runs the same fixture scenarios through both with the offline fake OMP, GitHub and classifier servers: the full `tests/integration` scenario suite (review classification across every size bucket, hosted review rounds, follow-ups, carry, disputes, quota and absence, sweeps, redaction, promotion refusals, local review findings, disputes and secret withholding) plus `tests/integration/test_parity_cases.py` (gate decisions, soundness-matcher results, gateway-client files, persisted local-review state). Golden and parity captures are normalized (paths, SHAs, timestamps, run IDs) and compared leaf by leaf; scenario assertions must pass on both sides.
+
+```
+uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parity-report.json
+uv run python tools/parity.py --source-hash
+```
+
+Run at Theseus commit `fcd498ee52836fbafe1b638e61d214398a30d2f3` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+
+```
+frozen source hash   d2e4bbe6c69fedf694542803071e2da9cfd7dda65254f4c9165fec5e4fc38a78
+wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 b99123e550cef99a422e54b48d7fcb18688a9d3b83ec566471b214f80e77877c
+scenario tests       223 on each side, all passing or identically skipped, except the one listed below
+captures compared    44: 18 identical, 26 differing only as listed
+unexplained differences  0
+parity PASS
+```
+
+The frozen source hash is the sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tracked file under `src/theseus_reviewer/`. The wheel hash is recorded for this build; the release publishes the artifact built from the merged head, and a different hash there does not invalidate parity as long as the frozen source hash is unchanged.
+
+Differences, each intentional and listed in `tools/parity.py`:
+
+- Output: the `plan` capture carries `omp_config`, the consumer-configured omp config path the baseline hard-coded (26 captures).
+- Outcome: `test_a_cloud_review_without_the_recorded_proxy_refuses_and_says_how_to_start_it` passes on Theseus and fails on the baseline, whose remedy text names the consumer command `make cloud-gateway`; Theseus says `start the cloud gateway`.
+- Configuration: the policy `consumer` section, the `--policy`/`--root`, `--repo`, `--omp-config` and `--manifest` flags, the neutral local-state and OMP-cache roots, the `THESEUS_*` environment names and `theseus-cloud-gateway.status`, and cache file names keyed by the installed package digest. The baseline side maps each to its own name or flag.
+- Excluded for having no baseline counterpart: `test_two_consumers`, `test_hosted_pins`, `test_gateway_host`, and the in-process CI-versus-local adapter comparison in `test_local_driver_scenarios`.
+
+`tools/smoke_wheel.py` against the same wheel, from a scratch directory outside the checkout with the package imported from the installed venv: 72 scenario tests passed (hosted review, two consumers, promotion, local review, findings and disputes, concurrency, cloud reachability, redaction and the gateway-host call sites).
+
+The claim is valid only for this source hash. Any change under `src/theseus_reviewer/`, or an un-ported BenchBox change found by the ledger check, invalidates it: port the change, rerun parity and replace the values above.
 
 ## Path map
 

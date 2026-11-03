@@ -331,13 +331,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Build and install the wheel in a clean venv, then run the same deterministic scenarios through "
         "the installed CLI and through the baseline BenchBox scripts extracted with git archive."
     )
-    parser.add_argument("--benchbox-repo", type=Path, required=True)
+    parser.add_argument("--benchbox-repo", type=Path)
+    parser.add_argument("--source-hash", action="store_true", help="Print the frozen source hash and exit.")
     parser.add_argument("--python", default="3.12")
     parser.add_argument("--wheel", type=Path, help="Wheel to install; default builds one with uv.")
     parser.add_argument("--report", type=Path, help="Write the full JSON report here.")
     parser.add_argument("--allow-dirty", action="store_true", help="Run against uncommitted shipped source.")
     parser.add_argument("--keep", action="store_true", help="Keep the scratch directory.")
     args = parser.parse_args(argv)
+    if args.source_hash:
+        print(source_digest())
+        return 0
+    if args.benchbox_repo is None:
+        parser.error("--benchbox-repo is required")
     commit = seed_hash.load_map()["baseline_commit"]
     head = require_clean_source(args.allow_dirty)
     scratch = Path(tempfile.mkdtemp(prefix="theseus-parity-"))
