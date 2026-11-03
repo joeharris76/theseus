@@ -66,7 +66,7 @@ Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-s
 
 ## Upstream port ledger
 
-[UPSTREAM.md](UPSTREAM.md) and `tools/upstream_ledger.json` map every BenchBox commit since the baseline that touches the extraction inventory to a port commit, a reasoned no-op or a pending entry. Checked with `python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref feat/theseus-promotion-policy` against `8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9`: two inventory-touching commits, both recorded (`b78c2f2` no-op; `8cebb19` ported ahead in `7d01388`, the first-promotion path-bounded source loader and leading-dot fix), no pending entries, exit 0. Those commits are on a BenchBox branch, not `develop`; the entries must be rewritten to the `develop` commits when that pull request merges (see UPSTREAM.md).
+[UPSTREAM.md](UPSTREAM.md) and `tools/upstream_ledger.json` map every BenchBox commit since the baseline that touches the extraction inventory to a port commit, a reasoned no-op or a pending entry. Checked with `python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop` against `origin/develop` at `ef52509983e1e3e345ec0b76b8c0f79c7d863867`: two inventory-touching commits, both recorded (`ee619c3` ported in `c6f2fed`, the batch member-result store removal; `ef52509` ported in `7d01388`, the first-promotion path-bounded source loader and leading-dot fix, its BenchBox policy section a no-op), no pending entries, exit 0.
 
 ## Parity and frozen source
 
@@ -77,11 +77,11 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `691c5fa6cf224f8da01d63904b753cb96e12c756` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `20eeff46382481981295acc93ebc41101ee4b61f` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
 
 ```
-frozen source hash   c0cfcf1c075449960e037b5b2e3e3aa0961fff7fa58c0ff61984efb23b9e449b
-wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 41b29e0d6614e1f4a6a40ad0e223de646916ee535ff912c9dda0b0686b08dbe6
+frozen source hash   b4bee2bd07849f8051ec6b28f50c48baea655ec076c012975f3bca264dd5e8fb
+wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 21f0ba6fe64dc80e29a211c5134f89272236849df7725d1c2c215b5fa26c13da
 scenario tests       223 on each side, all passing or identically skipped, except the one listed below
 captures compared    44: 18 identical, 26 differing only as listed
 unexplained differences  0
@@ -95,7 +95,7 @@ Differences, each intentional and listed in `tools/parity.py`:
 - Output: the `plan` capture carries `omp_config`, the consumer-configured omp config path the baseline hard-coded (26 captures).
 - Outcome: `test_a_cloud_review_without_the_recorded_proxy_refuses_and_says_how_to_start_it` passes on Theseus and fails on the baseline, whose remedy text names the consumer command `make cloud-gateway`; Theseus says `start the cloud gateway`.
 - Configuration: the policy `consumer` section, the `--policy`/`--root`, `--repo`, `--omp-config` and `--manifest` flags, the neutral local-state and OMP-cache roots, the `THESEUS_*` environment names and `theseus-cloud-gateway.status`, and cache file names keyed by the installed package digest. The baseline side maps each to its own name or flag.
-- Ported ahead of the baseline: the path-bounded first-promotion source loader and leading-dot archive fix (BenchBox `8cebb19`, ledgered in UPSTREAM.md) are not in the `95c423c` baseline the parity run compares against; they change no captured scenario output and are covered by `tests/unit/reviewer/test_promotion.py`.
+- Ported after the baseline: the path-bounded first-promotion source loader and leading-dot archive fix, and the removal of the member-result store (both in BenchBox `develop` at `ef52509`, ledgered in UPSTREAM.md), are not in the `95c423c` baseline the parity run compares against; they change no captured scenario output and are covered by `tests/unit/reviewer/test_promotion.py` and `tests/unit/reviewer/test_local_review.py`.
 - Runtime: the installed side runs from a wheel with no dependencies in a clean venv without PyYAML (its YAML parser is the vendored copy); the baseline side runs in its own venv with PyYAML 6.0.3 because the baseline imports it. Review and gate outputs are unchanged by the vendoring.
 - Process model: local-review phase children re-exec the running interpreter with `-I -B -S` and the verified package directory (the baseline ran `python -m` with `PYTHONPATH` set to its export), and `THESEUS_GATE_COMMAND` is required with no fallback. Neither changes a captured output; `tests/integration/test_launcher_local_review.py` covers the launcher path.
 - Excluded for having no baseline counterpart: `test_two_consumers`, `test_hosted_pins`, `test_gateway_host`, `test_launcher_local_review`, and the in-process CI-versus-local adapter comparison in `test_local_driver_scenarios`.

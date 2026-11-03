@@ -49,9 +49,7 @@ An urgent BenchBox fix after a freeze lands in BenchBox, is ported here, and inv
 
 ## Status
 
-Checked against BenchBox branch `feat/theseus-promotion-policy` at `8cebb190e7f0cbb2f3a6de653b1db0d0ecd3fce9` (`python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref feat/theseus-promotion-policy`): five commits since the baseline, two touching the inventory, both recorded, none pending, exit 0.
+Checked against BenchBox `origin/develop` at `ef52509983e1e3e345ec0b76b8c0f79c7d863867` (`python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop`, after `git fetch origin develop`): five commits since the baseline, two touching the inventory, both recorded, none pending, exit 0, "ledger current: no un-ported upstream change".
 
-- `b78c2f2` (BenchBox's own promotion policy section): no-op, consumer-owned data; the slug change in its promotion scenario is already in Theseus's fixtures.
-- `8cebb19` (read only the mapped baseline paths; keep leading dots in archive paths): ported ahead in Theseus commit `7d01388`.
-
-Both commits are on a BenchBox branch that is not on `develop` yet, so the same check against `origin/develop` (`c1c42a15940855e62b64dc2be0382179eb302160`) reports these two entries as not matching a commit in range. When the BenchBox pull request merges its SHAs change: rewrite both entries to the `develop` commits (the Theseus port stands) and rerun the check against `origin/develop` before relying on the claim.
+- `ee619c3` (#3933, batch execution remediation): ported in `c6f2fed` (the member-result store is removed and `member_binding()` is exposed); its `pr_arm`, `pr_landing`, `remote_closeout`, skills, docs and tracker-discovery fixture changes are consumer-owned.
+- `ef52509` (#3936, first Theseus promotion): the path-bounded first-promotion source loader and leading-dot archive fix are ported in `7d01388`; its policy section for BenchBox is consumer-owned data (no-op).
