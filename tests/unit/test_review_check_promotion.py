@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 POLICY_REL = ".github/oracle-reviewers.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
 BINDING = CONFIG.binding
-PROMOTION_REPOSITORY = "BenchBox-dev/theseus"
+PROMOTION_REPOSITORY = "joeharris76/theseus"
 BASE_SHA = "1" * 40
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
@@ -46,14 +46,14 @@ def _lock_text(
     artifact_urls: list[str] | None = None,
 ) -> str:
     urls = artifact_urls or [
-        f"https://github.com/BenchBox-dev/theseus/releases/download/v{version}/theseus_reviewer-{version}-py3-none-any.whl",
+        f"https://github.com/joeharris76/theseus/releases/download/v{version}/theseus_reviewer-{version}-py3-none-any.whl",
         f"https://files.pythonhosted.org/packages/theseus/theseus_reviewer-{version}-py3-none-any.whl",
     ]
     payload: dict[str, Any] = {
         "schema": 1,
         "package": "theseus-reviewer",
         "version": version,
-        "repository": "BenchBox-dev/theseus",
+        "repository": "joeharris76/theseus",
         "source_commit": source_commit,
         "source_sha256": source_sha256,
         "delta_sha256": delta_sha256,
@@ -368,7 +368,7 @@ def test_untrusted_artifact_host_in_lock_is_refused(monkeypatch: pytest.MonkeyPa
         artifact_sha256=NEW_ART_HASH,
         delta_sha256=DELTA_HASH,
         artifact_urls=[
-            "https://github.com/BenchBox-dev/theseus/releases/download/v0.2.0/theseus_reviewer-0.2.0-py3-none-any.whl",
+            "https://github.com/joeharris76/theseus/releases/download/v0.2.0/theseus_reviewer-0.2.0-py3-none-any.whl",
             "https://attacker.example/evil.whl",
         ],
     )

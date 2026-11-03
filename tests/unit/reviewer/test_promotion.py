@@ -60,14 +60,14 @@ def _lock_payload(
         "schema": 1,
         "package": "theseus-reviewer",
         "version": version,
-        "repository": "BenchBox-dev/theseus",
+        "repository": "joeharris76/theseus",
         "source_commit": source_commit,
         "source_sha256": source_sha256,
         "delta_sha256": delta_sha256,
         "artifact": {
             "sha256": artifact_sha256,
             "urls": [
-                f"https://github.com/BenchBox-dev/theseus/releases/download/v{version}/theseus_reviewer-{version}-py3-none-any.whl",
+                f"https://github.com/joeharris76/theseus/releases/download/v{version}/theseus_reviewer-{version}-py3-none-any.whl",
                 f"https://files.pythonhosted.org/packages/theseus/theseus_reviewer-{version}-py3-none-any.whl",
             ],
         },
@@ -112,7 +112,7 @@ def test_lock_requires_two_distinct_https_artifact_sources_and_matching_workflow
     single = _lock_payload()
     single["artifact"] = {
         "sha256": "3" * 64,
-        "urls": ["https://github.com/BenchBox-dev/theseus/releases/download/v0.2.0/wheel.whl"],
+        "urls": ["https://github.com/joeharris76/theseus/releases/download/v0.2.0/wheel.whl"],
     }
     with pytest.raises(promotion.PromotionError, match="at least 2 https url"):
         promotion.parse_lock(json.dumps(single))
@@ -121,8 +121,8 @@ def test_lock_requires_two_distinct_https_artifact_sources_and_matching_workflow
     duplicate["artifact"] = {
         "sha256": "3" * 64,
         "urls": [
-            "https://github.com/BenchBox-dev/theseus/releases/download/v0.2.0/wheel.whl",
-            "https://github.com/BenchBox-dev/theseus/releases/download/v0.2.0/wheel.whl",
+            "https://github.com/joeharris76/theseus/releases/download/v0.2.0/wheel.whl",
+            "https://github.com/joeharris76/theseus/releases/download/v0.2.0/wheel.whl",
         ],
     }
     with pytest.raises(promotion.PromotionError, match="distinct"):
@@ -134,7 +134,7 @@ def test_lock_requires_two_distinct_https_artifact_sources_and_matching_workflow
 
     untrusted_host = _lock_payload()
     untrusted_host["artifact"]["urls"] = [
-        "https://github.com/BenchBox-dev/theseus/releases/download/v0.2.0/wheel.whl",
+        "https://github.com/joeharris76/theseus/releases/download/v0.2.0/wheel.whl",
         "https://attacker.example/evil.whl",
     ]
     parsed = promotion.parse_lock(json.dumps(untrusted_host))
@@ -459,7 +459,7 @@ def _preparation_inputs(*, bootstrap: bool = False) -> dict[str, Any]:
         "is_ancestor": lambda _ancestor, _descendant: True,
         "artifact_loader": lambda url: dependency if "pyyaml" in url else wheel,
         "rules": PromotionRules(
-            repository="BenchBox-dev/theseus",
+            repository="joeharris76/theseus",
             bootstrap_reviewers=("joeharris76",),
             dependencies={"pyyaml==6.0.3": dependency_sha},
             bootstrap_baseline_commit=SHA_C,
