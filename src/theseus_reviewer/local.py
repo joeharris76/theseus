@@ -869,7 +869,7 @@ class Run:
         ]
         result = subprocess.run(
             argv,
-            cwd=self.work,
+            cwd=self.trusted_root,
             env={**self._environ(phase, self.grants(phase)), **(extra or {})},
             capture_output=True,
             text=True,
@@ -1113,7 +1113,7 @@ def _reviewed(run: Run, trusted: Trusted, previous: Mapping[str, Any] | None) ->
     access = resolve_credentials()
     run.reporter.hide(access.token, access.url)
     if not reachable(access.url, access.proxy):
-        hint = "; run make cloud-gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
+        hint = "; start the cloud gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
         raise Unavailable(f"the {access.client} gateway is unreachable{hint}")
     run.access = access
     head_tree = _git(run.root, "rev-parse", f"{run.head}^{{tree}}").strip()

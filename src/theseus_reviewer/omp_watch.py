@@ -290,8 +290,8 @@ def render_revert_body(change: PinChange, assessment: Assessment) -> str:
         f"```\n{assessment.render(change)}```\n\n"
         "## Before merge\n\nThe required `oracle-gate` holds any pull request that changes the pin until the owner "
         "posts the compatibility evidence for the pin that pull request carries, here "
-        f"{change.previous_version}. From this branch on the owner's Mac (darwin-arm64) run `make "
-        f"omp-candidate-check VERSION={change.previous_version}` and post the line it prints as a comment on this pull "
+        f"{change.previous_version}. From this branch on the owner's Mac (darwin-arm64) run "
+        f"`theseus omp-candidate-check check` for version {change.previous_version} and post the line it prints as a comment on this pull "
         "request; a later push invalidates it. The build host does not mirror builds, so the check fails at the "
         f"download if {change.previous_version} is no longer served.\n"
     )

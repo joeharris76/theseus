@@ -185,9 +185,9 @@ def render_body(
         f"{rows}\n\n`--version` on {host}: `{report.transcript}`\n\n"
         f"## Compatibility suite on {host}\n\n```\n{report.render()}\n```\n\n"
         f"## `--help` against {previous.version}\n\n```diff\n{flags_diff}\n```\n\n"
-        "## Before merge\n\nPost the line printed by `make omp-candidate-check VERSION="
-        f"{release.version}` on the owner's Mac (darwin-arm64) as a comment on this pull request. `make pr-arm` "
-        "refuses this pull request until that line from the owner matches the pin it carries.\n"
+        "## Before merge\n\nPost the line printed by `theseus omp-candidate-check check` for version "
+        f"{release.version} on the owner's Mac (darwin-arm64) as a comment on this pull request. The gate "
+        "refuses this pull request until that line from an attester matches the pin it carries.\n"
     )
 
 

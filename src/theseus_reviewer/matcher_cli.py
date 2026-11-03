@@ -66,7 +66,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     verify.set_defaults(handler=_verify)
     digest = commands.add_parser("digest", help="Print the sha256 of the installed matcher module.")
     digest.set_defaults(handler=_digest)
-    check = commands.add_parser("check", add_help=False, help="Run the path predicate (see soundness_paths.py).")
+    check = commands.add_parser(
+        "check", add_help=False, prefix_chars="\0", help="Run the path predicate (see soundness_paths.py)."
+    )
     check.add_argument("rest", nargs=argparse.REMAINDER)
     check.set_defaults(handler=_path_check)
     args = parser.parse_args(argv)

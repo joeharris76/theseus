@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -2445,24 +2446,37 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _register_passthrough(commands: Any) -> None:
-    from . import bootstrap, gate, matcher_cli, omp_bump, omp_candidate, omp_watch, promotion_check
-
-    delegated: dict[str, tuple[str, Callable[[Sequence[str]], int]]] = {
-        "gate": ("Evaluate and post the oracle-gate status for a pull request head.", gate.run),
+    delegated: dict[str, tuple[str, str, str]] = {
+        "gate": ("Evaluate and post the oracle-gate status for a pull request head.", "gate", "run"),
         "promotion-check": (
             "Verify a theseus lock's artifact bytes and dependency closure against reviewed source.",
-            promotion_check.main,
+            "promotion_check",
+            "main",
         ),
-        "bootstrap": ("Resolve a lock from a trusted consumer commit and install it hash-verified.", bootstrap.main),
-        "matcher": ("Soundness-path matcher predicate and vendored-copy drift check.", matcher_cli.main),
-        "omp-bump": ("Prepare an OMP pin bump.", omp_bump.main),
-        "omp-watch": ("Evaluate OMP release watch evidence.", omp_watch.main),
-        "omp-candidate-check": ("Check an OMP candidate build.", omp_candidate.main),
+        "bootstrap": (
+            "Resolve a lock from a trusted consumer commit and install it hash-verified.",
+            "bootstrap",
+            "main",
+        ),
+        "matcher": ("Soundness-path matcher predicate and vendored-copy drift check.", "matcher_cli", "main"),
+        "omp-bump": ("Prepare an OMP pin bump.", "omp_bump", "main"),
+        "omp-watch": ("Evaluate OMP release watch evidence.", "omp_watch", "main"),
+        "omp-candidate-check": ("Check an OMP candidate build.", "omp_candidate", "main"),
     }
-    for name, (description, entry) in delegated.items():
-        passthrough = commands.add_parser(name, add_help=False, help=description)
+
+    def delegate(module: str, function: str) -> Callable[[argparse.Namespace], int]:
+        def handler(args: argparse.Namespace) -> int:
+            entry: Callable[[Sequence[str]], int] = getattr(
+                importlib.import_module(f"{__package__}.{module}"), function
+            )
+            return entry(args.rest)
+
+        return handler
+
+    for name, (description, module, function) in delegated.items():
+        passthrough = commands.add_parser(name, add_help=False, help=description, prefix_chars="\0")
         passthrough.add_argument("rest", nargs=argparse.REMAINDER)
-        passthrough.set_defaults(handler=lambda args, entry=entry: entry(args.rest))
+        passthrough.set_defaults(handler=delegate(module, function))
 
 
 def main(argv: list[str] | None = None) -> int:

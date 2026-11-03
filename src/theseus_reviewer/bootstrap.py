@@ -782,17 +782,17 @@ def install(
     _require(
         bool(name) and any(script[0] == name for script in scripts), f"{lock.package} has no console script {entry!r}"
     )
-    reconstructed = False
     if root.exists() and not reinstall:
         recorded = root / MANIFEST
-        _require(
-            recorded.is_file() and recorded.read_text(encoding="utf-8") == manifest,
-            f"the warm install at {root} was recorded for a different artifact, dependency set, interpreter or "
-            "platform than this lock requires; refusing to use it (pass --reinstall to rebuild it)",
-        )
-        if content_matches(root / "tree", expected):
-            return Installed(root / "tree" / "bin" / name, root, key, False)
-        reconstructed = True
+        if recorded.is_file():
+            _require(
+                recorded.read_text(encoding="utf-8") == manifest,
+                f"the warm install at {root} was recorded for a different artifact, dependency set, interpreter or "
+                "platform than this lock requires; refusing to use it (pass --reinstall to rebuild it)",
+            )
+            if content_matches(root / "tree", expected):
+                return Installed(root / "tree" / "bin" / name, root, key, False)
+    reconstructed = root.exists()
     staging = cache / "installs" / f".build-{key}-{os.getpid()}-{secrets.token_hex(4)}"
     try:
         staging.mkdir(parents=True)

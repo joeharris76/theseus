@@ -24,7 +24,11 @@ classifiers = [
 theseus = "theseus_reviewer.main:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.8"]
+dev = [
+    "pytest>=8.3",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.8",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/theseus_reviewer"]
@@ -34,11 +38,13 @@ include = ["src/theseus_reviewer", "tests", "tools", "LICENSE", "README.md", "PR
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+pythonpath = ["."]
+addopts = "-ra -n auto"
 markers = [
     "unit: unit test",
     "fast: fast test",
     "integration: scenario test",
+    "medium: medium-duration scenario test",
 ]
 
 [tool.ruff]
