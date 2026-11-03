@@ -7,14 +7,14 @@
 Run it through the consumer-owned first stage, so the bytes that execute are the ones the consumer's lock names:
 
 ```
-python3 -I -S .github/theseus-bootstrap.py run --repo . --commit "$(git rev-parse origin/main)" -- \
-  local-review --policy .github/oracle-reviewers.yml [--repo OWNER/NAME] [--base-ref REF] [--head REF] \
+theseus="$(python3 -I -S .github/theseus-bootstrap.py install --repo . --commit "$(git rev-parse origin/main)")"
+"$theseus" local-review --policy .github/oracle-reviewers.yml [--repo OWNER/NAME] [--base-ref REF] [--head REF] \
   [--rebuttals FILE | --adjudicate TEXT]
 ```
 
 - The first stage is `bootstrap.py` (standard library only), carried by the consumer at a reviewed, pinned hash. `--commit` must be a full commit SHA of the consumer's gated branch; the installer reads the lock from that commit with `git show` and never from the working tree. See [bootstrap.md](bootstrap.md).
 - Any failure to resolve the commit, read or parse the lock, fetch bytes or match a hash refuses before anything executes. There is no fallback to an older install, an export directory or a `theseus` on `PATH`. A warm install is re-verified on every call and is reused only when it matches the lock's artifact, dependencies, interpreter and platform.
-- An already verified install can be called directly with the executable that `bootstrap install` printed: `<executable> local-review --policy ...`.
+- `install` re-verifies a warm install on every call, so running it before each review is the supported pattern; the printed executable is the only thing to run.
 
 The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. Without `--base-ref`, pass `--trusted-ref REF`: the base is `origin/<consumer.gated_base>` read from the policy at that commit, never from the working tree (a branch could otherwise pick the ref that supplies its own rules); with neither flag the review refuses. `--repo` falls back to `ORACLE_LOCAL_REPOSITORY`, then the origin remote.
 

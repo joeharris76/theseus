@@ -466,7 +466,7 @@ def test_specifier_evaluation(version, specifier, expected):
     assert bootstrap.satisfies(version, specifier) is expected
 
 
-def test_cli_install_run_and_verify_from_a_trusted_commit(world, repo, cache, tmp_path):
+def test_cli_install_and_verify_from_a_trusted_commit(world, repo, cache, tmp_path):
     commit = commit_lock(repo, world.lock)
     mirror = _serve(world.net, tmp_path)
     env = {**os.environ, "ORACLE_PROMOTION_MIRROR": mirror, "THESEUS_INSTALL_CACHE": str(cache)}
@@ -478,8 +478,6 @@ def test_cli_install_run_and_verify_from_a_trusted_commit(world, repo, cache, tm
     assert _run(executable).stdout.strip() == "fakepkg ok 7 1 1"
     verified = subprocess.run([*base, "verify", *flags], capture_output=True, text=True, env=env, check=False)
     assert verified.returncode == 0, verified.stderr
-    ran = subprocess.run([*base, "run", *flags, "--"], capture_output=True, text=True, env=env, check=False)
-    assert ran.stdout.strip() == "fakepkg ok 7 1 1"
     refused = subprocess.run(
         [*base, "install", "--repo", str(repo), "--commit", "latest"],
         capture_output=True,
@@ -582,7 +580,7 @@ def test_a_lock_text_edit_that_keeps_the_same_artifacts_reuses_the_warm_install(
     assert _run(second.executable).stdout.strip() == "fakepkg ok 7 1 1"
 
 
-def test_cli_run_accepts_reinstall_and_discards_a_mismatched_warm_install(world, repo, cache, tmp_path):
+def test_cli_install_accepts_reinstall_and_discards_a_mismatched_warm_install(world, repo, cache, tmp_path):
     commit = commit_lock(repo, world.lock)
     env = {**os.environ, "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
     flags = ["--repo", str(repo), "--commit", commit]
@@ -592,12 +590,13 @@ def test_cli_run_accepts_reinstall_and_discards_a_mismatched_warm_install(world,
     recorded = json.loads(manifest.read_text(encoding="utf-8"))
     recorded["platform"] = "elsewhere"
     manifest.write_text(json.dumps(recorded, indent=2, sort_keys=True), encoding="utf-8")
-    refused = subprocess.run([*base, "run", *flags, "--"], capture_output=True, text=True, env=env, check=False)
+    refused = subprocess.run([*base, "install", *flags], capture_output=True, text=True, env=env, check=False)
     assert refused.returncode == 1 and "--reinstall" in refused.stderr
     rebuilt = subprocess.run(
-        [*base, "run", *flags, "--reinstall", "--"], capture_output=True, text=True, env=env, check=False
+        [*base, "install", *flags, "--reinstall"], capture_output=True, text=True, env=env, check=False
     )
-    assert rebuilt.stdout.strip() == "fakepkg ok 7 1 1"
+    assert rebuilt.returncode == 0, rebuilt.stderr
+    assert _run(Path(rebuilt.stdout.strip())).stdout.strip() == "fakepkg ok 7 1 1"
 
 
 def test_concurrent_cold_installs_of_one_key_all_succeed_and_leave_a_valid_install(world, repo, cache):
