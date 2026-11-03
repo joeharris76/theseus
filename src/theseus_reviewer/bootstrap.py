@@ -183,7 +183,9 @@ class _HttpsOnly(urllib.request.HTTPRedirectHandler):
     def __init__(self, loopback: bool) -> None:
         self.loopback = loopback
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+    def redirect_request(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
         parts = urllib.parse.urlsplit(newurl)
         local = self.loopback and parts.scheme == "http" and (parts.hostname or "") in ("127.0.0.1", "localhost", "::1")
         if parts.scheme != "https" and not local:
