@@ -8,9 +8,9 @@ import zipfile
 from typing import Any
 
 import pytest
-import yaml
 
 from theseus_reviewer import promotion, protocol
+from theseus_reviewer._vendor import yaml
 
 from .fake_github import OWNER_TOKEN
 from .harness import SLUG, Harness, git

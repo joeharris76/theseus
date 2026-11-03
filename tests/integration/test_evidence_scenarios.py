@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pytest
-import yaml
+
+from theseus_reviewer._vendor import yaml
 
 from .harness import ALPHA_ROOT, CHECKER, Harness, ReviewRun
 

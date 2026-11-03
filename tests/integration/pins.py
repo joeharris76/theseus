@@ -8,8 +8,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import yaml
-
 from theseus_reviewer import bootstrap
 
 from .harness import REPO_ROOT
@@ -118,7 +116,7 @@ def _text_files(root: Path, prefix: str, skip: tuple[str, ...] = ()) -> dict[str
         for path in sorted(root.rglob("*"))
         if path.is_file()
         and "__pycache__" not in path.parts
-        and path.suffix in (".py", ".md")
+        and (path.suffix in (".py", ".md") or path.name == "LICENSE")
         and path.name not in skip
     }
 
@@ -128,14 +126,8 @@ def reviewer_wheel() -> bytes:
         "theseus-reviewer",
         REVIEWER_VERSION,
         _text_files(SOURCE, "theseus_reviewer"),
-        requires=["PyYAML>=6.0.2,<7"],
         scripts={"theseus": "theseus_reviewer.main:run"},
     )
-
-
-def yaml_wheel() -> bytes:
-    root = Path(yaml.__file__).resolve().parent
-    return support.make_wheel("pyyaml", yaml.__version__, _text_files(root, "yaml", ("_yaml.pyx",)))
 
 
 def gate_wheel(mode: str, record: Path) -> bytes:
@@ -173,14 +165,6 @@ class PinWorld:
         self.workdir = workdir
         self.mirror = Mirror()
         self.record = workdir / "gate-pin-record.json"
-        yaml_raw = yaml_wheel()
-        yaml_url = self.mirror.add("https://files.pythonhosted.org/packages/ab/cd/pyyaml-py3-none-any.whl", yaml_raw)
-        self.dependency = {
-            "name": "pyyaml",
-            "version": yaml.__version__,
-            "sha256": support.sha(yaml_raw),
-            "urls": [yaml_url],
-        }
         main = reviewer_wheel()
         self.reviewer_lock = lock_text(
             main,
@@ -190,7 +174,7 @@ class PinWorld:
                 self.mirror.add("https://github.com/joeharris76/theseus/releases/download/a/a.whl", main),
                 self.mirror.add("https://files.pythonhosted.org/packages/aa/aa/a.whl", main),
             ),
-            [self.dependency],
+            [],
         )
         self.bootstrap = Path(bootstrap.__file__)
 

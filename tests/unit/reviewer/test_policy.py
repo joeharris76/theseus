@@ -5,10 +5,10 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-import yaml
 from tests.conftest import BETA_POLICY
 
 from theseus_reviewer import review_check
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import SIZE_BUCKETS, Policy, PolicyError, PromotionRules, parse_policy
 
 from .conftest import POLICY_PATH

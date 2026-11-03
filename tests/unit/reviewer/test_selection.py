@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-import yaml
 
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import Reviewer, load_policy
 from theseus_reviewer.selection import (
     ABSENT,

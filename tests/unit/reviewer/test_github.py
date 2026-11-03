@@ -1025,9 +1025,14 @@ def test_post_gate_runs_the_gate_subprocess_with_the_head_policy_and_token(
     assert call["argv"] == ["gate", "--repo", REPO, "--pr", "7", "--head-sha", SHA, "--policy", str(policy)]
 
 
-def test_post_gate_defaults_to_the_installed_package_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_gate_has_no_default_command_and_never_uses_the_running_interpreter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv(github.GATE_COMMAND_ENV, raising=False)
-    assert github.gate_command() == [sys.executable, "-m", "theseus_reviewer"]
+    with pytest.raises(github.GitHubError, match="THESEUS_GATE_COMMAND is not set"):
+        github.gate_command()
+    with pytest.raises(github.GitHubError, match="never falls back"):
+        github.post_gate(REPO, 7, SHA, "app-token", tmp_path / "policy.yml")
     monkeypatch.setenv(github.GATE_COMMAND_ENV, "uv run theseus")
     assert github.gate_command() == ["uv", "run", "theseus"]
 

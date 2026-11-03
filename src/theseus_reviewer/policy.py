@@ -401,6 +401,6 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
 
 
 def load_policy(path: Path) -> Policy:
-    import yaml
+    from ._vendor import yaml
 
     return parse_policy(yaml.safe_load(path.read_text(encoding="utf-8")))

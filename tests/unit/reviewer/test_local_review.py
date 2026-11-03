@@ -937,15 +937,14 @@ def test_a_phase_runs_the_installed_package_from_the_trusted_root_with_the_trust
         return subprocess.CompletedProcess(argv, 0, "slot 1: started\noracle-local: hello\n", "")
 
     monkeypatch.setattr(local.subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONPATH", "/ambient")
 
     code, values = run.phase("prepare")
 
     assert (code, values) == (0, {})
+    assert not [name for name in seen["env"] if name.upper().startswith("PYTHON")]
     assert seen["argv"] == [
-        sys.executable,
-        "-P",
-        "-m",
-        "theseus_reviewer",
+        *local.selfexec.package_command(),
         "drive",
         "--policy",
         str(run.policy),
@@ -995,18 +994,35 @@ def test_the_theseus_module_entry_refuses_an_unreadable_policy_without_a_base_re
     )
 
     assert result.returncode == local.EXIT_REFUSED
-    assert "--base-ref was not given and the gated base cannot be read from missing.yml" in result.stderr
+    assert "--base-ref was not given: pass --base-ref, or --trusted-ref" in result.stderr
 
 
-def test_an_empty_base_ref_defaults_to_the_origin_of_the_policy_gated_base() -> None:
-    args = argparse.Namespace(base_ref="", policy=str(POLICY_PATH))
+def test_an_empty_base_ref_defaults_to_the_gated_base_of_the_trusted_commits_policy(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    policy = repo / ".github" / "oracle-reviewers.yml"
+    policy.parent.mkdir(parents=True)
+    trusted_text = POLICY_PATH.read_text(encoding="utf-8")
+    policy.write_text(trusted_text, encoding="utf-8")
+    _git(repo, "add", ".github")
+    _git(repo, "commit", "--quiet", "-m", "policy")
+    trusted = _git(repo, "rev-parse", "HEAD").strip()
+    policy.write_text(trusted_text.replace("gated_base: develop", "gated_base: attacker-branch"), encoding="utf-8")
+    args = argparse.Namespace(base_ref="", trusted_ref=trusted, policy=".github/oracle-reviewers.yml")
 
-    local._default_base_ref(args)
+    local._default_base_ref(args, repo)
 
     assert args.base_ref == "origin/develop"
     args.base_ref = "origin/other"
-    local._default_base_ref(args)
+    local._default_base_ref(args, repo)
     assert args.base_ref == "origin/other"
+
+
+def test_an_empty_base_ref_without_a_trusted_ref_refuses_instead_of_reading_the_working_tree(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo")
+    args = argparse.Namespace(base_ref="", trusted_ref="", policy=str(POLICY_PATH))
+
+    with pytest.raises(local.Refused, match="--trusted-ref"):
+        local._default_base_ref(args, repo)
 
 
 def test_the_repository_comes_from_the_flag_then_the_environment_then_the_origin_remote(

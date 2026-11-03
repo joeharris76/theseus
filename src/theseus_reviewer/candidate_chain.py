@@ -13,9 +13,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from . import candidate_canaries, cli, commands, processes, runner
+from ._vendor import yaml
 from .candidate_canaries import Canary
 from .candidate_env import quiet_env
 from .candidate_stub import LOOPBACK, CanaryServer, UpstreamStub, UpstreamTurn, error_turn, text_turn, tool_turn

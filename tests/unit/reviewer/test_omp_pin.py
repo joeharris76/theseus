@@ -16,9 +16,9 @@ import urllib.response
 from pathlib import Path
 
 import pytest
-import yaml
 
 from theseus_reviewer import cli, omp_pin
+from theseus_reviewer._vendor import yaml
 
 from .conftest import POLICY_PATH
 

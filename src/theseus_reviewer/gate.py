@@ -12,8 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from ._vendor import yaml
 from .matchers import Matchers, load_matchers
 from .policy import Binding, Consumer, Policy, PolicyError, PromotionRules, load_policy, parse_policy
 from .review_check import (

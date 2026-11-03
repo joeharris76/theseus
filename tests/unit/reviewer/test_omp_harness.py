@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from theseus_reviewer import omp_pin
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.commands import (
     FORBIDDEN_FLAGS,
     build,

@@ -4,9 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
 from . import commands
+from ._vendor import yaml
 
 CONTEXT = "context"
 SYSTEM = "system"

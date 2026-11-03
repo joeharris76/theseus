@@ -5,7 +5,6 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -559,7 +558,10 @@ def dispatch_gate(repo: str, pr: int, head: str, token: str, base: str) -> None:
 def gate_command() -> list[str]:
     configured = os.environ.get(GATE_COMMAND_ENV)
     if configured is None:
-        return [sys.executable, "-m", "theseus_reviewer"]
+        raise GitHubError(
+            f"{GATE_COMMAND_ENV} is not set: the trusted gate pin was not resolved, and the gate never falls back "
+            "to the running interpreter"
+        )
     if not configured.strip():
         raise GitHubError(f"{GATE_COMMAND_ENV} is set but empty: the trusted gate pin was not resolved")
     return shlex.split(configured)

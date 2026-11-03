@@ -4,8 +4,9 @@ import shutil
 from pathlib import Path
 
 import pytest
-import yaml
 from tests.conftest import CONSUMER_BETA
+
+from theseus_reviewer._vendor import yaml
 
 from . import fake_github
 from .fake_github import APP_TOKEN, OWNER_TOKEN

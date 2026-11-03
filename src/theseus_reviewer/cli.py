@@ -2296,7 +2296,7 @@ def _gateway_named_token_files(specs: list[str]) -> dict[str, Path]:
 
 
 def command_gateway_clients(args: argparse.Namespace) -> int:
-    import yaml
+    from ._vendor import yaml
 
     token_files = {GATEWAY_CLIENT: Path(args.token_file), **_gateway_named_token_files(args.client)}
     digests: dict[str, str] = {}

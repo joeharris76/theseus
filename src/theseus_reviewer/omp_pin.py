@@ -86,7 +86,7 @@ def pin_digest(pin: Pin) -> str:
 
 
 def pin_from_text(text: str) -> Pin:
-    import yaml
+    from ._vendor import yaml
 
     try:
         data = yaml.safe_load(text)

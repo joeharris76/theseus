@@ -10,9 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from . import absence, commands, evidence, omp_pin
+from ._vendor import yaml
 from .candidate_canaries import CANARIES, GROUPS, PROVIDERS, WHERES, Canary, control_name, group_canaries, overlay_name
 from .candidate_chain import AGENTS_TOKEN, BREACH_TOOLS, CLAUDE_TOKEN, NATIVE_TOKEN, ClientRun
 from .candidate_env import quiet_env

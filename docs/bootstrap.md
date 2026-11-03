@@ -22,7 +22,7 @@ The lock is the format already reviewed by the gate: `.github/theseus-lock.json`
 - A dependency requirement (`Requires-Dist`, evaluated for this interpreter and platform, including environment markers) that the lock has no hash for, or whose locked version is outside the declared range; a wheel for another platform or an unsatisfied `Requires-Python`.
 - A wheel whose `RECORD` does not list exactly its archive entries with matching hashes, symlinks, unsafe paths, `.pth` hooks, `.data` directories, and native binaries in the Theseus wheel itself.
 
-Only the dependency closure reachable from the verified Theseus wheel is fetched and installed. The lock format carries one sha256 per dependency, so a dependency that is only published as platform wheels (for example PyYAML) pins one platform per lock.
+Only the dependency closure reachable from the verified Theseus wheel is fetched and installed. The Theseus wheel has no runtime dependencies (its YAML parser is vendored pure Python), so an empty `dependencies` list is the normal lock and one lock serves every platform and Python 3.11+. The installer still resolves, verifies and installs a closure when a lock names one (for example a locked pure-Python wheel); the lock format carries one sha256 per dependency, so a dependency that is only published as platform wheels would pin one platform per lock.
 
 ## Installation and reuse
 

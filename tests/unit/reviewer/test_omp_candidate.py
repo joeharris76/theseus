@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from tests.conftest import ALPHA_POLICY, CONSUMER_ALPHA
 from tests.conftest import FIXTURES as DATA_FIXTURES
 
@@ -26,6 +25,7 @@ from theseus_reviewer import (
     omp_candidate,
     omp_pin,
 )
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientRun
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]

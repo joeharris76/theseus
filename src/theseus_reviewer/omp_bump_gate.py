@@ -4,9 +4,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-import yaml
-
 from . import omp_pin
+from ._vendor import yaml
 
 FIXTURE_SUFFIX = ".jsonl"
 EVIDENCE_PLATFORM = "darwin-arm64"

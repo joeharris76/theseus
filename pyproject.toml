@@ -9,7 +9,7 @@ description = "Independent oracle reviewer and merge gate for pull requests"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6.0.2,<7"]
+dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
@@ -52,6 +52,7 @@ line-length = 120
 indent-width = 4
 target-version = "py311"
 src = ["src", "tests", "tools"]
+extend-exclude = ["src/theseus_reviewer/_vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 
-import yaml
-
 from theseus_reviewer import isolation, omp_pin
+from theseus_reviewer._vendor import yaml
 
 from .fake_github import APP_TOKEN, JOB_TOKEN
 from .harness import (

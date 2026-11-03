@@ -12,7 +12,7 @@ Theseus is extracted from BenchBox. This file records the exact source baseline,
 ## Notices
 
 - `LICENSE` is MIT. It carries the repository copyright and the BenchBox copyright notice of the extracted code (`Copyright (c) 2026 Joe Harris / BenchBox Project`), which the MIT license requires to be retained. The seeded files carry no per-file copyright or third-party license headers (checked with a case-insensitive search for `copyright` and `licen[sc]e` over `src/`).
-- Runtime dependencies are declared in `pyproject.toml` and locked in `uv.lock`; their licenses stay with their distributions.
+- The wheel has no runtime dependencies. Its YAML parser is vendored pure Python: PyYAML 6.0.3, `lib/yaml/*.py` from the upstream sdist `https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz` (sha256 `d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f`, matching PyPI's published digest). The files sit byte-identical under `src/theseus_reviewer/_vendor/yaml/` except that `cyaml.py` (the libyaml binding) is omitted, so no C extension or ambient `yaml` can be loaded. Its MIT license (`Copyright (c) 2017-2021 Ingy döt Net`, `Copyright (c) 2006-2016 Kirill Simonov`) is retained as `src/theseus_reviewer/_vendor/yaml/LICENSE`. `tests/unit/test_vendored_yaml.py` pins the vendored file digest, and ruff excludes `_vendor`.
 - OMP is not bundled or redistributed. It is installed from consumer-pinned, hash-verified sources (`install-omp`).
 
 ## Normalized seed source hash
@@ -50,7 +50,9 @@ Reviewable as `git diff 4b76a4a HEAD -- src` (source) and by commit:
 3. `soundness_paths.py` became the standalone, import-pure matcher module with no default manifest and union semantics; `inert_paths.py` kept only matching; `matchers.py`, `matcher_cli.py` and `theseus matcher verify` add loading and vendored-drift detection. See [docs/matcher.md](docs/matcher.md).
 4. The `theseus` CLI (`main.py`, `__main__.py`) wraps the seeded argparse dispatcher and adds `gate`, `promotion-check`, `bootstrap`, `matcher` and the OMP maintenance commands. The in-process gate import became a `theseus gate` subprocess.
 5. `bootstrap.py` is the consumer installer. See [docs/bootstrap.md](docs/bootstrap.md).
-6. Seeded tests were ported; BenchBox-owned tests were removed (see below) and new tests cover identity isolation, the installer refusal matrix and the isolated matcher.
+6. YAML is vendored (`_vendor/yaml`, see Notices) and every `import yaml` became `from ._vendor import yaml`; `PyYAML` left the dependencies, so the lock's dependency closure is normally empty.
+7. Local review phases no longer run `python -P -m theseus_reviewer` (which cannot import the package under the bootstrap launcher's `-IBS` and would import an ambient copy under `PYTHONPATH`): `selfexec.package_command()` re-executes the running interpreter with `-I -B -S` and only the verified package's parent directory on the import path, and every `PYTHON*` variable is removed from the phase environment. `github.gate_command()` has no fallback: `THESEUS_GATE_COMMAND` must name the separately verified gate. The default local base branch is read from the policy at `--trusted-ref`, never from the working tree. `promotion-check` also verifies `source_sha256`.
+8. Seeded tests were ported; BenchBox-owned tests were removed (see below) and new tests cover identity isolation, the installer refusal matrix and the isolated matcher.
 
 ## Retained identities and wording
 

@@ -33,6 +33,7 @@ from . import (
     redaction_check,
     report,
     selection,
+    selfexec,
 )
 from .classifier import ChangedFile, soundness_scope
 from .commands import LOOPBACK_PROXY
@@ -563,7 +564,7 @@ class Trusted:
 
     @classmethod
     def read(cls, root: Path, base_ref: str, policy_path: str) -> Trusted:
-        import yaml
+        from ._vendor import yaml
 
         policy_text = _git(root, "show", f"{base_ref}:{policy_path}")
         try:
@@ -584,7 +585,7 @@ class Trusted:
 
     def digest(self) -> str:
         package = Path(__file__).resolve().parent
-        files = sorted(item for item in (*package.glob("*.py"), *package.glob("templates/*")) if item.is_file())
+        files = sorted(item for item in package.rglob("*") if item.is_file() and "__pycache__" not in item.parts)
         digest = hashlib.sha256()
         for text in (self.policy, *(f"{path}\0{text}" for path, text in self.files)):
             digest.update(hashlib.sha256(text.encode("utf-8")).digest())
@@ -858,10 +859,7 @@ class Run:
         output = outputs / f"{phase}.txt"
         output.write_text("", encoding="utf-8")
         argv = [
-            sys.executable,
-            "-P",
-            "-m",
-            "theseus_reviewer",
+            *selfexec.package_command(),
             "drive",
             "--policy",
             str(self.policy),
@@ -872,7 +870,7 @@ class Run:
         result = subprocess.run(
             argv,
             cwd=self.trusted_root,
-            env={**self._environ(phase, self.grants(phase)), **(extra or {})},
+            env=selfexec.scrubbed_environment({**self._environ(phase, self.grants(phase)), **(extra or {})}),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1319,13 +1317,22 @@ def _member_review(args: argparse.Namespace, reporter: Reporter) -> int:
     return EXIT_PROCEED
 
 
-def _default_base_ref(args: argparse.Namespace) -> None:
+def _default_base_ref(args: argparse.Namespace, root: Path) -> None:
     if args.base_ref:
         return
+    if not args.trusted_ref:
+        raise Refused(
+            "--base-ref was not given: pass --base-ref, or --trusted-ref so the gated base comes from that commit's "
+            "policy rather than from the working tree"
+        )
     try:
-        args.base_ref = f"origin/{load_policy(Path(args.policy)).consumer.gated_base}"
-    except (PolicyError, OSError, ValueError) as exc:
-        raise Refused(f"--base-ref was not given and the gated base cannot be read from {args.policy}: {exc}") from exc
+        from ._vendor import yaml
+
+        text = _git(root, "show", f"{args.trusted_ref}:{args.policy}")
+        gated_base = parse_policy(yaml.safe_load(text)).consumer.gated_base
+    except (PolicyError, OSError, ValueError, yaml.YAMLError) as exc:
+        raise Refused(f"the gated base cannot be read from {args.policy} at {args.trusted_ref}: {exc}") from exc
+    args.base_ref = f"origin/{gated_base}"
 
 
 def command_review(args: argparse.Namespace) -> int:
@@ -1336,7 +1343,7 @@ def command_review(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     subject = "the member review" if member else "to open the PR"
     try:
-        _default_base_ref(args)
+        _default_base_ref(args, Path.cwd())
         return _member_review(args, reporter) if member else _review(args, reporter)
     except Refused as exc:
         reporter.say(f"Refusing {subject}: {exc}", error=True)

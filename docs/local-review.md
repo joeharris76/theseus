@@ -16,7 +16,9 @@ python3 -I -S .github/theseus-bootstrap.py run --repo . --commit "$(git rev-pars
 - Any failure to resolve the commit, read or parse the lock, fetch bytes or match a hash refuses before anything executes. There is no fallback to an older install, an export directory or a `theseus` on `PATH`. A warm install is re-verified on every call and is reused only when it matches the lock's artifact, dependencies, interpreter and platform.
 - An already verified install can be called directly with the executable that `bootstrap install` printed: `<executable> local-review --policy ...`.
 
-The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. `--base-ref` defaults to `origin/<consumer.gated_base>`; `--repo` falls back to `ORACLE_LOCAL_REPOSITORY`, then the origin remote.
+The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. Without `--base-ref`, pass `--trusted-ref REF`: the base is `origin/<consumer.gated_base>` read from the policy at that commit, never from the working tree (a branch could otherwise pick the ref that supplies its own rules); with neither flag the review refuses. `--repo` falls back to `ORACLE_LOCAL_REPOSITORY`, then the origin remote.
+
+Each review phase runs as a child of the verified install: the same interpreter with `-I -B -S`, the running package's parent directory as the only added import path, and every `PYTHON*` variable removed from the phase environment. A `PYTHONPATH`, a user or system `theseus_reviewer`, or a checkout on the working directory is therefore never imported.
 
 ## Exit status
 
@@ -50,7 +52,7 @@ Every secret above is withheld from the reviewer: at start the process hands the
 |---|---|
 | `--reviewer-ref` (export source) | the lock at `--commit` names the exact artifact |
 | `--record-out FILE` | `ORACLE_LOCAL_RECORD_OUT=FILE` |
-| implicit `origin/develop` base | `origin/<consumer.gated_base>` from the policy |
+| implicit `origin/develop` base | `origin/<consumer.gated_base>` from the policy at `--trusted-ref` |
 | `~/.cache/benchbox/local-oracle` | `~/.cache/theseus/local-oracle`, or the old directory through `THESEUS_LOCAL_STATE` |
 | `BENCHBOX_EPHEMERAL_CLONE=1` (cloud session marker) | `THESEUS_EPHEMERAL_CLONE=1` |
 | `.git/benchbox-cloud-gateway.status` (cloud gateway proxy record) | `.git/theseus-cloud-gateway.status`, same `gateway_proxy=` line |

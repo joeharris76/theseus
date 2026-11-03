@@ -6,10 +6,10 @@ import stat
 from pathlib import Path
 
 import pytest
-import yaml
 from tests.conftest import ALPHA_POLICY, CONSUMER_ALPHA
 
 from theseus_reviewer import cli
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import matching
 from theseus_reviewer.matchers import load_matchers
 from theseus_reviewer.policy import Policy

@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+
+from theseus_reviewer._vendor import yaml
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 

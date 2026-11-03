@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 from tests.conftest import ALPHA_POLICY, BETA_POLICY, CONSUMER_ALPHA, CONSUMER_BETA
 
 from theseus_reviewer import gate, github, omp_bump_gate, review_check
+from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import PolicyError, load_policy, parse_policy
 from theseus_reviewer.review_check import WAITING
 

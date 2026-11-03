@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+
+from theseus_reviewer._vendor import yaml
 
 TARGET = os.environ.get("PARITY_TARGET", "")
 PYTHON = os.environ.get("PARITY_PYTHON", "")

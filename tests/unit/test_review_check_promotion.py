@@ -632,7 +632,7 @@ def test_bootstrap_ship_receipt_cannot_replace_authenticated_exact_lock_approval
 
 
 def test_hosted_promotion_policy_comes_from_exact_base_commit(monkeypatch: pytest.MonkeyPatch) -> None:
-    import yaml
+    from theseus_reviewer._vendor import yaml
 
     raw = yaml.safe_load((CONSUMER_ALPHA / POLICY_REL).read_text(encoding="utf-8"))
     raw["promotion"] = {
