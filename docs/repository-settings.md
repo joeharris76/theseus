@@ -1,14 +1,14 @@
 # Repository settings
 
-Owner actions on `BenchBox-dev/theseus`. This document does not claim any of these are applied; the owner must apply and verify them.
+Owner actions on `joeharris76/theseus`. Repository, visibility, license and default branch are already in place; the remaining rows are not applied until the owner applies and verifies them.
 
 | Setting | Required value |
 | --- | --- |
-| Repository | `BenchBox-dev/theseus` (owner creates or grants access) |
+| Repository | `joeharris76/theseus` |
 | Visibility | Public |
 | License | MIT (`LICENSE`) |
 | Default branch | `main` |
-| Branch protection on `main` | Require pull request; at least 1 approving review; require review from Code Owners; dismiss stale approvals on new commits; require approval of the most recent push; require conversation resolution; require linear history; no force pushes; no deletions; apply to administrators |
+| Branch protection on `main` | Require pull request; require conversation resolution; no force pushes; no deletions; apply to administrators. Approving reviews are not required while the owner is the sole maintainer: the owner's full-diff review is recorded by the owner performing the merge. Linear history is not required so the extraction pull request can merge with a merge commit and keep its seed commit identity. |
 | Required status checks | `test (py3.11)`, `test (py3.13)`, `build and installed-wheel smoke`; require branches up to date |
 | Actions permissions | Allow-list of actions; default `GITHUB_TOKEN` read-only; approval required for all outside-collaborator workflow runs |
 | Secrets/environments | No repository-level secrets; no secret-bearing environment reachable from fork or candidate workflows |

@@ -7,11 +7,11 @@ Theseus is extracted from BenchBox. This file records the exact source baseline,
 - Source repository: BenchBox (`BenchBox-dev/BenchBox`)
 - Baseline commit: `95c423c35efd3fb4962145bdc628006d5aaaad26` (`origin/develop` after PR #3929)
 - Decision records: `_project/decisions/theseus-oracle-extraction-2026-11-02.md` and its inventory, in the baseline commit.
-- Seed commit: `d15442eaacac8afb600f6cd4e0880c99bdf5da43`, the first commit on `feat/initial-extraction` after `main`. It holds every mapped file byte-identical to the baseline blob at its mapped path, plus `tools/seed_map.json`, `tools/seed_hash.py` and this file. Later commits adapt the code; `git diff <seed commit> HEAD -- src` is the reviewable adaptation delta.
+- Seed commit: `4b76a4a3ddf11b531a637f10a2a58cff4fee563f` (`chore: seed reviewer, gate and matcher source from BenchBox 95c423c`), the first commit after the repository governance commit. It holds every mapped file byte-identical to the baseline blob at its mapped path, plus `tools/seed_map.json`, `tools/seed_hash.py` and this file. Later commits adapt the code; `git diff <seed commit> HEAD -- src` is the reviewable adaptation delta. The extraction pull request is merged with a merge commit so these commit identities stay on `main`.
 
 ## Notices
 
-- `LICENSE` is the BenchBox MIT license, copied unchanged (`Copyright (c) 2026 Joe Harris / BenchBox Project`). The seeded files carry no per-file copyright or third-party license headers (checked with a case-insensitive search for `copyright` and `licen[sc]e` over `src/`).
+- `LICENSE` is MIT. It carries the repository copyright and the BenchBox copyright notice of the extracted code (`Copyright (c) 2026 Joe Harris / BenchBox Project`), which the MIT license requires to be retained. The seeded files carry no per-file copyright or third-party license headers (checked with a case-insensitive search for `copyright` and `licen[sc]e` over `src/`).
 - Runtime dependencies are declared in `pyproject.toml` and locked in `uv.lock`; their licenses stay with their distributions.
 - OMP is not bundled or redistributed. It is installed from consumer-pinned, hash-verified sources (`install-omp`).
 
@@ -43,7 +43,7 @@ Not moved (BenchBox-owned consumer code): policy and manifests, read-index scann
 
 ## Adaptation after the seed
 
-Reviewable as `git diff d15442e HEAD -- src` (source) and by commit:
+Reviewable as `git diff 4b76a4a HEAD -- src` (source) and by commit:
 
 1. Imports became relative package imports (`oracle_reviewers.*`, `oracle_gate`, `oracle_review_check`, `_project.scripts.*` to `theseus_reviewer.*`); no behavior change.
 2. Consumer identity and paths moved out of the code: the policy now requires a `consumer` section (gated base, attesters, soundness, inert and OMP config manifests) beside `bot_login`; `PromotionRules` lost its BenchBox repository and reviewer defaults; every removed constant (`ORACLE_LOGIN`, `STANDIN_ATTESTERS`, `ATTESTERS`, `GATED_BASE`, `DEVELOP`, `TRUSTED_BRANCH`, `POLICY_PATH`, `REPO_ROOT`, default cache, default repository, default policy) became a parameter; the gate evaluates with the configured `bot_login`. See [docs/consumer-policy.md](docs/consumer-policy.md).
@@ -75,7 +75,7 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `fcd498ee52836fbafe1b638e61d214398a30d2f3` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `aefc1f5835e74de697d5cb9679f433123f9a676e` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
 
 ```
 frozen source hash   d2e4bbe6c69fedf694542803071e2da9cfd7dda65254f4c9165fec5e4fc38a78
