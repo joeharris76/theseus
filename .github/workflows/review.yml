@@ -1,0 +1,490 @@
+name: theseus-review
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Name of the caller environment that holds the reviewer, gateway and App secrets
+        required: true
+        type: string
+      theseus_ref:
+        description: Full commit SHA of this workflow; the caller pins the same SHA on its uses line
+        required: true
+        type: string
+      theseus_repository:
+        description: Repository that holds the bootstrap installer at theseus_ref
+        required: false
+        type: string
+        default: joeharris76/theseus
+      gated_base:
+        description: Branch the review applies to; its tip supplies the trusted policy and lock
+        required: true
+        type: string
+      policy_path:
+        description: Repository-relative path of the consumer review policy in the trusted checkout
+        required: false
+        type: string
+        default: .github/oracle-reviewers.yml
+      trusted_paths:
+        description: Sparse-checkout patterns that cover the policy, manifests and omp config
+        required: false
+        type: string
+        default: .github
+      caller_workflow:
+        description: File name of the caller workflow that runs this one
+        required: false
+        type: string
+        default: oracle-verdict.yml
+
+permissions: {}
+
+jobs:
+  guard:
+    name: guard
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Refuse a malformed pin, a foreign caller or a dispatch from another branch
+        env:
+          THESEUS_REF: ${{ inputs.theseus_ref }}
+          GATED_BASE: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$THESEUS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "theseus-review: error: theseus_ref must be a full 40-hex commit SHA" >&2
+            exit 2
+          fi
+          if [ -z "$GATED_BASE" ]; then
+            echo "theseus-review: error: gated_base is required" >&2
+            exit 2
+          fi
+          case "$WORKFLOW_REF" in
+            "$REPOSITORY/.github/workflows/$CALLER_WORKFLOW@"*) ;;
+            *)
+              echo "theseus-review: error: caller workflow $WORKFLOW_REF is not $REPOSITORY/.github/workflows/$CALLER_WORKFLOW" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$CURRENT_REF" != "refs/heads/$GATED_BASE" ]; then
+            echo "theseus-review: error: dispatch runs only from $GATED_BASE" >&2
+            exit 2
+          fi
+
+  sweep:
+    name: sweep
+    needs: guard
+    if: >-
+      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      (github.event_name == 'schedule' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' }}
+      POLICY_PATH: ${{ inputs.policy_path }}
+    steps:
+      - name: Check out the trusted gated-branch copy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the pinned Theseus bootstrap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install the reviewer pin from the trusted base lock
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-reviewer-install
+        run: |
+          set -euo pipefail
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo trusted --commit "$TRUSTED_SHA" --cache-dir "$INSTALL_CACHE")"
+          dirname "$EXECUTABLE" >> "$GITHUB_PATH"
+
+      - name: Mint the App token for failure statuses
+        id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORACLE_APP_ID }}
+          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+
+      - name: Dispatch due retries
+        timeout-minutes: 8
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SURFACE_TOKEN: ${{ steps.app.outputs.token }}
+        run: theseus drive --policy "$POLICY_PATH" sweep
+
+  review:
+    name: review
+    needs: guard
+    if: >-
+      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base)) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/oracle-review') || startsWith(github.event.comment.body, 'Oracle adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
+    runs-on: ubuntu-latest
+    timeout-minutes: 255
+    environment: ${{ inputs.environment }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      HAS_TAILNET: ${{ secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != '' }}
+      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' }}
+      POLICY_PATH: ${{ inputs.policy_path }}
+    steps:
+      - name: Check out the trusted gated-branch copy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the pinned Theseus bootstrap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install the reviewer pin from the trusted base lock
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-reviewer-install
+        run: |
+          set -euo pipefail
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo trusted --commit "$TRUSTED_SHA" --cache-dir "$INSTALL_CACHE")"
+          dirname "$EXECUTABLE" >> "$GITHUB_PATH"
+
+      - name: Prepare the review
+        id: prepare
+        timeout-minutes: 15
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: theseus drive --policy "$POLICY_PATH" prepare
+
+      - name: Check out the pull request head for reading only
+        if: steps.prepare.outputs.decision == 'review'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.prepare.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Scan the disk for secret values before the reviewer runs
+        if: steps.prepare.outputs.decision == 'review'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          JOB_TOKEN: ${{ github.token }}
+        run: theseus drive --policy "$POLICY_PATH" scan
+
+      - name: Install omp
+        id: harness
+        if: steps.prepare.outputs.decision == 'review'
+        timeout-minutes: 10
+        working-directory: trusted
+        run: theseus drive --policy "$POLICY_PATH" harness
+
+      - name: Join the tailnet to reach the credential gateway
+        if: steps.prepare.outputs.decision == 'review' && env.HAS_TAILNET == 'true'
+        continue-on-error: true
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CI_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          tags: tag:oracle-ci
+
+      - name: Scan the disk for secret values after the tailnet join
+        if: steps.prepare.outputs.decision == 'review'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          JOB_TOKEN: ${{ github.token }}
+        run: theseus drive --policy "$POLICY_PATH" scan
+
+      - name: Verify Linux process isolation
+        if: steps.prepare.outputs.decision == 'review'
+        timeout-minutes: 5
+        working-directory: trusted
+        run: theseus drive --policy "$POLICY_PATH" isolation
+
+      - name: Run the attempt loop
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 225
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" attempts
+
+      - name: Classify the invalid attempt after attempt 1
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: theseus drive --policy "$POLICY_PATH" recover
+
+      - name: Resume the attempt loop after attempt 1
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 225
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" attempts
+
+      - name: Classify the invalid attempt after attempt 2
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: theseus drive --policy "$POLICY_PATH" recover
+
+      - name: Resume the attempt loop after attempt 2
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 225
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" attempts
+
+      - name: Classify the invalid attempt after attempt 3
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: theseus drive --policy "$POLICY_PATH" recover
+
+      - name: Resume the attempt loop after attempt 3
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 225
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" attempts
+
+      - name: Classify the invalid attempt after attempt 4
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: theseus drive --policy "$POLICY_PATH" recover
+
+      - name: Resume the attempt loop after attempt 4
+        if: steps.prepare.outputs.decision == 'review' && steps.harness.outputs.state == 'installed'
+        timeout-minutes: 225
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" attempts
+
+      - name: Scan the disk for secret values after the reviewer exits
+        if: steps.prepare.outputs.decision == 'review'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          JOB_TOKEN: ${{ github.token }}
+        run: theseus drive --policy "$POLICY_PATH" scan
+
+      - name: Decide the verdict and redact every secret value from the results
+        id: finalize
+        if: steps.prepare.outputs.post == 'true'
+        timeout-minutes: 15
+        working-directory: trusted
+        env:
+          OMP_INSTALL_STATE: ${{ steps.harness.outputs.state }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          TS_OAUTH_CI_CLIENT_ID: ${{ secrets.TS_OAUTH_CI_CLIENT_ID }}
+          TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          JOB_TOKEN: ${{ github.token }}
+        run: theseus drive --policy "$POLICY_PATH" finalize
+
+      - name: Mint the App token
+        id: app
+        if: steps.prepare.outputs.post == 'true' && env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORACLE_APP_ID }}
+          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+          permission-pull-requests: write
+          permission-contents: read
+
+      - name: Check out the current gated-branch gate
+        if: steps.prepare.outputs.post == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.gated_base }}
+          path: gate
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Install the gate pin from the current gated-branch lock
+        id: gate_pin
+        if: steps.prepare.outputs.post == 'true'
+        continue-on-error: true
+        env:
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-gate-install
+        run: |
+          set -euo pipefail
+          GATE_SHA="$(git -C gate rev-parse HEAD)"
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo gate --commit "$GATE_SHA" --cache-dir "$INSTALL_CACHE")"
+          echo "command=$EXECUTABLE" >> "$GITHUB_OUTPUT"
+          echo "sha=$GATE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Post the result
+        id: publish
+        if: steps.prepare.outputs.post == 'true'
+        timeout-minutes: 10
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          JOB_TOKEN: ${{ github.token }}
+          THESEUS_GATE_COMMAND: ${{ steps.gate_pin.outputs.command }}
+          THESEUS_GATE_ROOT: ${{ github.workspace }}/gate
+        run: theseus drive --policy "$POLICY_PATH" publish
+
+      - name: Record the retry attempt
+        if: always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.has_state == 'true' && steps.publish.outputs.skip != 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          overwrite: true
+          name: oracle-verdict-state-attempt-${{ steps.prepare.outputs.pr }}
+          path: ${{ runner.temp }}/oracle-final/attempt/state.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload the retry state
+        if: steps.publish.outputs.state_recorded == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          overwrite: true
+          name: oracle-verdict-state-${{ steps.prepare.outputs.pr }}
+          path: ${{ runner.temp }}/oracle-final/state/state.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload attempt 1
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 1 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-attempt-1
+          path: ${{ runner.temp }}/oracle-attempts/attempt-1.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload attempt 2
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 2 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-attempt-2
+          path: ${{ runner.temp }}/oracle-attempts/attempt-2.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload attempt 3
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 3 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-attempt-3
+          path: ${{ runner.temp }}/oracle-attempts/attempt-3.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload attempt 4
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 4 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-attempt-4
+          path: ${{ runner.temp }}/oracle-attempts/attempt-4.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload attempt 5
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 5 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-attempt-5
+          path: ${{ runner.temp }}/oracle-attempts/attempt-5.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the captured reviewer event streams
+        if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 1 }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: oracle-verdict-capture
+          path: ${{ runner.temp }}/oracle-attempts/captures/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Dispatch the gate for the reviewed head
+        if: steps.prepare.outputs.post == 'true' && env.HAS_APP == 'true' && steps.publish.outputs.skip != 'true'
+        timeout-minutes: 5
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          JOB_TOKEN: ${{ github.token }}
+        run: theseus drive --policy "$POLICY_PATH" dispatch
+
+      - name: Fail the run when the gate was not posted from it
+        if: always() && steps.publish.outputs.gate_failed == 'true'
+        run: |
+          echo "::error::oracle-gate was not posted from this run; the dispatched gate retries it"
+          exit 1

@@ -1,0 +1,157 @@
+version: 2
+mode: enforce
+status_context: oracle-verdict
+findings_delivery: review
+bot_login: benchbox-oracle
+brief_max_bytes: 100000
+max_attempts: 5
+protocol:
+  max_defects: 10
+  max_do_not_ship: 3
+retry:
+  daily_budget: 6
+  backoff_start_minutes: 60
+  sweep_max_dispatches: 5
+omp:
+  version: 18.13.3
+  builds:
+    linux-x64:
+      url: https://build.stencil.so/d/omp/20261028-125026-413d278/omp-linux-x64
+      sha256: 42d39fa8996fed9f999e26306e60e2fdbea0c0de0d0b2d68feba275f44c41d04
+    linux-arm64:
+      url: https://build.stencil.so/d/omp/20261028-125026-413d278/omp-linux-arm64
+      sha256: 981f08df6c6344356b31aa696fdd810b8b5fa8c8851ba926d3940e793d47cc3a
+    darwin-arm64:
+      url: https://build.stencil.so/d/omp/20261028-125026-413d278/omp-darwin-arm64
+      sha256: b449d0d0d779a0b2e655f0ce41d5c414a253de71c67b3affc30a6528fc967314
+pools: [claude, codex]
+reviewers:
+  trivial:
+    harness: omp
+    family: codex
+    pool: codex
+    model: "@smol"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 15
+    enabled: true
+  small:
+    harness: omp
+    family: codex
+    pool: codex
+    model: "@smol"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 20
+    enabled: true
+  medium:
+    harness: omp
+    family: claude
+    pool: claude
+    model: "@default"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 25
+    enabled: true
+  large:
+    harness: omp
+    family: claude
+    pool: claude
+    model: "@review"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 30
+    enabled: true
+  huge:
+    harness: omp
+    family: claude
+    pool: claude
+    model: "@plan"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 40
+    enabled: true
+  max:
+    harness: omp
+    family: claude
+    pool: claude
+    model: "@slow"
+    effort: ""
+    role: review
+    read_only: hard
+    reads_files: true
+    timeout_minutes: 45
+    enabled: true
+buckets:
+  trivial: trivial
+  small: small
+  medium: medium
+  large: large
+  huge: huge
+  max: max
+classifier:
+  gate_paths:
+    - .github/oracle-reviewers.yml
+    - .github/oracle-omp-config.yml
+    - .github/theseus-lock.json
+    - _project/scripts/theseus_bootstrap.py
+    - _project/scripts/oracle_gateway_host.sh
+    - .github/soundness-paths.txt
+    - .github/workflows/oracle-gate.yml
+    - .github/workflows/oracle-review.yml
+    - .github/workflows/oracle-verdict.yml
+    - .github/workflows/omp-pin-bump.yml
+    - .github/workflows/omp-pin-watch.yml
+    - .github/workflows/soundness-merge-digest.yml
+    - _project/scripts/oracle_gate.py
+    - _project/scripts/oracle_review_check.py
+    - _project/scripts/oracle_reviewers/*
+    - _project/scripts/soundness_paths.py
+    - _project/scripts/inert_paths.py
+    - .github/inert-paths.txt
+    - _project/inert-doc-readers.json
+    - _project/scripts/soundness_merge_digest.py
+    - _project/scripts/check_soundness_review.py
+    - _project/scripts/ruleset_review_enforcement.py
+    - scripts/ruleset_drift_check.py
+    - scripts/oracle_local_review.py
+  logic_paths:
+    - benchbox/core/equivalence/*
+    - benchbox/core/expected_results/*
+    - benchbox/core/results/*
+    - "*validation*"
+    - "*equivalence*"
+    - "*comparator*"
+    - "*result_capture*"
+    - "*result_digest*"
+  data_paths:
+    - _sources/tpc-h/dbgen/answers/*
+    - _sources/tpc-ds/answer_sets/*
+    - results-data/bundles/*.override.json
+    - _project/joinorder/*.json
+    - "*_specs.yaml"
+evidence:
+  exempt_paths:
+    - "README*.md"
+    - "**/README*.md"
+    - "CHANGELOG*.md"
+    - "**/CHANGELOG*.md"
+    - "docs/*.md"
+consumer:
+  gated_base: develop
+  attesters:
+    - joeharris76
+  soundness_manifest: .github/soundness-paths.txt
+  inert_manifest: .github/inert-paths.txt
+  omp_config: .github/oracle-omp-config.yml
+  omp_fixture_prefix: tests/fixtures/oracle_reviewers/omp_candidate

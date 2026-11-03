@@ -1,0 +1,4 @@
+glob	docs/**
+glob	*.md
+except	README.md
+except	docs/runbook/**

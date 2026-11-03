@@ -1,0 +1,5 @@
+prefix	src/engine/
+prefix	src/checks/
+file	policy/gate.cfg
+glob	data/**/*.golden
+regex	^src/(?:.+/)?compare\.py$

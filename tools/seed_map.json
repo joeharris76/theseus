@@ -1,0 +1,1000 @@
+{
+  "baseline_commit": "95c423c35efd3fb4962145bdc628006d5aaaad26",
+  "entries": [
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/__init__.py",
+      "theseus": "src/theseus_reviewer/__init__.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/absence.py",
+      "theseus": "src/theseus_reviewer/absence.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/adjudication.py",
+      "theseus": "src/theseus_reviewer/adjudication.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/attempts.py",
+      "theseus": "src/theseus_reviewer/attempts.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/base_change.py",
+      "theseus": "src/theseus_reviewer/base_change.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/brief.py",
+      "theseus": "src/theseus_reviewer/brief.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/candidate_canaries.py",
+      "theseus": "src/theseus_reviewer/candidate_canaries.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/candidate_chain.py",
+      "theseus": "src/theseus_reviewer/candidate_chain.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/candidate_checks.py",
+      "theseus": "src/theseus_reviewer/candidate_checks.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/candidate_env.py",
+      "theseus": "src/theseus_reviewer/candidate_env.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/candidate_stub.py",
+      "theseus": "src/theseus_reviewer/candidate_stub.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/classifier.py",
+      "theseus": "src/theseus_reviewer/classifier.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/classify.py",
+      "theseus": "src/theseus_reviewer/classify.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/cli.py",
+      "theseus": "src/theseus_reviewer/cli.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/commands.py",
+      "theseus": "src/theseus_reviewer/commands.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/credentials.py",
+      "theseus": "src/theseus_reviewer/credentials.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/dedup.py",
+      "theseus": "src/theseus_reviewer/dedup.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/diff.py",
+      "theseus": "src/theseus_reviewer/diff.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/disk_scan.py",
+      "theseus": "src/theseus_reviewer/disk_scan.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/driver.py",
+      "theseus": "src/theseus_reviewer/driver.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/edits.py",
+      "theseus": "src/theseus_reviewer/edits.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/evidence.py",
+      "theseus": "src/theseus_reviewer/evidence.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/findings.py",
+      "theseus": "src/theseus_reviewer/findings.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_gate.py",
+      "theseus": "src/theseus_reviewer/gate.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/github.py",
+      "theseus": "src/theseus_reviewer/github.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/inert_paths.py",
+      "theseus": "src/theseus_reviewer/inert_paths.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/isolation.py",
+      "theseus": "src/theseus_reviewer/isolation.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/jev.py",
+      "theseus": "src/theseus_reviewer/jev.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/local.py",
+      "theseus": "src/theseus_reviewer/local.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/omp_bump.py",
+      "theseus": "src/theseus_reviewer/omp_bump.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/omp_bump_gate.py",
+      "theseus": "src/theseus_reviewer/omp_bump_gate.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/omp_candidate.py",
+      "theseus": "src/theseus_reviewer/omp_candidate.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/omp_pin.py",
+      "theseus": "src/theseus_reviewer/omp_pin.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/omp_watch.py",
+      "theseus": "src/theseus_reviewer/omp_watch.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/policy.py",
+      "theseus": "src/theseus_reviewer/policy.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/processes.py",
+      "theseus": "src/theseus_reviewer/processes.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/promotion.py",
+      "theseus": "src/theseus_reviewer/promotion.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/protocol.py",
+      "theseus": "src/theseus_reviewer/protocol.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/recovery.py",
+      "theseus": "src/theseus_reviewer/recovery.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/redaction_check.py",
+      "theseus": "src/theseus_reviewer/redaction_check.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/render.py",
+      "theseus": "src/theseus_reviewer/render.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/report.py",
+      "theseus": "src/theseus_reviewer/report.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/reset.py",
+      "theseus": "src/theseus_reviewer/reset.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/retry.py",
+      "theseus": "src/theseus_reviewer/retry.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_review_check.py",
+      "theseus": "src/theseus_reviewer/review_check.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/runner.py",
+      "theseus": "src/theseus_reviewer/runner.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/selection.py",
+      "theseus": "src/theseus_reviewer/selection.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/soundness_paths.py",
+      "theseus": "src/theseus_reviewer/soundness_paths.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/sweep.py",
+      "theseus": "src/theseus_reviewer/sweep.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/templates/README.md",
+      "theseus": "src/theseus_reviewer/templates/README.md",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/templates/deep.md",
+      "theseus": "src/theseus_reviewer/templates/deep.md",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/templates/gate.md",
+      "theseus": "src/theseus_reviewer/templates/gate.md",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/templates/standard.md",
+      "theseus": "src/theseus_reviewer/templates/standard.md",
+      "kind": "source"
+    },
+    {
+      "benchbox": "_project/scripts/oracle_reviewers/verdict.py",
+      "theseus": "src/theseus_reviewer/verdict.py",
+      "kind": "source"
+    },
+    {
+      "benchbox": ".github/inert-paths.txt",
+      "theseus": "tests/fixtures/consumer/inert-paths.txt",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": ".github/oracle-omp-config.yml",
+      "theseus": "tests/fixtures/consumer/oracle-omp-config.yml",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": ".github/oracle-reviewers.yml",
+      "theseus": "tests/fixtures/consumer/oracle-reviewers.yml",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": ".github/soundness-paths.txt",
+      "theseus": "tests/fixtures/consumer/soundness-paths.txt",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/app_missing.json",
+      "theseus": "tests/fixtures/oracle_golden/app_missing.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/carry.json",
+      "theseus": "tests/fixtures/oracle_golden/carry.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/carry_disagrees_with_status_holds.json",
+      "theseus": "tests/fixtures/oracle_golden/carry_disagrees_with_status_holds.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/dispute_round.json",
+      "theseus": "tests/fixtures/oracle_golden/dispute_round.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/draft.json",
+      "theseus": "tests/fixtures/oracle_golden/draft.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/edited_prior_review_holds.json",
+      "theseus": "tests/fixtures/oracle_golden/edited_prior_review_holds.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/every_attempt_absent.json",
+      "theseus": "tests/fixtures/oracle_golden/every_attempt_absent.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/first_review_ships.json",
+      "theseus": "tests/fixtures/oracle_golden/first_review_ships.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/first_review_with_a_defect.json",
+      "theseus": "tests/fixtures/oracle_golden/first_review_with_a_defect.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/follow_up_after_a_fix.json",
+      "theseus": "tests/fixtures/oracle_golden/follow_up_after_a_fix.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/fork.json",
+      "theseus": "tests/fixtures/oracle_golden/fork.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/guard_gives_up.json",
+      "theseus": "tests/fixtures/oracle_golden/guard_gives_up.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/integrity_error.json",
+      "theseus": "tests/fixtures/oracle_golden/integrity_error.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/omp_install_failure.json",
+      "theseus": "tests/fixtures/oracle_golden/omp_install_failure.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/oversize_file_list.json",
+      "theseus": "tests/fixtures/oracle_golden/oversize_file_list.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/recovery_escalate.json",
+      "theseus": "tests/fixtures/oracle_golden/recovery_escalate.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/recovery_fallback.json",
+      "theseus": "tests/fixtures/oracle_golden/recovery_fallback.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/recovery_retry.json",
+      "theseus": "tests/fixtures/oracle_golden/recovery_retry.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/recovery_stop.json",
+      "theseus": "tests/fixtures/oracle_golden/recovery_stop.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/stale_same_head_state.json",
+      "theseus": "tests/fixtures/oracle_golden/stale_same_head_state.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_golden/unreadable_edit_state_posts_nothing.json",
+      "theseus": "tests/fixtures/oracle_golden/unreadable_edit_state_posts_nothing.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/captures/ci_attempt.json",
+      "theseus": "tests/fixtures/oracle_reviewers/captures/ci_attempt.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/captures/local_review.json",
+      "theseus": "tests/fixtures/oracle_reviewers/captures/local_review.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/check_runs_full_ci_in_progress.json",
+      "theseus": "tests/fixtures/oracle_reviewers/check_runs_full_ci_in_progress.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/dispute_3407.json",
+      "theseus": "tests/fixtures/oracle_reviewers/dispute_3407.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/dispute_3465.json",
+      "theseus": "tests/fixtures/oracle_reviewers/dispute_3465.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/jev_recovery_answers.json",
+      "theseus": "tests/fixtures/oracle_reviewers/jev_recovery_answers.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/build_api_latest.json",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/build_api_latest.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/chain_review.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/chain_review.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/elided_read.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/elided_read.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/gateway_rejection.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/gateway_rejection.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/manifest.json",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/manifest.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/quota_terminal.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/quota_terminal.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/quota_walk.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/quota_walk.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/roster_breach.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/roster_breach.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/static_outputs.json",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/static_outputs.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_candidate/upstream_auth.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_candidate/upstream_auth.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_multi_turn_review.jsonl",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_multi_turn_review.jsonl",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/omp_watch/attempts.json",
+      "theseus": "tests/fixtures/oracle_reviewers/omp_watch/attempts.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/pr2769_history.json",
+      "theseus": "tests/fixtures/oracle_reviewers/pr2769_history.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/pr3222_replay.json",
+      "theseus": "tests/fixtures/oracle_reviewers/pr3222_replay.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/pr3237_missing_text_fields.json",
+      "theseus": "tests/fixtures/oracle_reviewers/pr3237_missing_text_fields.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/pr3585_attempt-1.json",
+      "theseus": "tests/fixtures/oracle_reviewers/pr3585_attempt-1.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/pr3585_attempt-2.json",
+      "theseus": "tests/fixtures/oracle_reviewers/pr3585_attempt-2.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/fixtures/oracle_reviewers/provenance.json",
+      "theseus": "tests/fixtures/oracle_reviewers/provenance.json",
+      "kind": "fixture"
+    },
+    {
+      "benchbox": "tests/integration/oracle/__init__.py",
+      "theseus": "tests/integration/__init__.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/conftest.py",
+      "theseus": "tests/integration/conftest.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/fake_github.py",
+      "theseus": "tests/integration/fake_github.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/fake_jev.py",
+      "theseus": "tests/integration/fake_jev.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/fake_omp.py",
+      "theseus": "tests/integration/fake_omp.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/golden.py",
+      "theseus": "tests/integration/golden.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/harness.py",
+      "theseus": "tests/integration/harness.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/runs.py",
+      "theseus": "tests/integration/runs.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_ancestor_environment_leak.py",
+      "theseus": "tests/integration/test_ancestor_environment_leak.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_carry_scenarios.py",
+      "theseus": "tests/integration/test_carry_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_cloud_review_reachability_scenario.py",
+      "theseus": "tests/integration/test_cloud_review_reachability_scenario.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_curated_capture_fixtures.py",
+      "theseus": "tests/integration/test_curated_capture_fixtures.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_evidence_scenarios.py",
+      "theseus": "tests/integration/test_evidence_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_followup_scenarios.py",
+      "theseus": "tests/integration/test_followup_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_golden_outputs.py",
+      "theseus": "tests/integration/test_golden_outputs.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_invalid_recovery_scenarios.py",
+      "theseus": "tests/integration/test_invalid_recovery_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_local_concurrency_scenarios.py",
+      "theseus": "tests/integration/test_local_concurrency_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_local_driver_scenarios.py",
+      "theseus": "tests/integration/test_local_driver_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_local_findings_scenarios.py",
+      "theseus": "tests/integration/test_local_findings_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_local_review_scenario.py",
+      "theseus": "tests/integration/test_local_review_scenario.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_omp_pin_scenarios.py",
+      "theseus": "tests/integration/test_omp_pin_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_pr_arm_scenario.py",
+      "theseus": "tests/integration/test_pr_arm_scenario.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_pr_landing_soundness_scenario.py",
+      "theseus": "tests/integration/test_pr_landing_soundness_scenario.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_quota_scenarios.py",
+      "theseus": "tests/integration/test_quota_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_redaction_scenarios.py",
+      "theseus": "tests/integration/test_redaction_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_review_scenarios.py",
+      "theseus": "tests/integration/test_review_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_runner_isolation_scenarios.py",
+      "theseus": "tests/integration/test_runner_isolation_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_sweep_listing_scenarios.py",
+      "theseus": "tests/integration/test_sweep_listing_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_sweep_liveness_scenarios.py",
+      "theseus": "tests/integration/test_sweep_liveness_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_sweep_scenarios.py",
+      "theseus": "tests/integration/test_sweep_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_theseus_promotion_scenario.py",
+      "theseus": "tests/integration/test_theseus_promotion_scenario.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/integration/oracle/test_trust_scenarios.py",
+      "theseus": "tests/integration/test_trust_scenarios.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/__init__.py",
+      "theseus": "tests/unit/reviewer/__init__.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/conftest.py",
+      "theseus": "tests/unit/reviewer/conftest.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/loop_process.py",
+      "theseus": "tests/unit/reviewer/loop_process.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_absence.py",
+      "theseus": "tests/unit/reviewer/test_absence.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_absence_reset_redaction.py",
+      "theseus": "tests/unit/reviewer/test_absence_reset_redaction.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_absence_retry.py",
+      "theseus": "tests/unit/reviewer/test_absence_retry.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_attempt_loop.py",
+      "theseus": "tests/unit/reviewer/test_attempt_loop.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_attempt_tempfiles.py",
+      "theseus": "tests/unit/reviewer/test_attempt_tempfiles.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_attempts.py",
+      "theseus": "tests/unit/reviewer/test_attempts.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_brief.py",
+      "theseus": "tests/unit/reviewer/test_brief.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_carry_identity.py",
+      "theseus": "tests/unit/reviewer/test_carry_identity.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_citation_paths.py",
+      "theseus": "tests/unit/reviewer/test_citation_paths.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_classifier.py",
+      "theseus": "tests/unit/reviewer/test_classifier.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_classify.py",
+      "theseus": "tests/unit/reviewer/test_classify.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_cli_plan.py",
+      "theseus": "tests/unit/reviewer/test_cli_plan.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_commands.py",
+      "theseus": "tests/unit/reviewer/test_commands.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_credentials.py",
+      "theseus": "tests/unit/reviewer/test_credentials.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_dedup.py",
+      "theseus": "tests/unit/reviewer/test_dedup.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_dispute_escalation.py",
+      "theseus": "tests/unit/reviewer/test_dispute_escalation.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_dispute_keyed_evidence.py",
+      "theseus": "tests/unit/reviewer/test_dispute_keyed_evidence.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_driver.py",
+      "theseus": "tests/unit/reviewer/test_driver.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_edited_reviews.py",
+      "theseus": "tests/unit/reviewer/test_edited_reviews.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_evidence.py",
+      "theseus": "tests/unit/reviewer/test_evidence.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_evidence_retry.py",
+      "theseus": "tests/unit/reviewer/test_evidence_retry.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_findings_record.py",
+      "theseus": "tests/unit/reviewer/test_findings_record.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_gateway_host.py",
+      "theseus": "tests/unit/reviewer/test_gateway_host.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_github.py",
+      "theseus": "tests/unit/reviewer/test_github.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_invalid_recovery.py",
+      "theseus": "tests/unit/reviewer/test_invalid_recovery.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_isolation.py",
+      "theseus": "tests/unit/reviewer/test_isolation.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_jev.py",
+      "theseus": "tests/unit/reviewer/test_jev.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_local_review.py",
+      "theseus": "tests/unit/reviewer/test_local_review.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_local_windows_support.py",
+      "theseus": "tests/unit/reviewer/test_local_windows_support.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_omp_bump.py",
+      "theseus": "tests/unit/reviewer/test_omp_bump.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_omp_candidate.py",
+      "theseus": "tests/unit/reviewer/test_omp_candidate.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_omp_harness.py",
+      "theseus": "tests/unit/reviewer/test_omp_harness.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_omp_pin.py",
+      "theseus": "tests/unit/reviewer/test_omp_pin.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_omp_watch.py",
+      "theseus": "tests/unit/reviewer/test_omp_watch.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_policy.py",
+      "theseus": "tests/unit/reviewer/test_policy.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_promotion.py",
+      "theseus": "tests/unit/reviewer/test_promotion.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_protocol.py",
+      "theseus": "tests/unit/reviewer/test_protocol.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_redaction_check.py",
+      "theseus": "tests/unit/reviewer/test_redaction_check.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_render.py",
+      "theseus": "tests/unit/reviewer/test_render.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_report_body_cap.py",
+      "theseus": "tests/unit/reviewer/test_report_body_cap.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_report_outcomes.py",
+      "theseus": "tests/unit/reviewer/test_report_outcomes.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_reset.py",
+      "theseus": "tests/unit/reviewer/test_reset.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_response_ingress.py",
+      "theseus": "tests/unit/reviewer/test_response_ingress.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_retry.py",
+      "theseus": "tests/unit/reviewer/test_retry.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_reviewer_home.py",
+      "theseus": "tests/unit/reviewer/test_reviewer_home.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_rounds.py",
+      "theseus": "tests/unit/reviewer/test_rounds.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_runner.py",
+      "theseus": "tests/unit/reviewer/test_runner.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_same_head_rerun.py",
+      "theseus": "tests/unit/reviewer/test_same_head_rerun.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_scan_scratch.py",
+      "theseus": "tests/unit/reviewer/test_scan_scratch.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_selection.py",
+      "theseus": "tests/unit/reviewer/test_selection.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_sweep.py",
+      "theseus": "tests/unit/reviewer/test_sweep.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_sweep_liveness.py",
+      "theseus": "tests/unit/reviewer/test_sweep_liveness.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_template_test_quality_rule.py",
+      "theseus": "tests/unit/reviewer/test_template_test_quality_rule.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/oracle_reviewers/test_verdict.py",
+      "theseus": "tests/unit/reviewer/test_verdict.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_inert_paths.py",
+      "theseus": "tests/unit/test_inert_paths.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_oracle_gate.py",
+      "theseus": "tests/unit/test_oracle_gate.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_oracle_review_check.py",
+      "theseus": "tests/unit/test_oracle_review_check.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_oracle_review_check_decisions.py",
+      "theseus": "tests/unit/test_oracle_review_check_decisions.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_oracle_review_check_omp_bump.py",
+      "theseus": "tests/unit/test_oracle_review_check_omp_bump.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_oracle_review_check_promotion.py",
+      "theseus": "tests/unit/test_oracle_review_check_promotion.py",
+      "kind": "test"
+    },
+    {
+      "benchbox": "tests/unit/scripts/test_soundness_paths.py",
+      "theseus": "tests/unit/test_soundness_paths.py",
+      "kind": "test"
+    }
+  ]
+}
