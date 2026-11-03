@@ -91,6 +91,16 @@ class RetryRules:
 
 
 @dataclass(frozen=True)
+class Consumer:
+    gated_base: str
+    attesters: tuple[str, ...]
+    soundness_manifest: str
+    omp_config: str
+    inert_manifest: str | None = None
+    omp_fixture_prefix: str | None = None
+
+
+@dataclass(frozen=True)
 class EvidenceRules:
     exempt_paths: tuple[str, ...] = ()
 
@@ -106,12 +116,19 @@ DEFAULT_ALLOWED_ARTIFACT_HOSTS = (
 @dataclass(frozen=True)
 class PromotionRules:
     package: str = "theseus-reviewer"
-    repository: str = "BenchBox-dev/theseus"
+    repository: str = ""
     bootstrap_baseline_commit: str | None = None
     bootstrap_path_map: Mapping[str, str] = field(default_factory=dict)
-    bootstrap_reviewers: tuple[str, ...] = ("joeharris76",)
+    bootstrap_reviewers: tuple[str, ...] = ()
     allowed_artifact_hosts: tuple[str, ...] = DEFAULT_ALLOWED_ARTIFACT_HOSTS
     dependencies: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Binding:
+    bot_login: str
+    attesters: frozenset[str]
+    gated_base: str
 
 
 @dataclass(frozen=True)
@@ -128,9 +145,13 @@ class Policy:
     reviewers: Mapping[str, Reviewer]
     buckets: Mapping[str, str]
     classifier: ClassifierRules
+    consumer: Consumer
     omp_sha256: Mapping[str, str] = field(default_factory=dict)
     evidence: EvidenceRules = EvidenceRules()
     promotion: PromotionRules = PromotionRules()
+
+    def binding(self) -> Binding:
+        return Binding(self.bot_login, frozenset(self.consumer.attesters), self.consumer.gated_base)
 
     def chain(self, bucket: str) -> list[Reviewer]:
         return [self.reviewers[self.buckets[bucket]]]
@@ -185,6 +206,55 @@ def _reviewer(name: str, data: Mapping[str, Any], pools: tuple[str, ...]) -> Rev
     return reviewer
 
 
+def _relative_path(value: Any, label: str) -> str:
+    _require(isinstance(value, str) and bool(value.strip()), f"{label} is required")
+    parts = value.split("/")
+    _require(
+        not value.startswith("/") and "\\" not in value and ".." not in parts and "" not in parts and "." not in parts,
+        f"{label} must be a repository-relative path",
+    )
+    return value
+
+
+def _consumer(data: Any) -> Consumer:
+    _require(
+        isinstance(data, Mapping),
+        "policy needs a consumer section naming gated_base, attesters, soundness_manifest and omp_config; "
+        "the package has no consumer defaults",
+    )
+    unknown = set(data) - {
+        "gated_base",
+        "attesters",
+        "soundness_manifest",
+        "omp_config",
+        "inert_manifest",
+        "omp_fixture_prefix",
+    }
+    _require(not unknown, f"consumer has unknown keys {sorted(unknown)}")
+    gated_base = data.get("gated_base")
+    _require(
+        isinstance(gated_base, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", gated_base) is not None,
+        "consumer gated_base must be a branch name",
+    )
+    attesters = _str_tuple(data.get("attesters"), "consumer attesters")
+    _require(
+        bool(attesters) and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", item) for item in attesters),
+        "consumer attesters must be a non-empty list of GitHub logins",
+    )
+    inert = data.get("inert_manifest")
+    fixtures = data.get("omp_fixture_prefix")
+    return Consumer(
+        gated_base=gated_base,
+        attesters=attesters,
+        soundness_manifest=_relative_path(data.get("soundness_manifest"), "consumer soundness_manifest"),
+        omp_config=_relative_path(data.get("omp_config"), "consumer omp_config"),
+        inert_manifest=None if inert is None else _relative_path(inert, "consumer inert_manifest"),
+        omp_fixture_prefix=None
+        if fixtures is None
+        else _relative_path(fixtures.rstrip("/"), "consumer omp_fixture_prefix") + "/",
+    )
+
+
 def parse_policy(data: Mapping[str, Any]) -> Policy:
     _require(isinstance(data, Mapping) and data.get("version") == 2, "policy version must be 2")
     pools = _str_tuple(data.get("pools"), "pools")
@@ -199,6 +269,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
     for bucket in SIZE_BUCKETS:
         _require(buckets_data[bucket] in reviewers, f"bucket {bucket} names unknown reviewer {buckets_data[bucket]}")
     classifier = data.get("classifier") or {}
+    consumer = _consumer(data.get("consumer"))
     retry = data.get("retry") or {}
     protocol = data.get("protocol") or {}
     omp_sha256: dict[str, str] = {}
@@ -211,14 +282,18 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
     promotion_raw = data.get("promotion") or {}
     _require(isinstance(promotion_raw, Mapping), "promotion must be a mapping")
     promo_package = promotion_raw.get("package", "theseus-reviewer")
-    promo_repository = promotion_raw.get("repository", "BenchBox-dev/theseus")
+    promo_repository = promotion_raw.get("repository", "")
+    _require(
+        not promotion_raw or bool(promo_repository),
+        "promotion repository is required when the policy has a promotion section",
+    )
     _require(
         isinstance(promo_package, str) and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", promo_package) is not None,
         "promotion package must be a valid package name",
     )
     _require(
         isinstance(promo_repository, str)
-        and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", promo_repository) is not None,
+        and (not promo_repository or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", promo_repository) is not None),
         "promotion repository must be owner/name",
     )
     baseline_commit = promotion_raw.get("bootstrap_baseline_commit")
@@ -241,12 +316,11 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         clean_src = src_key.strip("/")
         _require(clean_src not in parsed_path_map, "promotion bootstrap_path_map has duplicate source paths")
         parsed_path_map[clean_src] = dst_val.strip("/")
-    promo_reviewers = _str_tuple(
-        promotion_raw.get("bootstrap_reviewers", ["joeharris76"]),
-        "promotion bootstrap_reviewers",
-    )
+    promo_reviewers = _str_tuple(promotion_raw.get("bootstrap_reviewers", []), "promotion bootstrap_reviewers")
+    _require(all(item.strip() for item in promo_reviewers), "bootstrap_reviewers cannot contain blank logins")
     _require(
-        bool(promo_reviewers) and all(item.strip() for item in promo_reviewers), "bootstrap_reviewers cannot be empty"
+        not promotion_raw or bool(promo_reviewers),
+        "promotion bootstrap_reviewers is required when the policy has a promotion section",
     )
     allowed_hosts = _str_tuple(
         promotion_raw.get("allowed_artifact_hosts", list(DEFAULT_ALLOWED_ARTIFACT_HOSTS)),
@@ -289,6 +363,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         pools=pools,
         reviewers=reviewers,
         buckets=dict(buckets_data),
+        consumer=consumer,
         classifier=ClassifierRules(
             gate_paths=_str_tuple(classifier.get("gate_paths"), "classifier gate_paths"),
             logic_paths=_str_tuple(classifier.get("logic_paths"), "classifier logic_paths"),

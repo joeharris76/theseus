@@ -12,16 +12,14 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from . import absence, omp_bump, omp_pin
 from .github import RUN_TITLE_PULL, TRUSTED_EVENTS, WORKFLOW_PATH, GitHubError, get_json, parse_time
-from .policy import load_policy
+from .policy import PolicyError, load_policy
 
-POLICY_PATH = omp_bump.POLICY_PATH
-POLICY_GIT_PATH = ".github/oracle-reviewers.yml"
 WINDOW_REVIEWS = 10
 WINDOW = timedelta(hours=48)
 BASELINE = timedelta(days=7)
@@ -44,10 +42,8 @@ CONTRACT_SIGNATURES = (
     (absence.ERROR, "the reviewer could not be started"),
 )
 ATTEMPT_ARTIFACT_NAMES = tuple(f"oracle-verdict-attempt-{slot}" for slot in range(1, 6))
-TRUSTED_BRANCH = "develop"
 ORACLE_WORKFLOW = WORKFLOW_PATH
 ORACLE_EVENTS = TRUSTED_EVENTS | {"push"}
-WATCH_WORKFLOW = ".github/workflows/omp-pin-watch.yml"
 WATCH_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 LEDGER_ARTIFACT = "omp-watch-ledger"
 LEDGER_FILE = "ledger.json"
@@ -175,7 +171,7 @@ class Assessment:
 
 
 def _aware(value: datetime) -> datetime:
-    return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _mix_line(label: str, mix: Mix) -> str:
@@ -305,7 +301,7 @@ def revert_policy(current_text: str, change: PinChange) -> str:
     return omp_bump.replace_pin(current_text, omp_pin.pin_from_text(change.previous_text))
 
 
-def policy_history(path: str = POLICY_GIT_PATH, limit: int = HISTORY_LIMIT) -> list[PolicyCommit]:
+def policy_history(path: str, limit: int = HISTORY_LIMIT) -> list[PolicyCommit]:
     log = _git("log", f"-n{limit}", "--format=%H%x1f%cI%x1f%ae%x1f%s", "--", path)
     commits: list[PolicyCommit] = []
     for line in log.splitlines():
@@ -362,7 +358,12 @@ def _base_refs(repo: str, run: Mapping[str, Any], getter: JsonGetter) -> set[Any
 
 
 def produced_by(
-    run: Mapping[str, Any], repo: str, workflow: str, events: frozenset[str], getter: JsonGetter = get_json
+    run: Mapping[str, Any],
+    repo: str,
+    workflow: str,
+    events: frozenset[str],
+    branch: str,
+    getter: JsonGetter = get_json,
 ) -> bool:
     event = run.get("event")
     if not (
@@ -372,19 +373,19 @@ def produced_by(
     ):
         return False
     if event == "pull_request_target":
-        return _base_refs(repo, run, getter) == {TRUSTED_BRANCH}
-    return run.get("head_branch") == TRUSTED_BRANCH
+        return _base_refs(repo, run, getter) == {branch}
+    return run.get("head_branch") == branch
 
 
 def _trusted_runs(
-    repo: str, run_ids: Iterable[int], workflow: str, events: frozenset[str], getter: JsonGetter
+    repo: str, run_ids: Iterable[int], workflow: str, events: frozenset[str], branch: str, getter: JsonGetter
 ) -> dict[int, Mapping[str, Any]]:
     def lookup(run_id: int) -> tuple[int, Mapping[str, Any]]:
         try:
             run = getter(f"repos/{repo}/actions/runs/{run_id}")
         except GitHubError:
             return run_id, {}
-        return run_id, run if produced_by(run, repo, workflow, events, getter) else {}
+        return run_id, run if produced_by(run, repo, workflow, events, branch, getter) else {}
 
     with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as pool:
         return {run_id: run for run_id, run in pool.map(lookup, sorted(set(run_ids))) if run}
@@ -394,7 +395,14 @@ def _run_id(artifact: Mapping[str, Any]) -> int:
     return int((artifact.get("workflow_run") or {}).get("id", 0))
 
 
-def restore_ledger(repo: str, getter: JsonGetter = get_json, downloader: BytesGetter = _download) -> list[Record]:
+def restore_ledger(
+    repo: str,
+    *,
+    branch: str,
+    watch_workflow: str,
+    getter: JsonGetter = get_json,
+    downloader: BytesGetter = _download,
+) -> list[Record]:
     for page in range(1, LEDGER_PAGES + 1):
         listing = getter(
             f"repos/{repo}/actions/artifacts?name={LEDGER_ARTIFACT}&per_page={ARTIFACT_PAGE}&page={page}"
@@ -404,7 +412,7 @@ def restore_ledger(repo: str, getter: JsonGetter = get_json, downloader: BytesGe
             key=lambda item: str(item.get("created_at", "")),
             reverse=True,
         )
-        trusted = _trusted_runs(repo, (_run_id(item) for item in live), WATCH_WORKFLOW, WATCH_EVENTS, getter)
+        trusted = _trusted_runs(repo, (_run_id(item) for item in live), watch_workflow, WATCH_EVENTS, branch, getter)
         for artifact in live:
             if _run_id(artifact) in trusted:
                 blob = downloader(f"repos/{repo}/actions/artifacts/{artifact['id']}/zip")
@@ -420,6 +428,7 @@ def collect(
     known: Iterable[int],
     *,
     reviewers: frozenset[str],
+    branch: str,
     getter: JsonGetter = get_json,
     downloader: BytesGetter = _download,
 ) -> list[Record]:
@@ -430,7 +439,9 @@ def collect(
         for artifact in _artifacts(repo, name, horizon, getter)
         if not artifact.get("expired") and artifact["id"] not in seen
     ]
-    runs = _trusted_runs(repo, (_run_id(artifact) for artifact in wanted), ORACLE_WORKFLOW, ORACLE_EVENTS, getter)
+    runs = _trusted_runs(
+        repo, (_run_id(artifact) for artifact in wanted), ORACLE_WORKFLOW, ORACLE_EVENTS, branch, getter
+    )
     trusted = [artifact for artifact in wanted if _run_id(artifact) in runs]
 
     def fetch(artifact: Mapping[str, Any]) -> Record | None:
@@ -471,25 +482,34 @@ def _publish(values: Mapping[str, str]) -> None:
             handle.writelines(f"{key}={value}\n" for key, value in values.items())
 
 
+def _policy_git_path(policy: str) -> str:
+    path = _git("ls-files", "--full-name", "--", policy).strip()
+    if not path:
+        raise WatchError(f"{policy} is not tracked by git, so its history cannot be read")
+    return path
+
+
 def command_evaluate(args: argparse.Namespace) -> int:
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     try:
-        change = latest_pin_change(policy_history())
+        policy = load_policy(Path(args.policy))
+        branch = policy.consumer.gated_base
+        change = latest_pin_change(policy_history(_policy_git_path(args.policy)))
         if change is None or change.is_revert:
             _publish({"state": IDLE, "version": ""})
             print("no pin bump to watch")
             return 0
         policy_text = Path(args.policy).read_text(encoding="utf-8")
-        reviewers = frozenset(
-            name for name, reviewer in load_policy(Path(args.policy)).reviewers.items() if reviewer.harness == "omp"
-        )
-        known = restore_ledger(args.repo)
+        reviewers = frozenset(name for name, reviewer in policy.reviewers.items() if reviewer.harness == "omp")
+        known = restore_ledger(args.repo, branch=branch, watch_workflow=args.watch_workflow)
         horizon = change.merged_at - BASELINE
-        fresh = collect(args.repo, horizon, (record.artifact_id for record in known), reviewers=reviewers)
+        fresh = collect(
+            args.repo, horizon, (record.artifact_id for record in known), reviewers=reviewers, branch=branch
+        )
         records = merge(known, fresh, change.merged_at - RETENTION)
-    except (OSError, WatchError, GitHubError, omp_pin.PinError, omp_bump.BumpError) as exc:
+    except (OSError, WatchError, GitHubError, omp_pin.PinError, omp_bump.BumpError, PolicyError) as exc:
         print(f"omp-watch: error: {exc}", file=sys.stderr)
         return 1
     assessment = assess(records, change, now)
@@ -513,7 +533,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument("--repo", required=True)
-    evaluate.add_argument("--policy", default=str(POLICY_PATH))
+    evaluate.add_argument("--policy", required=True)
+    evaluate.add_argument("--watch-workflow", required=True)
     evaluate.add_argument("--out-dir", required=True)
     evaluate.set_defaults(handler=command_evaluate)
     return parser

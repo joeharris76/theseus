@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -9,9 +8,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from .matchers import Matchers, load_matchers
+from .policy import Binding, Consumer, Policy, PolicyError, PromotionRules, load_policy, parse_policy
 from .review_check import (
     API_ROOT,
     ERROR,
@@ -33,10 +37,8 @@ from .review_check import (
     fetch_text,
     path_matcher,
 )
-from .policy import PromotionRules
 
 GATE_CONTEXT = "oracle-gate"
-GATED_BASE = "develop"
 DESCRIPTION_LIMIT = 140
 PENDING_DESCRIPTION = "oracle-gate: evaluating this head"
 PULL_READ_ATTEMPTS = 3
@@ -113,7 +115,7 @@ def _post_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any])
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
-            "User-Agent": "benchbox-oracle-gate",
+            "User-Agent": "theseus-gate",
         },
     )
     try:
@@ -123,22 +125,32 @@ def _post_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any])
         raise CheckError(f"GitHub request to post {GATE_CONTEXT} for {head_sha} failed: {exc}") from exc
 
 
-def load_policy_rules() -> tuple[tuple[str, ...], tuple[str, ...]]:
+@dataclass(frozen=True)
+class GateConfig:
+    policy: Policy
+    policy_path: str
+    matchers: Matchers
+
+    @property
+    def binding(self) -> Binding:
+        return self.policy.binding()
+
+    @property
+    def consumer(self) -> Consumer:
+        return self.policy.consumer
+
+
+def load_gate_config(policy_path: str, root: Path) -> GateConfig:
     try:
-        from .policy import load_policy
-
-        classifier = load_policy(Path(".github/oracle-reviewers.yml")).classifier
-        return classifier.exempt_paths, classifier.gate_paths
-    except Exception as exc:
-        raise CheckError(f"cannot load the review policy: {exc}") from exc
+        policy = load_policy(root / policy_path)
+        return GateConfig(policy, policy_path, load_matchers(policy.consumer, root))
+    except (OSError, PolicyError, ValueError, yaml.YAMLError) as exc:
+        raise CheckError(f"cannot load the review policy {policy_path}: {exc}") from exc
 
 
-def load_promotion_policy(token: str, repo: str, base_ref: str) -> PromotionRules:
+def load_promotion_policy(token: str, repo: str, base_ref: str, policy_path: str) -> PromotionRules:
     try:
-        import yaml
-        from .policy import parse_policy
-
-        raw = fetch_text(token, repo, ".github/oracle-reviewers.yml", base_ref)
+        raw = fetch_text(token, repo, policy_path, base_ref)
         return parse_policy(yaml.safe_load(raw)).promotion
     except Exception as exc:
         raise CheckError(f"cannot load the base review policy: {exc}") from exc
@@ -157,24 +169,38 @@ def read_pull(repo: str, pr: int, token: str) -> tuple[dict[str, Any], str, str]
     raise PullReadFailed(f"cannot read #{pr} after {PULL_READ_ATTEMPTS} attempts: {last}") from last
 
 
-def evaluate(repo: str, pr: int, token: str) -> tuple[str, int, str]:
+def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, int, str]:
+    gated_base = config.consumer.gated_base
     pull, base, head_sha = read_pull(repo, pr, token)
-    if base != GATED_BASE:
-        raise UngatedBase(f"#{pr} targets {base}, not {GATED_BASE}; {GATE_CONTEXT} is posted only for {GATED_BASE}")
+    if base != gated_base:
+        raise UngatedBase(f"#{pr} targets {base}, not {gated_base}; {GATE_CONTEXT} is posted only for {gated_base}")
     try:
         items = fetch_files(token, repo, pr)
         files = changed_paths(items)
-        matcher = path_matcher(len(items), pull["changed_files"], *load_policy_rules())
+        classifier = config.policy.classifier
+        matcher = path_matcher(
+            len(items), pull["changed_files"], config.matchers, classifier.exempt_paths, classifier.gate_paths
+        )
         statuses = fetch_statuses(token, repo, head_sha)
         base_date = fetch_base_change_date(token, repo, pr)
         comments = fetch_comments(token, repo, pr)
         reviews = fetch_reviews(token, repo, pr)
-        annotate_receipt(token, reviews, head_sha, base_date)
-        bump = fetch_bump_refusals(token, repo, pull, files, len(items), comments)
+        annotate_receipt(token, reviews, head_sha, config.binding.bot_login, base_date)
+        bump = fetch_bump_refusals(
+            token,
+            repo,
+            pull,
+            files,
+            len(items),
+            comments,
+            policy_path=config.policy_path,
+            fixture_prefix=config.consumer.omp_fixture_prefix,
+            attesters=config.binding.attesters,
+        )
         from . import promotion
 
         promo_policy = (
-            load_promotion_policy(token, repo, pull["base"].get("sha") or pull["base"]["ref"])
+            load_promotion_policy(token, repo, pull["base"].get("sha") or pull["base"]["ref"], config.policy_path)
             if (
                 promotion.LOCK_PATH in files
                 or promotion.has_planted_promotion_path(files)
@@ -191,6 +217,7 @@ def evaluate(repo: str, pr: int, token: str) -> tuple[str, int, str]:
             reviews,
             base_date,
             statuses=statuses,
+            oracle_login=config.binding.bot_login,
             rules=promo_policy,
             comments=comments,
         )
@@ -202,6 +229,7 @@ def evaluate(repo: str, pr: int, token: str) -> tuple[str, int, str]:
             base_date,
             comments,
             reviews=reviews,
+            binding=config.binding,
             bump_refusals=bump,
             promotion_refusals=promo,
             is_promotion=is_promotion,
@@ -226,6 +254,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr", required=True, type=int)
+    parser.add_argument("--policy", required=True, help="Repository-relative path of the consumer review policy.")
+    parser.add_argument("--root", default=".", help="Trusted checkout holding the policy and manifests.")
     parser.add_argument("--no-post", action="store_true")
     parser.add_argument("--head-sha", type=_head_sha)
     parser.add_argument("--pending-first", action="store_true")
@@ -287,23 +317,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.pending_first and args.no_post:
         print("oracle-gate: error: --pending-first cannot be combined with --no-post", file=sys.stderr)
         return ERROR
-    return post_gate(args, token)
+    try:
+        config = load_gate_config(args.policy, Path(args.root))
+    except CheckError as exc:
+        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        return ERROR
+    return post_gate(args, token, config)
 
 
-def mark_pending(args: argparse.Namespace, token: str) -> None:
+def mark_pending(args: argparse.Namespace, token: str, config: GateConfig) -> None:
     try:
         _, base, head_sha = read_pull(args.repo, args.pr, token)
-        if base == GATED_BASE:
+        if base == config.consumer.gated_base:
             post_pending(token, args.repo, head_sha)
     except (PullReadFailed, CheckError) as exc:
         print(f"oracle-gate: error: {exc}", file=sys.stderr)
 
 
-def post_gate(args: argparse.Namespace, token: str) -> int:
+def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
     if args.pending_first:
-        mark_pending(args, token)
+        mark_pending(args, token, config)
     try:
-        head_sha, status, message = evaluate(args.repo, args.pr, token)
+        head_sha, status, message = evaluate(args.repo, args.pr, token, config)
     except UngatedBase as exc:
         print(f"oracle-gate: {exc}")
         return PASS
@@ -318,7 +353,7 @@ def post_gate(args: argparse.Namespace, token: str) -> int:
     if args.no_post:
         return PASS if status == PASS else WAITING
     try:
-        latest_sha, latest_status, latest_message = evaluate(args.repo, args.pr, token)
+        latest_sha, latest_status, latest_message = evaluate(args.repo, args.pr, token, config)
     except UngatedBase as exc:
         print(f"oracle-gate: {exc}")
         return PASS

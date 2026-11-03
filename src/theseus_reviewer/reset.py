@@ -5,7 +5,6 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
-ATTESTERS = frozenset({"joeharris76"})
 OWNER_INSTRUCTION = "Owner instruction"
 REASON_LIMIT = 200
 _RESET = re.compile(r"Oracle backoff reset: (?P<sha>[0-9a-f]{40})\nReason: (?P<reason>[^\n]+)")
@@ -26,21 +25,23 @@ def _moment(value: Any) -> datetime | None:
         return None
 
 
-def _owner_comment(comment: Mapping[str, Any]) -> bool:
+def _owner_comment(comment: Mapping[str, Any], attesters: frozenset[str]) -> bool:
     user = comment.get("user") or {}
     return (
-        user.get("login") in ATTESTERS
+        user.get("login") in attesters
         and user.get("type") == "User"
         and comment.get("updated_at") in (None, comment.get("created_at"))
     )
 
 
-def has_owner_instruction(comments: Iterable[Mapping[str, Any]], head_sha: str, before: datetime | None = None) -> bool:
+def has_owner_instruction(
+    comments: Iterable[Mapping[str, Any]], head_sha: str, attesters: frozenset[str], before: datetime | None = None
+) -> bool:
     for comment in comments:
         body = comment.get("body") or ""
         created = _moment(comment.get("created_at"))
         if (
-            _owner_comment(comment)
+            _owner_comment(comment, attesters)
             and OWNER_INSTRUCTION in body
             and head_sha in body
             and created is not None
@@ -50,7 +51,7 @@ def has_owner_instruction(comments: Iterable[Mapping[str, Any]], head_sha: str, 
     return False
 
 
-def reset_moment(comments: Iterable[Mapping[str, Any]], head_sha: str) -> datetime | None:
+def reset_moment(comments: Iterable[Mapping[str, Any]], head_sha: str, attesters: frozenset[str]) -> datetime | None:
     listed = list(comments)
     found: list[datetime] = []
     for comment in listed:
@@ -59,9 +60,9 @@ def reset_moment(comments: Iterable[Mapping[str, Any]], head_sha: str) -> dateti
         if (
             match
             and match.group("sha") == head_sha
-            and _owner_comment(comment)
+            and _owner_comment(comment, attesters)
             and created is not None
-            and has_owner_instruction(listed, head_sha, created)
+            and has_owner_instruction(listed, head_sha, attesters, created)
         ):
             found.append(created)
     return max(found, default=None)

@@ -12,12 +12,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from . import cli, github, isolation, omp_pin
+from .policy import PolicyError, load_policy
 
-POLICY_DEFAULT = ".github/oracle-reviewers.yml"
 STATE_FILE = Path("state") / github.STATE_FILE
 SCAN_SECRETS = ("TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN")
 REDACTED_SECRETS = ("JOB_TOKEN",)
-DEVELOP = "develop"
 CI = "ci"
 LOCAL = "local"
 VERSION_TIMEOUT_SECONDS = 60
@@ -79,6 +78,8 @@ class CredentialError(Exception):
 class GitHubSink:
     app_token: str
     job_token: str
+    gated_base: str
+    policy: Path
 
     def status(self, repo: str, head: str, payload: Path) -> None:
         github.post_file(f"repos/{repo}/statuses/{head}", payload, self.app_token)
@@ -90,11 +91,11 @@ class GitHubSink:
         github.post_file(f"repos/{repo}/pulls/{pr}/reviews", payload, self.app_token)
 
     def dispatch_gate(self, repo: str, pr: int, head: str) -> None:
-        if github.pull_base_ref(repo, pr, self.app_token) == DEVELOP:
-            github.dispatch_gate(repo, pr, head, self.job_token)
+        if github.pull_base_ref(repo, pr, self.app_token) == self.gated_base:
+            github.dispatch_gate(repo, pr, head, self.job_token, self.gated_base)
 
     def gate(self, repo: str, pr: int, head: str) -> None:
-        github.post_gate(repo, pr, head, self.app_token)
+        github.post_gate(repo, pr, head, self.app_token, self.policy)
 
 
 class Environment(Protocol):
@@ -166,7 +167,11 @@ class CiEnvironment:
         missing = [name for name, value in (("GH_TOKEN", self.app_token), ("JOB_TOKEN", self.job_token)) if not value]
         if missing:
             raise CredentialError(f"the App is configured but {', '.join(missing)} is empty")
-        return GitHubSink(self.app_token, self.job_token)
+        try:
+            gated_base = load_policy(self.policy).consumer.gated_base
+        except (OSError, PolicyError) as exc:
+            raise CredentialError(f"the review policy cannot be read: {exc}") from exc
+        return GitHubSink(self.app_token, self.job_token, gated_base, self.policy)
 
     def session(self) -> AbstractContextManager[None]:
         return nullcontext()
@@ -402,7 +407,7 @@ def command_drive(args: argparse.Namespace) -> int:
 
 def register(commands: Any) -> None:
     drive = commands.add_parser("drive")
-    drive.add_argument("--policy", default=POLICY_DEFAULT)
+    drive.add_argument("--policy", required=True)
     drive.add_argument("--environment", choices=(CI, LOCAL), default=CI)
     drive.set_defaults(handler=command_drive)
     phases = drive.add_subparsers(dest="phase", required=True)

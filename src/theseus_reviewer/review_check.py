@@ -13,16 +13,13 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from .inert_paths import is_inert_path
-from .policy import PromotionRules
-from .soundness_paths import is_soundness_path
+from .matchers import Matchers
+from .policy import Binding, PromotionRules
 
-ORACLE_LOGIN = "benchbox-oracle"
 ORACLE_CONTEXT = "oracle-verdict"
 _ORACLE_VERDICT = re.compile(rf"### {ORACLE_CONTEXT}: (?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`")
 _RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
-STANDIN_ATTESTERS = frozenset({"joeharris76"})
 REFUSED_DESCRIPTION_PREFIX = "refused after"
 _STANDIN_MARKER = re.compile(r"Stand-in oracle review: APPROVE ([0-9a-f]{40})")
 OPEN_FINDINGS_LABEL = "SHIP WITH FIXES"
@@ -35,9 +32,9 @@ def _attested_shas(comment: dict[str, Any]) -> list[str]:
     return [match.group(1)] if match else []
 
 
-def _is_standin(comment: dict[str, Any], head_sha: str, not_before: datetime | None) -> bool:
+def _is_standin(comment: dict[str, Any], head_sha: str, not_before: datetime | None, attesters: frozenset[str]) -> bool:
     return (
-        comment.get("login") in STANDIN_ATTESTERS
+        comment.get("login") in attesters
         and comment.get("user_type") == "User"
         and comment.get("updated_at") in (None, comment.get("created_at"))
         and (not_before is None or _parse_time(comment["created_at"]) > not_before)
@@ -77,8 +74,8 @@ def _login(value: str | None) -> str:
     return (value or "").removesuffix("[bot]")
 
 
-def _is_oracle(login: str | None, account_type: str | None) -> bool:
-    return _login(login) == ORACLE_LOGIN and account_type == "Bot"
+def _is_oracle(login: str | None, account_type: str | None, bot_login: str) -> bool:
+    return _login(login) == bot_login and account_type == "Bot"
 
 
 DECISIVE_VERDICTS = frozenset({"success", "failure"})
@@ -102,12 +99,12 @@ def _survives_base_change(moment: datetime, base_time: datetime | None) -> bool:
 
 
 def _receipt_candidates(
-    reviews: Iterable[dict[str, Any]], head_sha: str, base_time: datetime | None
+    reviews: Iterable[dict[str, Any]], head_sha: str, base_time: datetime | None, bot_login: str
 ) -> list[dict[str, Any]]:
     return [
         review
         for review in reviews
-        if _is_oracle(review.get("login"), review.get("user_type"))
+        if _is_oracle(review.get("login"), review.get("user_type"), bot_login)
         and review.get("commit_id") == head_sha
         and review.get("state") not in {"PENDING", "DISMISSED"}
         and review.get("submitted_at")
@@ -149,9 +146,13 @@ def _receipt_agrees(receipt: dict[str, Any], head_sha: str, status_uuid: str | N
 
 
 def _receipt_backed_success(
-    verdicts: list[dict[str, Any]], reviews: Iterable[dict[str, Any]], head_sha: str, base_time: datetime | None
+    verdicts: list[dict[str, Any]],
+    reviews: Iterable[dict[str, Any]],
+    head_sha: str,
+    base_time: datetime | None,
+    bot_login: str,
 ) -> bool:
-    candidates = _receipt_candidates(reviews, head_sha, base_time)
+    candidates = _receipt_candidates(reviews, head_sha, base_time, bot_login)
     for status in reversed(verdicts):
         if status["state"] != "success":
             return False
@@ -167,13 +168,15 @@ def _receipt_backed_success(
     return False
 
 
-def _verdict_statuses(statuses: Iterable[dict[str, Any]], base_time: datetime | None) -> list[dict[str, Any]]:
+def _verdict_statuses(
+    statuses: Iterable[dict[str, Any]], base_time: datetime | None, bot_login: str
+) -> list[dict[str, Any]]:
     return sorted(
         (
             status
             for status in statuses
             if status.get("context") == ORACLE_CONTEXT
-            and _is_oracle(status.get("login"), status.get("user_type"))
+            and _is_oracle(status.get("login"), status.get("user_type"), bot_login)
             and status.get("created_at")
             and _survives_base_change(_parse_time(status["created_at"]), base_time)
         ),
@@ -233,6 +236,7 @@ def decide(
     base_date: str | None = None,
     comments: Iterable[dict[str, Any]] = (),
     *,
+    binding: Binding,
     reviews: Iterable[dict[str, Any]] = (),
     bump_refusals: Iterable[str] = (),
     promotion_refusals: Iterable[str] = (),
@@ -247,7 +251,7 @@ def decide(
     if not is_promotion and not paths(files):
         return PASS, "oracle-review: only exempt paths changed"
     base_time = _parse_time(base_date) if base_date else None
-    verdicts = _verdict_statuses(statuses, base_time)
+    verdicts = _verdict_statuses(statuses, base_time, binding.bot_login)
     latest = verdicts[-1] if verdicts else None
     verdict = latest["state"] if latest else None
     standin_after = standin_not_before(
@@ -258,7 +262,9 @@ def decide(
     standin = (
         None
         if findings_open or is_promotion
-        else next((comment for comment in comments if _is_standin(comment, head_sha, standin_after)), None)
+        else next(
+            (comment for comment in comments if _is_standin(comment, head_sha, standin_after, binding.attesters)), None
+        )
     )
     if latest and verdict != "success" and not standin:
         if (latest.get("description") or "").startswith(REFUSED_DESCRIPTION_PREFIX):
@@ -287,7 +293,7 @@ def decide(
                     "rebase is enough), or have the owner stand-in post an attestation"
                 )
         else:
-            if _receipt_backed_success(verdicts, reviews, head_sha, base_time):
+            if _receipt_backed_success(verdicts, reviews, head_sha, base_time, binding.bot_login):
                 return PASS, f"oracle-review: pass (oracle verdict for {head_sha})"
             if standin is None:
                 return WAITING, (
@@ -305,7 +311,7 @@ def _request(token: str, url: str, body: dict[str, Any] | None = None) -> Any:
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "benchbox-oracle-review-check",
+        "User-Agent": "theseus-review-check",
     }
     data = None
     if body is not None:
@@ -349,12 +355,12 @@ def fetch_files(token: str, repo: str, pr: int) -> list[dict[str, Any]]:
     return _paginate(token, f"/repos/{repo}/pulls/{pr}/files")
 
 
-def _path_needs_review(path: str, exempt: tuple[str, ...], gate: tuple[str, ...]) -> bool:
-    if is_soundness_path(path):
+def _path_needs_review(path: str, exempt: tuple[str, ...], gate: tuple[str, ...], matchers: Matchers) -> bool:
+    if matchers.is_soundness_path(path):
         return True
     if any(fnmatch.fnmatchcase(path, pattern) for pattern in gate):
         return True
-    if is_inert_path(path):
+    if matchers.is_inert_path(path):
         return False
     return not any(fnmatch.fnmatchcase(path, pattern) for pattern in exempt)
 
@@ -362,6 +368,7 @@ def _path_needs_review(path: str, exempt: tuple[str, ...], gate: tuple[str, ...]
 def path_matcher(
     listed_files: int,
     changed_files: int,
+    matchers: Matchers,
     exempt_paths: Iterable[str] = (),
     gate_paths: Iterable[str] = (),
 ) -> Callable[[Iterable[str]], bool]:
@@ -371,7 +378,7 @@ def path_matcher(
     gate = tuple(gate_paths)
 
     def needs_review(paths: Iterable[str]) -> bool:
-        return any(_path_needs_review(path, exempt, gate) for path in paths)
+        return any(_path_needs_review(path, exempt, gate, matchers) for path in paths)
 
     return needs_review
 
@@ -414,9 +421,11 @@ def fetch_review_edit(token: str, node_id: str) -> tuple[str | None, bool]:
     return node.get("lastEditedAt"), bool(node.get("includesCreatedEdit"))
 
 
-def annotate_receipt(token: str, reviews: list[dict[str, Any]], head_sha: str, base_date: str | None = None) -> None:
+def annotate_receipt(
+    token: str, reviews: list[dict[str, Any]], head_sha: str, bot_login: str, base_date: str | None = None
+) -> None:
     base_time = _parse_time(base_date) if base_date else None
-    for receipt in _receipt_candidates(reviews, head_sha, base_time):
+    for receipt in _receipt_candidates(reviews, head_sha, base_time, bot_login):
         _annotate_one(token, receipt)
 
 
@@ -451,7 +460,7 @@ def fetch_text(token: str, repo: str, path: str, ref: str) -> str:
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.raw",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "benchbox-oracle-review-check",
+        "User-Agent": "theseus-review-check",
     }
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
@@ -468,7 +477,7 @@ def fetch_optional_bytes(token: str, repo: str, path: str, ref: str) -> bytes | 
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.raw",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "benchbox-oracle-review-check",
+        "User-Agent": "theseus-review-check",
     }
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
@@ -498,23 +507,30 @@ def fetch_bump_refusals(
     files: list[str],
     listed_files: int,
     comments: list[dict[str, Any]],
+    *,
+    policy_path: str,
+    fixture_prefix: str | None,
+    attesters: frozenset[str],
 ) -> list[str]:
     from . import omp_bump_gate
 
     complete = listed_files >= pull["changed_files"]
-    if omp_bump_gate.POLICY_PATH not in files and complete:
+    if policy_path not in files and complete:
         return []
     head_repo = ((pull["head"].get("repo") or {}).get("full_name")) or repo
     try:
-        base_text = fetch_text(token, repo, omp_bump_gate.POLICY_PATH, pull["base"]["ref"])
-        head_text = fetch_text(token, head_repo, omp_bump_gate.POLICY_PATH, pull["head"]["sha"])
+        base_text = fetch_text(token, repo, policy_path, pull["base"]["ref"])
+        head_text = fetch_text(token, head_repo, policy_path, pull["head"]["sha"])
         return omp_bump_gate.refusals(
-            [*files, omp_bump_gate.POLICY_PATH],
+            [*files, policy_path],
             base_text,
             head_text,
             comments,
             pull["head"]["sha"],
-            complete,
+            policy_path=policy_path,
+            fixture_prefix=fixture_prefix,
+            attesters=attesters,
+            complete=complete,
         )
     except omp_bump_gate.BumpEvidenceError as exc:
         return [f"omp pin bump evidence could not be verified: {exc}"]
@@ -543,7 +559,7 @@ def fetch_promotion_refusals(
     base_date: str | None = None,
     *,
     statuses: Iterable[dict[str, Any]] = (),
-    oracle_login: str = ORACLE_LOGIN,
+    oracle_login: str,
     rules: PromotionRules,
     comments: Sequence[dict[str, Any]] = (),
 ) -> tuple[bool, list[str]]:
@@ -571,7 +587,7 @@ def fetch_promotion_refusals(
             matcher_raw = fetch_optional_bytes(token, head_repo, parsed_head.matcher.path, head_sha)
             matcher_sha256 = hashlib.sha256(matcher_raw).hexdigest() if matcher_raw is not None else None
     base_time = _parse_time(base_date) if base_date else None
-    verdict_list = _verdict_statuses(statuses, base_time)
+    verdict_list = _verdict_statuses(statuses, base_time, oracle_login)
     expected_uuid = (
         _status_run_uuid(verdict_list[-1]) if verdict_list and verdict_list[-1].get("state") == "success" else None
     )

@@ -17,9 +17,6 @@ from . import candidate_chain, candidate_checks, omp_pin
 from .candidate_chain import PROBES, SCENARIOS, ClientRun, Scenario
 from .candidate_checks import CONTRACT_ROWS, RECORDED_REASONS, Check
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-POLICY_PATH = REPO_ROOT / ".github" / "oracle-reviewers.yml"
-FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "omp_candidate"
 USAGE_ERROR = 2
 EVIDENCE_PREFIX = "Omp candidate check:"
 
@@ -28,7 +25,7 @@ class Chain(Protocol):
     def run(self, scenario: Scenario) -> ClientRun: ...
 
 
-ChainFactory = Callable[[Path, Path], AbstractContextManager[Chain]]
+ChainFactory = Callable[[Path, Path, str], AbstractContextManager[Chain]]
 
 
 @dataclass(frozen=True)
@@ -157,10 +154,10 @@ def _capture(directory: Path, workdir: Path, run: ClientRun) -> None:
 
 
 def _live_checks(
-    chain_factory: ChainFactory, binary: Path, workdir: Path, capture: Path | None
+    chain_factory: ChainFactory, binary: Path, workdir: Path, capture: Path | None, config_text: str
 ) -> tuple[list[Check], dict[str, ClientRun]]:
     try:
-        with chain_factory(binary, workdir / "chain") as chain:
+        with chain_factory(binary, workdir / "chain", config_text) as chain:
             runs = {scenario.name: chain.run(scenario) for scenario in SCENARIOS}
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         return [Check("live-chain", (1, 12), (f"the loopback chain could not run: {exc}",))], {}
@@ -175,13 +172,15 @@ def _live_checks(
 def check_candidate(
     pin: omp_pin.Pin,
     *,
+    omp_config: Path,
+    fixtures: Path,
     targets: Sequence[str] | None = None,
     binary: Path | None = None,
     fetch: omp_pin.Fetch | None = None,
     chain_factory: ChainFactory = candidate_chain.loopback_chain,
-    fixtures: Path = FIXTURE_DIR,
     capture: Path | None = None,
 ) -> Report:
+    config_text = omp_config.read_text(encoding="utf-8")
     host = omp_pin.current_platform()
     selected = tuple(targets) if targets else tuple(pin.builds)
     if host not in selected:
@@ -211,7 +210,7 @@ def check_candidate(
         transcript = "not executed: the host build does not hash to the pin"
         if host_build.ok:
             candidate.chmod(0o755)
-            checks = candidate_checks.static_checks(candidate, home, pin.version)
+            checks = candidate_checks.static_checks(candidate, home, pin.version, config_text)
             code, text = candidate_checks.run_omp(candidate, home, "--version")
             transcript = " ".join(text.split()) if code == 0 else f"exit {code}"
         else:
@@ -220,7 +219,7 @@ def check_candidate(
         checks.extend(candidate_checks.fixture_checks(fixtures))
         live_runs: dict[str, ClientRun] = {}
         if runnable:
-            live, live_runs = _live_checks(chain_factory, candidate, root, capture)
+            live, live_runs = _live_checks(chain_factory, candidate, root, capture, config_text)
             checks.extend(live)
         else:
             checks.append(Check("live-chain", (1, 12), ("skipped: the candidate hash or static checks failed",)))
@@ -247,7 +246,7 @@ def check_candidate(
 
 
 def _load_pin(args: argparse.Namespace) -> omp_pin.Pin:
-    source = Path(args.pin) if args.pin else POLICY_PATH
+    source = Path(args.pin)
     pin = omp_pin.pin_from_text(source.read_text(encoding="utf-8"))
     if pin.version != args.version:
         raise omp_pin.PinError(
@@ -286,6 +285,8 @@ def command_check(args: argparse.Namespace) -> int:
         pin = _load_pin(args)
         report = check_candidate(
             pin,
+            omp_config=Path(args.omp_config),
+            fixtures=Path(args.fixtures),
             targets=args.platform or None,
             binary=Path(args.binary) if args.binary else None,
             capture=Path(args.capture_dir) if args.capture_dir else None,
@@ -303,7 +304,9 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check")
     check.add_argument("--version", required=True)
-    check.add_argument("--pin")
+    check.add_argument("--pin", required=True)
+    check.add_argument("--omp-config", required=True)
+    check.add_argument("--fixtures", required=True)
     check.add_argument("--platform", action="append")
     check.add_argument("--binary")
     check.add_argument("--capture-dir")

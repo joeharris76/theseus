@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import argparse
-import contextlib
-import importlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -22,7 +20,8 @@ from .retry import State
 
 STATE_ARTIFACT_PREFIX = "oracle-verdict-state-"
 STATE_FILE = "state.json"
-GATE_ROOT_ENV = "ORACLE_GATE_ROOT"
+WAITING_EXIT = 3
+GATE_COMMAND_ENV = "THESEUS_GATE_COMMAND"
 
 
 class GitHubError(RuntimeError):
@@ -221,19 +220,19 @@ TRUSTED_EVENTS = frozenset({"pull_request_target", "issue_comment", "schedule", 
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
-def on_develop(repo: str, sha: str) -> bool:
+def on_base(repo: str, sha: str, base: str) -> bool:
     try:
-        comparison = get_json(f"repos/{repo}/compare/{sha}...develop")
+        comparison = get_json(f"repos/{repo}/compare/{sha}...{base}")
     except GitHubError:
         return False
     return comparison.get("status") in ("ahead", "identical")
 
 
-def _targets_develop(run: dict[str, Any], pr: int) -> bool:
+def _targets_base(run: dict[str, Any], pr: int, base: str) -> bool:
     pulls = [pull for pull in run.get("pull_requests") or [] if isinstance(pull, dict)]
     return (
         bool(pulls)
-        and all((pull.get("base") or {}).get("ref") == "develop" for pull in pulls)
+        and all((pull.get("base") or {}).get("ref") == base for pull in pulls)
         and any(pull.get("number") == pr for pull in pulls)
     )
 
@@ -292,14 +291,13 @@ def head_pulls(repo: str, run: dict[str, Any]) -> list[HeadPull]:
     return found
 
 
-def _pull_request_target_trusted(run: dict[str, Any], pr: int, pulls: Sequence[HeadPull] | None) -> bool:
+def _pull_request_target_trusted(run: dict[str, Any], pr: int, pulls: Sequence[HeadPull] | None, base: str) -> bool:
     started = parse_time(run.get("created_at"))
-    if started is None or pulls is None or not _targets_develop(run, pr):
+    if started is None or pulls is None or not _targets_base(run, pr, base):
         return False
     open_then = [pull for pull in pulls if pull.created_at <= started]
     return any(pull.number == pr for pull in open_then) and all(
-        pull.base_ref == "develop" and (pull.base_changed_at is None or pull.base_changed_at < started)
-        for pull in open_then
+        pull.base_ref == base and (pull.base_changed_at is None or pull.base_changed_at < started) for pull in open_then
     )
 
 
@@ -307,7 +305,8 @@ def trusted_run(
     run: dict[str, Any],
     repo: str,
     pr: int,
-    is_on_develop: Callable[[str, str], bool] = on_develop,
+    base: str,
+    is_on_base: Callable[[str, str, str], bool] = on_base,
     pulls: Sequence[HeadPull] | None = None,
     workflow_path: str = WORKFLOW_PATH,
 ) -> bool:
@@ -321,8 +320,8 @@ def trusted_run(
     ):
         return False
     if event == "pull_request_target":
-        return _pull_request_target_trusted(run, pr, pulls)
-    return is_on_develop(repo, head_sha)
+        return _pull_request_target_trusted(run, pr, pulls, base)
+    return is_on_base(repo, head_sha, base)
 
 
 def download_state_artifact(repo: str, run_id: str, name: str, directory: str) -> None:
@@ -336,12 +335,12 @@ def download_state_artifact(repo: str, run_id: str, name: str, directory: str) -
         raise GitHubError(f"could not download {name} from run {run_id}: {result.stderr.strip()[:500]}")
 
 
-def latest_state(repo: str, pr: int) -> State | None:
+def latest_state(repo: str, pr: int, base: str) -> State | None:
     names = (state_artifact_name(pr), attempt_state_artifact_name(pr))
-    return _latest_state(repo, pr, names, WORKFLOW_PATH)
+    return _latest_state(repo, pr, names, WORKFLOW_PATH, base)
 
 
-def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_path: str) -> State | None:
+def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_path: str, base: str) -> State | None:
     pairs = [
         (name, item)
         for name in names
@@ -358,7 +357,7 @@ def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_path: str) 
                 pulls = head_pulls(repo, run)
             except GitHubError:
                 continue
-        if not trusted_run(run, repo, pr, pulls=pulls, workflow_path=workflow_path):
+        if not trusted_run(run, repo, pr, base, pulls=pulls, workflow_path=workflow_path):
             continue
         with tempfile.TemporaryDirectory() as directory:
             download_state_artifact(repo, run_id, name, directory)
@@ -531,7 +530,7 @@ def pull_base_ref(repo: str, pr: int, token: str) -> str:
     return result.stdout.strip()
 
 
-def dispatch_gate(repo: str, pr: int, head: str, token: str) -> None:
+def dispatch_gate(repo: str, pr: int, head: str, token: str, base: str) -> None:
     result = subprocess.run(
         [
             "gh",
@@ -541,7 +540,7 @@ def dispatch_gate(repo: str, pr: int, head: str, token: str) -> None:
             "--repo",
             repo,
             "--ref",
-            "develop",
+            base,
             "-f",
             f"pr={pr}",
             "-f",
@@ -556,22 +555,26 @@ def dispatch_gate(repo: str, pr: int, head: str, token: str) -> None:
         raise GitHubError(f"could not dispatch the gate for #{pr}: {result.stderr.strip()[:500]}")
 
 
-def post_gate(repo: str, pr: int, head: str, token: str) -> None:
-    configured = os.environ.get(GATE_ROOT_ENV)
-    root = Path(configured) if configured else Path(__file__).resolve().parents[3]
-    scripts = str(root / "_project" / "scripts")
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    oracle_gate = importlib.import_module("oracle_gate")
-    request = argparse.Namespace(repo=repo, pr=pr, no_post=False, head_sha=head, pending_first=False)
-    with contextlib.chdir(root):
-        status = oracle_gate.post_gate(request, token)
-    if status == oracle_gate.ERROR:
-        raise GitHubError(f"could not post oracle-gate for #{pr} at {head}")
+def gate_command() -> list[str]:
+    configured = os.environ.get(GATE_COMMAND_ENV, "").strip()
+    return shlex.split(configured) if configured else [sys.executable, "-m", "theseus_reviewer"]
 
 
-def backoff_reset_at(repo: str, pr: int, head_sha: str) -> datetime | None:
-    return reset.reset_moment(get_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100"), head_sha)
+def post_gate(repo: str, pr: int, head: str, token: str, policy: Path) -> None:
+    argv = [*gate_command(), "gate", "--repo", repo, "--pr", str(pr), "--head-sha", head, "--policy", str(policy)]
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, check=False, env={**os.environ, "GITHUB_TOKEN": token}
+        )
+    except OSError as exc:
+        raise GitHubError(f"could not run the gate for #{pr} at {head}: {exc}") from exc
+    if result.returncode not in (0, WAITING_EXIT):
+        detail = (result.stderr.strip() or result.stdout.strip())[:500]
+        raise GitHubError(f"could not post oracle-gate for #{pr} at {head}: exit {result.returncode}: {detail}")
+
+
+def backoff_reset_at(repo: str, pr: int, head_sha: str, attesters: frozenset[str]) -> datetime | None:
+    return reset.reset_moment(get_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100"), head_sha, attesters)
 
 
 def current_login() -> str:
@@ -594,10 +597,10 @@ def post_comment(repo: str, pr: int, body: str) -> None:
     _gh("--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={body}")
 
 
-def dispatch(repo: str, workflow: str, pr: int, head: str, reason: str | None = None) -> None:
+def dispatch(repo: str, workflow: str, pr: int, head: str, base: str, reason: str | None = None) -> None:
     fields = ["-f", f"pr={pr}", "-f", f"head={head}"] + (["-f", f"reason={reason}"] if reason else [])
     result = subprocess.run(
-        ["gh", "workflow", "run", workflow, "--ref", "develop", *fields, "-R", repo],
+        ["gh", "workflow", "run", workflow, "--ref", base, *fields, "-R", repo],
         capture_output=True,
         text=True,
         check=False,

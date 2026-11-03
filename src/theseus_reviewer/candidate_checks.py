@@ -23,7 +23,6 @@ PROBE_ROWS = (3, 7)
 EXPECTED_SESSION_VERSION = 3
 COMMAND_SECONDS = 60
 ROSTER = frozenset(commands.OMP_READ_TOOLS.split(","))
-REVIEWER_CONFIG = Path(__file__).resolve().parents[3] / ".github" / "oracle-omp-config.yml"
 UPSTREAM_PATH = "/v1/messages"
 UPSTREAM_MODEL = "claude-sonnet-5-5"
 REVIEW_REQUESTS = 5
@@ -209,21 +208,20 @@ def check_overlay_schema(binary: Path, home: Path, overlay_text: str = commands.
     return _check("overlay-schema", (3,), failures)
 
 
-def check_reviewer_config_schema(binary: Path, home: Path, config_text: str | None = None) -> Check:
-    text = config_text if config_text is not None else REVIEWER_CONFIG.read_text(encoding="utf-8")
+def check_reviewer_config_schema(binary: Path, home: Path, config_text: str) -> Check:
     schema, enums, failures = _schema(binary, home)
     if not failures:
-        failures = _setting_failures(yaml.safe_load(text), schema, enums)
+        failures = _setting_failures(yaml.safe_load(config_text), schema, enums)
     return _check("reviewer-config-schema", (4,), failures)
 
 
-def static_checks(binary: Path, home: Path, version: str) -> list[Check]:
+def static_checks(binary: Path, home: Path, version: str, config_text: str) -> list[Check]:
     return [
         check_version(binary, home, version),
         check_flags_listed(binary, home),
         check_flag_values(binary, home),
         check_overlay_schema(binary, home),
-        check_reviewer_config_schema(binary, home),
+        check_reviewer_config_schema(binary, home, config_text),
     ]
 
 

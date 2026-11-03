@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .reset import ATTESTERS
-
 PREFIX = "Oracle adjudication: "
 TRIGGER = PREFIX.rstrip()
 WITHDRAW = "WITHDRAW"
@@ -40,10 +38,10 @@ def _moment(value: Any) -> datetime | None:
         return None
 
 
-def valid(comment: Mapping[str, Any], after: datetime | None) -> Adjudication | None:
+def valid(comment: Mapping[str, Any], after: datetime | None, attesters: frozenset[str]) -> Adjudication | None:
     created = _moment(comment.get("created_at"))
     if (
-        comment.get("login") not in ATTESTERS
+        comment.get("login") not in attesters
         or comment.get("user_type") != "User"
         or comment.get("updated_at") not in (None, comment.get("created_at"))
         or created is None

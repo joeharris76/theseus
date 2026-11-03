@@ -32,7 +32,7 @@ MCP_MARKER = "mcp-started"
 AGENTS_TOKEN = "CANARY_AGENTS_CONTEXT_7731"
 CLAUDE_TOKEN = "CANARY_CLAUDE_CONTEXT_7732"
 NATIVE_TOKEN = "CANARY_NATIVE_CONTEXT_7733"
-CHECKER = "benchbox/core/equivalence/checker.py"
+CHECKER = "src/equivalence/checker.py"
 LONG_FILE = "long_module.py"
 CHECKER_SOURCE = "def checker(a, b):\n    return a == b\n"
 LONG_SOURCE = "".join(
@@ -212,8 +212,9 @@ def _run(argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: int
 
 
 class LoopbackChain:
-    def __init__(self, binary: Path, workdir: Path) -> None:
+    def __init__(self, binary: Path, workdir: Path, config_text: str) -> None:
         self.binary = binary
+        self.config_text = config_text
         self.workdir = workdir
         self.workspace = workdir / "workspace"
         self.stub = UpstreamStub([])
@@ -294,7 +295,7 @@ class LoopbackChain:
         root = self.workdir / scenario.name
         home, scratch = root / "home", root / "scratch"
         home.mkdir(parents=True)
-        cli.write_reviewer_home(home, self.gateway_url, allow_loopback_http=True)
+        cli.write_reviewer_home(home, self.gateway_url, self.config_text, allow_loopback_http=True)
         if not scenario.chains:
             config = home / ".omp" / "agent" / "config.yml"
             settings = yaml.safe_load(config.read_text(encoding="utf-8"))
@@ -373,6 +374,6 @@ class LoopbackChain:
 
 
 @contextlib.contextmanager
-def loopback_chain(binary: Path, workdir: Path) -> Iterator[LoopbackChain]:
-    with LoopbackChain(binary, workdir) as chain:
+def loopback_chain(binary: Path, workdir: Path, config_text: str) -> Iterator[LoopbackChain]:
+    with LoopbackChain(binary, workdir, config_text) as chain:
         yield chain

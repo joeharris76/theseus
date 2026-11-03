@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .inert_paths import is_inert_path
-
+from .matchers import Matchers
 from .policy import ClassifierRules
 
 
@@ -75,10 +74,10 @@ def _matches(path: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
-def _in_scope(path: str, rules: ClassifierRules, is_soundness_path: Callable[[str], bool]) -> bool:
-    if is_soundness_path(path) or _matches(path, rules.gate_paths):
+def _in_scope(path: str, rules: ClassifierRules, matchers: Matchers) -> bool:
+    if matchers.is_soundness_path(path) or _matches(path, rules.gate_paths):
         return True
-    if is_inert_path(path):
+    if matchers.is_inert_path(path):
         return False
     return not _matches(path, rules.exempt_paths)
 
@@ -86,9 +85,9 @@ def _in_scope(path: str, rules: ClassifierRules, is_soundness_path: Callable[[st
 def soundness_scope(
     files: list[ChangedFile],
     rules: ClassifierRules,
-    is_soundness_path: Callable[[str], bool],
+    matchers: Matchers,
 ) -> SoundnessScope:
-    in_scope = [item for item in files if any(_in_scope(path, rules, is_soundness_path) for path in item.paths)]
+    in_scope = [item for item in files if any(_in_scope(path, rules, matchers) for path in item.paths)]
     if not in_scope:
         return SoundnessScope(False, ("only exempt paths changed",), (), (), ())
     gate = sorted({path for item in in_scope for path in item.paths if _matches(path, rules.gate_paths)})
@@ -101,7 +100,7 @@ def soundness_scope(
         reasons.append("changes comparison, validation or result logic: " + ", ".join(logic))
     if not reasons:
         reasons.append(f"changes {len(in_scope)} files outside the exempt paths")
-        soundness = sorted({path for item in in_scope for path in item.paths if is_soundness_path(path)})
+        soundness = sorted({path for item in in_scope for path in item.paths if matchers.is_soundness_path(path)})
         if soundness:
             reasons.append("touches soundness paths: " + ", ".join(soundness))
     paths = tuple(sorted({path for item in in_scope for path in item.paths}))

@@ -425,17 +425,10 @@ def check(
     run: Trace,
     binary_files: Iterable[str] = (),
     exempt_paths: Iterable[str] = (),
-    is_protected: Callable[[str], bool] | None = None,
+    is_protected: Callable[[str], bool],
 ) -> Gap | None:
     if brief_mode == INLINE or not ships:
         return None
-    if is_protected is None:
-        from .inert_paths import is_machine_read_doc
-        from .soundness_paths import is_soundness_path
-
-        def is_protected(path: str) -> bool:
-            return is_soundness_path(path) or is_machine_read_doc(path)
-
     hinted = {relative(p, workspace) for p in binary_files}
     detected_binary = {path for path in hinted if is_binary_candidate(path) and has_nul_head(workspace, path)}
     patterns = tuple(exempt_paths)

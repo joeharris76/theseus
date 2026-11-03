@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 BINARY_ENV = "ORACLE_OMP_BINARY"
-CACHE_ENV = "BENCHBOX_OMP_CACHE"
-MIRROR_ENV = "BENCHBOX_OMP_DOWNLOAD_MIRROR"
+CACHE_ENV = "THESEUS_OMP_CACHE"
+MIRROR_ENV = "THESEUS_OMP_DOWNLOAD_MIRROR"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 PLATFORM_PATTERN = re.compile(r"[a-z0-9]+-[a-z0-9_]+")
@@ -28,7 +28,7 @@ VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?")
 CHUNK_BYTES = 1 << 20
 DOWNLOAD_SECONDS = 600
 DOWNLOAD_READ_SECONDS = 30
-USER_AGENT = "benchbox-oracle/1.0"
+USER_AGENT = "theseus-reviewer/1.0"
 VERSION_SECONDS = 60
 SYSTEMS = {"darwin": "darwin", "linux": "linux"}
 MACHINES = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}
@@ -105,7 +105,7 @@ def current_platform() -> str:
 
 def cache_root() -> Path:
     override = os.environ.get(CACHE_ENV)
-    return Path(os.path.abspath(override)) if override else Path.home() / ".cache" / "benchbox" / "omp"
+    return Path(os.path.abspath(override)) if override else Path.home() / ".cache" / "theseus" / "omp"
 
 
 def binary_path(pin: Pin, target: str, root: Path | None = None) -> Path:

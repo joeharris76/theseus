@@ -17,11 +17,8 @@ from time import sleep
 from typing import Any
 from urllib.parse import urlparse
 
-from .inert_paths import is_machine_read_doc
-
 from . import (
     adjudication,
-    attempts as attempt_files,
     base_change,
     credentials,
     dedup,
@@ -42,6 +39,9 @@ from . import (
     selection,
     sweep,
 )
+from . import (
+    attempts as attempt_files,
+)
 from .absence import ERROR, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
@@ -49,7 +49,8 @@ from .classify import Classification, classify_diff
 from .diff import binary_files, binary_notice_count, commentable_lines, select_files
 from .evidence import glob_match, is_binary_candidate
 from .jev import JevError, JevSession
-from .policy import SIZE_BUCKETS, Policy, RetryRules, Reviewer, load_policy
+from .matchers import Matchers, load_matchers
+from .policy import SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
 from .render import (
     UNOPENED_PR,
     OversizeError,
@@ -79,13 +80,10 @@ class DiffNotStagedError(Exception):
 
 
 WORKFLOW_FILE = "oracle-verdict.yml"
-WORKFLOW_SOURCE = Path(".github/workflows") / WORKFLOW_FILE
-OMP_CONFIG_SOURCE = Path(__file__).resolve().parents[3] / ".github" / "oracle-omp-config.yml"
 GATEWAY_TOKEN_ENV = "OMP_GATEWAY_TOKEN"
 GATEWAY_PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
 GATEWAY_CLIENT = "oracle-ci"
 GATEWAY_TOKEN_MIN_LENGTH = 32
-DEVELOP_REF = "refs/heads/develop"
 NEW_DIFF_ACTIONS = ("opened", "synchronize")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 REVIEW = "review"
@@ -156,18 +154,13 @@ def _event() -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8")) if path else {}
 
 
-def _soundness_predicate() -> Any:
-    from .soundness_paths import is_soundness_path
-
-    return is_soundness_path
-
-
 def _base_plan(policy: Policy, repo: str, pr: int | None, run_id: str) -> dict[str, Any]:
     return {
         "schema": 1,
         "mode": policy.mode,
         "status_context": policy.status_context,
         "bot_login": policy.bot_login,
+        "omp_config": policy.consumer.omp_config,
         "findings_delivery": policy.findings_delivery,
         "repo": repo,
         "pr": pr,
@@ -338,10 +331,10 @@ def _base_changed_at(
 
 
 def _scoped_files(
-    files: list[ChangedFile], in_scope: set[str], policy: Policy, is_soundness: Any = None
+    files: list[ChangedFile], in_scope: set[str], policy: Policy, matchers: Matchers
 ) -> list[ChangedFile]:
     gate_paths = policy.classifier.gate_paths
-    is_soundness = is_soundness or _soundness_predicate()
+    is_soundness = matchers.is_soundness_path
     return [
         item
         for item in files
@@ -356,12 +349,12 @@ def _scoped_files(
 
 
 def _backoff_reset(
-    repo: str, pr: int, head_sha: str, run_id: str, manual: bool, previous: retry.State | None
+    repo: str, pr: int, head_sha: str, run_id: str, manual: bool, previous: retry.State | None, binding: Binding
 ) -> datetime | None:
     if not manual or previous is None or previous.head_sha != head_sha:
         return None
     try:
-        reset_at = github.backoff_reset_at(repo, pr, head_sha)
+        reset_at = github.backoff_reset_at(repo, pr, head_sha, binding.attesters)
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         _summary(f"oracle-verdict: the owner's backoff reset could not be read, so none applies: {exc}")
         return None
@@ -381,11 +374,11 @@ def _backoff_reset(
     return reset_at
 
 
-def _pull_guard(pull: Mapping[str, Any], event: Mapping[str, Any], head_sha: str) -> str | None:
+def _pull_guard(pull: Mapping[str, Any], event: Mapping[str, Any], head_sha: str, gated_base: str) -> str | None:
     if pull["state"] != "open":
         return "the pull request is not open"
-    if pull["base"]["ref"] != "develop":
-        return "the pull request does not target develop"
+    if pull["base"]["ref"] != gated_base:
+        return f"the pull request does not target {gated_base}"
     if pull.get("draft"):
         return "the pull request is a draft"
     inputs = event.get("inputs")
@@ -419,14 +412,14 @@ def _comment_view(comment: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _ruling(
-    found: protocol.History, view: Mapping[str, Any], head_sha: str
+    found: protocol.History, view: Mapping[str, Any], head_sha: str, attesters: frozenset[str]
 ) -> tuple[adjudication.Adjudication | None, str]:
     latest = found.latest
     if found.error is not None:
         return None, found.error
     if latest is None or latest["head_sha"] != head_sha:
         return None, "the adjudication is not for the current head"
-    ruling = adjudication.valid(view, found.latest_at)
+    ruling = adjudication.valid(view, found.latest_at, attesters)
     if ruling is None:
         return None, "the adjudication is not an unedited attester comment posted after the latest review of this head"
     if latest["decision"] != protocol.SHIP_WITH_FIXES or ruling.defect_id not in latest.get("escalated", ()):
@@ -439,14 +432,14 @@ def _plan_adjudication(out_dir: Path, plan: dict[str, Any], policy: Policy, even
     try:
         comment = github.get_json(f"repos/{repo}/issues/comments/{int((event.get('comment') or {}).get('id'))}")
         found = _plan_history(repo, pr, policy.bot_login)
-        previous = github.latest_state(repo, pr)
+        previous = github.latest_state(repo, pr, policy.consumer.gated_base)
     except edits.EditStateError as exc:
         print(f"oracle-verdict: error: {exc}", file=sys.stderr)
         return 2
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         plan["decision_reason"] = f"the adjudication could not be checked: {exc}"
         return _finish_plan(out_dir, plan)
-    ruling, problem = _ruling(found, _comment_view(comment), plan["head_sha"])
+    ruling, problem = _ruling(found, _comment_view(comment), plan["head_sha"], frozenset(policy.consumer.attesters))
     latest = found.latest
     if ruling is None or latest is None:
         plan["decision_reason"] = problem
@@ -614,9 +607,14 @@ def _load_ci_promotion(
 
 
 def _initial_scope_stop(
-    plan: dict[str, Any], pull: Mapping[str, Any], files: list[ChangedFile], policy: Policy, repo: str
+    plan: dict[str, Any],
+    pull: Mapping[str, Any],
+    files: list[ChangedFile],
+    policy: Policy,
+    repo: str,
+    matchers: Matchers,
 ) -> tuple[set[str] | None, bool]:
-    scope = soundness_scope(files, policy.classifier, _soundness_predicate())
+    scope = soundness_scope(files, policy.classifier, matchers)
     if len(files) < int(pull.get("changed_files") or 0):
         plan["decision"] = HOLD
         plan["decision_reason"] = (
@@ -638,13 +636,19 @@ def _initial_scope_stop(
 
 
 def command_plan(args: argparse.Namespace) -> int:
-    policy = load_policy(Path(args.policy))
+    try:
+        policy = load_policy(Path(args.policy))
+        matchers = load_matchers(policy.consumer, Path.cwd())
+    except (OSError, PolicyError) as exc:
+        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        return 2
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
     event_name = os.environ["GITHUB_EVENT_NAME"]
     event = _event()
-    if event_name == "workflow_dispatch" and os.environ.get("GITHUB_REF") != DEVELOP_REF:
-        print("oracle-verdict: error: dispatch runs only from develop", file=sys.stderr)
+    gated_base = policy.consumer.gated_base
+    if event_name == "workflow_dispatch" and os.environ.get("GITHUB_REF") != f"refs/heads/{gated_base}":
+        print(f"oracle-verdict: error: dispatch runs only from {gated_base}", file=sys.stderr)
         return 2
     pr = _pr_number(args.pr)
     out_dir = Path(args.out)
@@ -653,7 +657,7 @@ def command_plan(args: argparse.Namespace) -> int:
     plan["base_sha"] = pull["base"]["sha"]
     plan["base_ref"] = pull["base"]["ref"]
     plan["head_sha"] = pull["head"]["sha"]
-    guard_reason = _pull_guard(pull, event, plan["head_sha"])
+    guard_reason = _pull_guard(pull, event, plan["head_sha"], gated_base)
     if guard_reason is not None:
         plan["decision_reason"] = guard_reason
         return _finish_plan(out_dir, plan)
@@ -661,7 +665,7 @@ def command_plan(args: argparse.Namespace) -> int:
     if github.get_json(f"repos/{repo}/pulls/{pr}")["head"]["sha"] != plan["head_sha"]:
         plan["decision_reason"] = "the head moved while the plan read it; its own run reviews it"
         return _finish_plan(out_dir, plan)
-    in_scope_initial, stopped = _initial_scope_stop(plan, pull, files, policy, repo)
+    in_scope_initial, stopped = _initial_scope_stop(plan, pull, files, policy, repo, matchers)
     if stopped or in_scope_initial is None:
         return _finish_plan(out_dir, plan)
     manual = event_name in ("issue_comment", "workflow_dispatch")
@@ -678,14 +682,14 @@ def command_plan(args: argparse.Namespace) -> int:
     if _is_adjudication(event_name, event):
         return _plan_adjudication(out_dir, plan, policy, event)
     try:
-        previous = github.latest_state(repo, pr)
+        previous = github.latest_state(repo, pr, gated_base)
     except (github.GitHubError, KeyError, ValueError) as exc:
         if manual:
             plan["decision_reason"] = f"the retry state could not be read: {exc}"
             return _refused_marked(_finish_plan(out_dir, plan), marked, plan)
         previous = None
     now = _now()
-    reset_at = _backoff_reset(repo, pr, plan["head_sha"], plan["run_id"], manual, previous)
+    reset_at = _backoff_reset(repo, pr, plan["head_sha"], plan["run_id"], manual, previous, policy.binding())
     rerun = retry.decide_rerun(
         manual=manual,
         new_diff=new_diff,
@@ -747,6 +751,7 @@ def command_plan(args: argparse.Namespace) -> int:
             body=pull.get("body") or "",
             promotion=promotion_bundle,
         ),
+        matchers,
     )
 
 
@@ -841,7 +846,7 @@ def _resolve_promotion_bundle(
         return None, f"theseus promotion hold: {exc}"
 
 
-def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: RoundInputs) -> int:
+def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: RoundInputs, matchers: Matchers) -> int:
     active_promotion, hold_reason = _resolve_promotion_bundle(plan, policy, inputs)
     if hold_reason is not None:
         plan.update({"decision": HOLD, "decision_reason": hold_reason})
@@ -854,7 +859,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     all_files = [*inputs.files, *upstream_files]
     in_scope = set(inputs.in_scope) | upstream_in_scope
     scoped = [
-        *_scoped_files(inputs.files, inputs.in_scope, policy),
+        *_scoped_files(inputs.files, inputs.in_scope, policy, matchers),
         *[item for item in upstream_files if item.path in upstream_in_scope or not item.path.endswith(PROSE_SUFFIXES)],
     ]
     found = inputs.found
@@ -923,7 +928,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         in_scope,
         inputs.full_diff,
         inputs.pool_blocks,
-        _soundness_predicate(),
+        matchers,
         promotion_record=active_promotion.record.to_json() if active_promotion is not None else None,
         upstream_protected=upstream_in_scope,
     )
@@ -1096,8 +1101,7 @@ def _plan_review(
     in_scope: set[str],
     full_diff: str | None,
     pool_blocks: Mapping[str, selection.PoolBlock],
-    is_soundness: Callable[[str], bool],
-    is_machine_read: Callable[[str], bool] = is_machine_read_doc,
+    matchers: Matchers,
     *,
     promotion_record: Mapping[str, Any] | None = None,
     upstream_protected: frozenset[str] | set[str] = frozenset(),
@@ -1134,7 +1138,7 @@ def _plan_review(
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
 
     def _protected(path: str) -> bool:
-        return path in upstream_protected or is_soundness(path) or is_machine_read(path) or bool(matching([path], held))
+        return path in upstream_protected or matchers.is_protected(path) or bool(matching([path], held))
 
     listing_bytes = len(file_listing(changed).encode("utf-8"))
     diff_bytes = len((diff_text or "").encode("utf-8"))
@@ -1695,8 +1699,10 @@ def _surface_twice_failed(
     _summary(f"oracle-verdict #{number} {head}: {description}")
 
 
-def _state_after_base_change(repo: str, number: int, base_changed_at: datetime | None) -> retry.State | None:
-    state = github.latest_state(repo, number)
+def _state_after_base_change(
+    repo: str, number: int, base_changed_at: datetime | None, gated_base: str
+) -> retry.State | None:
+    state = github.latest_state(repo, number, gated_base)
     if state is None or not base_change.survives(state.updated_at, base_changed_at):
         return None
     return state
@@ -1728,15 +1734,16 @@ def _retry_reason(
     rules: RetryRules,
     now: datetime,
     status_context: str,
-    bot_login: str,
+    binding: Binding,
     token: str | None,
     *,
     full: bool = True,
 ) -> str | None:
+    bot_login = binding.bot_login
     number = pull["number"]
     head = pull["head"]["sha"]
     base_changed_at = github.base_changed_at(repo, number)
-    state = _state_after_base_change(repo, number, base_changed_at)
+    state = _state_after_base_change(repo, number, base_changed_at, binding.gated_base)
     relevant = tuple(run for run in runs or () if run.head in (None, head))
 
     def resolved() -> tuple[tuple[sweep.Run, ...], tuple[sweep.Run, ...]]:
@@ -1777,7 +1784,7 @@ def _retry_reason(
             )
         if state.outcome != retry.PENDING or state.pending_cause not in (retry.ALL_ABSENT, retry.UNPUBLISHED):
             return None
-        reset_at = github.backoff_reset_at(repo, number, head)
+        reset_at = github.backoff_reset_at(repo, number, head, binding.attesters)
         usable = (
             reset_at is not None
             and state.pending_cause == retry.ALL_ABSENT
@@ -1968,7 +1975,7 @@ def command_sweep(args: argparse.Namespace) -> int:
     full = runs is not None
     dispatched = 0
     errors: list[str] = []
-    for pull in github.get_paginated(f"repos/{repo}/pulls?state=open&base=develop&per_page=100"):
+    for pull in github.get_paginated(f"repos/{repo}/pulls?state=open&base={policy.consumer.gated_base}&per_page=100"):
         if dispatched >= policy.retry.sweep_max_dispatches:
             break
         if pull.get("draft") or (pull["head"].get("repo") or {}).get("full_name") != repo:
@@ -1982,7 +1989,7 @@ def command_sweep(args: argparse.Namespace) -> int:
                 policy.retry,
                 now,
                 policy.status_context,
-                policy.bot_login,
+                policy.binding(),
                 token,
                 full=full,
             )
@@ -1996,6 +2003,7 @@ def command_sweep(args: argparse.Namespace) -> int:
                 WORKFLOW_FILE,
                 number,
                 pull["head"]["sha"],
+                policy.consumer.gated_base,
                 sweep.STATELESS_RETRY_REASON if reason == STATELESS_FAILURE else None,
             )
         except (github.GitHubError, KeyError, TypeError, ValueError, OSError) as exc:
@@ -2021,22 +2029,26 @@ def command_reset_backoff(args: argparse.Namespace) -> int:
         raise SystemExit("oracle-verdict: the head must be the full 40-character commit")
     if not reset.valid_reason(args.reason or ""):
         raise SystemExit(f"oracle-verdict: the reason must be one line of at most {reset.REASON_LIMIT} characters")
+    try:
+        attesters = frozenset(load_policy(Path(args.policy)).consumer.attesters)
+    except (OSError, PolicyError) as exc:
+        raise SystemExit(f"oracle-verdict: error: {exc}") from exc
     repo = args.repo or os.environ.get("GITHUB_REPOSITORY") or github.current_repository()
     login = github.current_login()
-    if login not in reset.ATTESTERS:
+    if login not in attesters:
         raise SystemExit(f"oracle-verdict: {login} is not an owner account that may reset a backoff")
     pull = github.get_json(f"repos/{repo}/pulls/{pr}")
     if pull["state"] != "open" or pull["head"]["sha"] != head:
         raise SystemExit(f"oracle-verdict: #{pr} is not open at head {head}")
     comments = github.get_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100")
-    if not reset.has_owner_instruction(comments, head):
+    if not reset.has_owner_instruction(comments, head, attesters):
         raise SystemExit(f"oracle-verdict: post an 'Owner instruction' comment on #{pr} that names head {head} first")
     github.post_comment(repo, pr, reset.reset_body(head, args.reason))
     _summary(f"oracle-verdict #{pr} {head}: the retry backoff is reset once: {args.reason}")
     return 0
 
 
-def write_reviewer_home(home: Path, gateway_url: str, allow_loopback_http: bool = False) -> None:
+def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_loopback_http: bool = False) -> None:
     url = gateway_url.strip()
     if not url:
         raise SystemExit("oracle-verdict: error: the gateway URL is empty; set the ORACLE_GATEWAY_URL secret")
@@ -2048,7 +2060,7 @@ def write_reviewer_home(home: Path, gateway_url: str, allow_loopback_http: bool 
         raise SystemExit("oracle-verdict: error: the gateway URL must be an https:// URL")
     agent_dir = home / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "config.yml").write_text(OMP_CONFIG_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+    (agent_dir / "config.yml").write_text(config_text, encoding="utf-8")
     providers = "".join(
         f"  {provider}:\n    transport: pi-native\n    baseUrl: {json.dumps(url)}\n    apiKey: {GATEWAY_TOKEN_ENV}\n"
         for provider in GATEWAY_PROVIDERS
@@ -2057,7 +2069,7 @@ def write_reviewer_home(home: Path, gateway_url: str, allow_loopback_http: bool 
 
 
 def command_reviewer_home(args: argparse.Namespace) -> int:
-    write_reviewer_home(Path(args.home), args.gateway_url)
+    write_reviewer_home(Path(args.home), args.gateway_url, Path(args.omp_config).read_text(encoding="utf-8"))
     return 0
 
 
@@ -2087,7 +2099,10 @@ def _run_slot(args: argparse.Namespace, plan: Mapping[str, Any], slot: int, revi
     try:
         with _scratch_environment(home):
             write_reviewer_home(
-                home, os.environ.get("ORACLE_GATEWAY_URL", ""), bool(getattr(args, "allow_loopback_http", False))
+                home,
+                os.environ.get("ORACLE_GATEWAY_URL", ""),
+                Path(plan["omp_config"]).read_text(encoding="utf-8"),
+                bool(getattr(args, "allow_loopback_http", False)),
             )
             command_review(
                 argparse.Namespace(
@@ -2289,7 +2304,7 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         if digest in digests.values():
             raise SystemExit(f"oracle-verdict: error: gateway client {name} shares its token with another client")
         digests[name] = digest
-    models = gateway_models(yaml.safe_load(OMP_CONFIG_SOURCE.read_text(encoding="utf-8")))
+    models = gateway_models(yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8")))
     providers = list(dict.fromkeys(model.split("/", 1)[0] for model in models))
     unknown = [provider for provider in providers if provider not in GATEWAY_PROVIDERS]
     if unknown:
@@ -2320,7 +2335,7 @@ def command_local_review(args: argparse.Namespace) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="oracle-verdict")
+    parser = argparse.ArgumentParser(prog="theseus")
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--policy", required=True)
@@ -2370,10 +2385,12 @@ def _parser() -> argparse.ArgumentParser:
     reset_backoff.add_argument("--head", required=True)
     reset_backoff.add_argument("--reason", required=True)
     reset_backoff.add_argument("--repo")
+    reset_backoff.add_argument("--policy", required=True)
     reset_backoff.set_defaults(handler=command_reset_backoff)
     home = commands.add_parser("reviewer-home")
     home.add_argument("--home", required=True)
     home.add_argument("--gateway-url", required=True)
+    home.add_argument("--omp-config", required=True)
     home.set_defaults(handler=command_reviewer_home)
     attempts = commands.add_parser("attempts")
     attempts.add_argument("--plan", required=True)
@@ -2404,10 +2421,12 @@ def _parser() -> argparse.ArgumentParser:
     clients.add_argument("--accounts")
     clients.add_argument("--client", action="append", default=[], metavar="NAME=TOKEN_FILE")
     clients.add_argument("--out", required=True)
+    clients.add_argument("--omp-config", required=True)
     clients.set_defaults(handler=command_gateway_clients)
     local_review = commands.add_parser("local-review")
     local_review.add_argument("--policy", required=True)
-    local_review.add_argument("--base-ref", default="origin/develop")
+    local_review.add_argument("--repo", default="")
+    local_review.add_argument("--base-ref", default="")
     local_review.add_argument("--trusted-ref", default="")
     local_review.add_argument("--head", default="HEAD")
     local_review.add_argument("--rebuttals", default="")
@@ -2421,17 +2440,31 @@ def _parser() -> argparse.ArgumentParser:
     from . import driver
 
     driver.register(commands)
+    _register_passthrough(commands)
     return parser
+
+
+def _register_passthrough(commands: Any) -> None:
+    from . import bootstrap, gate, matcher_cli, omp_bump, omp_candidate, omp_watch, promotion_check
+
+    delegated: dict[str, tuple[str, Callable[[Sequence[str]], int]]] = {
+        "gate": ("Evaluate and post the oracle-gate status for a pull request head.", gate.run),
+        "promotion-check": (
+            "Verify a theseus lock's artifact bytes and dependency closure against reviewed source.",
+            promotion_check.main,
+        ),
+        "bootstrap": ("Resolve a lock from a trusted consumer commit and install it hash-verified.", bootstrap.main),
+        "matcher": ("Soundness-path matcher predicate and vendored-copy drift check.", matcher_cli.main),
+        "omp-bump": ("Prepare an OMP pin bump.", omp_bump.main),
+        "omp-watch": ("Evaluate OMP release watch evidence.", omp_watch.main),
+        "omp-candidate-check": ("Check an OMP candidate build.", omp_candidate.main),
+    }
+    for name, (description, entry) in delegated.items():
+        passthrough = commands.add_parser(name, add_help=False, help=description)
+        passthrough.add_argument("rest", nargs=argparse.REMAINDER)
+        passthrough.set_defaults(handler=lambda args, entry=entry: entry(args.rest))
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     return int(args.handler(args))
-
-
-if __name__ == "__main__":
-    if sys.argv[1:2] == ["local-review"]:
-        from . import local
-
-        local.withhold_secrets()
-    raise SystemExit(main())

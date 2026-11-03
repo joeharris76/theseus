@@ -36,7 +36,8 @@ from . import (
 )
 from .classifier import ChangedFile, soundness_scope
 from .commands import LOOPBACK_PROXY
-from .policy import Policy, load_policy
+from .matchers import load_matchers
+from .policy import Policy, PolicyError, load_policy, parse_policy
 from .verdict import DO_NOT_SHIP, Finding
 
 BLOCKING_SEVERITIES = ("Critical", "High")
@@ -53,12 +54,10 @@ HOST_TOKEN_FILES = {
     "ORACLE_HOST_TOKEN_CLIENT": GATEWAY_DIRECTORY / "client.token",
 }
 CLOUD_TOKEN_ENV = "ORACLE_CLOUD_GATEWAY_TOKEN"
-CLOUD_SESSION_ENV = "BENCHBOX_EPHEMERAL_CLONE"
-CLOUD_STATUS_FILE = "benchbox-cloud-gateway.status"
-SOUNDNESS_MANIFEST = ".github/soundness-paths.txt"
-INERT_MANIFEST = ".github/inert-paths.txt"
+CLOUD_SESSION_ENV = "THESEUS_EPHEMERAL_CLONE"
+CLOUD_STATUS_FILE = "theseus-cloud-gateway.status"
+TRUSTED_POLICY_FILE = "policy.yml"
 REMOTE_SLUG = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
-DEFAULT_REPOSITORY = "BenchBox-dev/BenchBox"
 CACHE_SCHEMA = 2
 CAPTURE_DIR = "captures"
 POOL_BLOCKS_FILE = "pool-blocks.json"
@@ -79,7 +78,6 @@ MEMBER_FINDINGS = "findings"
 MEMBER_NOT_REVIEWED = "not-reviewed"
 MEMBER_OVERRIDE = "override"
 FULL_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
-DEFAULT_POLICY = ".github/oracle-reviewers.yml"
 ADVISORY = "Local oracle review (advisory; it may differ from the CI oracle and posts nothing to GitHub)"
 WITHHELD_FROM_PHASES = frozenset(
     {*credentials.NAMES, "TS_AUTHKEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", *HOST_TOKEN_FILES}
@@ -98,7 +96,7 @@ REBUTTALS_ENV = "ORACLE_LOCAL_REBUTTALS"
 RECORD_OUT_ENV = "ORACLE_LOCAL_RECORD_OUT"
 ADJUDICATE_ENV = "ORACLE_LOCAL_ADJUDICATE"
 EXCLUDE_ENV = "ORACLE_LOCAL_EXCLUDE"
-PACKAGE_ROOT = Path(__file__).resolve().parents[3]
+TRUSTED_ENV = "ORACLE_LOCAL_TRUSTED"
 STATUS_NAMES = {"A": "added", "C": "added", "D": "removed", "R": "renamed"}
 GITHUB_ACCESS_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 SCRUBBED_AT_START = frozenset({*credentials.NAMES, "TS_AUTHKEY", *GITHUB_ACCESS_ENV})
@@ -138,7 +136,7 @@ class Reporter:
 
 
 def state_dir() -> Path:
-    return Path.home() / ".cache" / "benchbox" / "local-oracle"
+    return Path.home() / ".cache" / "theseus" / "local-oracle"
 
 
 def _git_bytes(root: Path, *args: str) -> bytes:
@@ -157,7 +155,10 @@ def _git(root: Path, *args: str) -> str:
     return result.stdout
 
 
-def _repository(root: Path) -> str:
+def _repository(root: Path, explicit: str = "") -> str:
+    given = explicit.strip() or os.environ.get(REPOSITORY_ENV, "").strip()
+    if given:
+        return given
     result = subprocess.run(
         ["git", "-C", str(root), "remote", "get-url", "origin"],
         capture_output=True,
@@ -167,7 +168,12 @@ def _repository(root: Path) -> str:
         check=False,
     )
     match = REMOTE_SLUG.search(result.stdout.strip()) if result.returncode == 0 else None
-    return match.group(1) if match else DEFAULT_REPOSITORY
+    if not match:
+        raise Refused(
+            f"cannot tell which GitHub repository {root} belongs to; pass --repo or set {REPOSITORY_ENV} "
+            "(the origin remote is missing or is not a github.com URL)"
+        )
+    return match.group(1)
 
 
 def _name_status(root: Path, base: str, head: str) -> list[tuple[str, str, str | None]]:
@@ -253,6 +259,7 @@ class LocalEnvironment:
     pr: str
     repo: str
     root: Path
+    trusted: Path
     base_ref: str
     head: str
     state: Path
@@ -275,6 +282,7 @@ class LocalEnvironment:
             pr=environ.get(PR_ENV, ""),
             repo=environ[REPOSITORY_ENV],
             root=Path(environ[ROOT_ENV]),
+            trusted=Path(environ[TRUSTED_ENV]),
             base_ref=environ[BASE_ENV],
             head=environ[HEAD_ENV],
             state=Path(environ[STATE_ENV]),
@@ -322,7 +330,8 @@ class LocalEnvironment:
         if not files:
             plan["decision_reason"] = f"no committed changes against {self.base_ref}"
             return cli._finish_plan(out_dir, plan)
-        scope = soundness_scope(files, policy.classifier, cli._soundness_predicate())
+        matchers = load_matchers(policy.consumer, self.trusted)
+        scope = soundness_scope(files, policy.classifier, matchers)
         plan["scope_paths"] = list(scope.paths)
         plan["gate_paths"] = list(scope.gate_paths)
         plan["scope_reasons"] = list(scope.reasons)
@@ -393,6 +402,7 @@ class LocalEnvironment:
                 base_change_unreadable=base_changed[1],
                 disputes=disputes,
             ),
+            matchers,
         )
         if code == 0 and local and found.latest is not None:
             self._pin_reviewer(out_dir, found.latest["reviewer"])
@@ -547,31 +557,36 @@ def host_token_values() -> dict[str, str]:
 @dataclass(frozen=True)
 class Trusted:
     policy: str
-    soundness: str
-    inert: str
+    files: tuple[tuple[str, str], ...]
 
     @classmethod
     def read(cls, root: Path, base_ref: str, policy_path: str) -> Trusted:
-        return cls(
-            _git(root, "show", f"{base_ref}:{policy_path}"),
-            _git(root, "show", f"{base_ref}:{SOUNDNESS_MANIFEST}"),
-            _git(root, "show", f"{base_ref}:{INERT_MANIFEST}"),
-        )
+        import yaml
 
-    def write(self, directory: Path) -> tuple[Path, Path, Path]:
+        policy_text = _git(root, "show", f"{base_ref}:{policy_path}")
+        try:
+            consumer = parse_policy(yaml.safe_load(policy_text)).consumer
+        except (PolicyError, yaml.YAMLError) as exc:
+            raise Unavailable(f"the trusted review policy at {base_ref} is invalid: {exc}") from exc
+        paths = (consumer.soundness_manifest, consumer.inert_manifest, consumer.omp_config)
+        return cls(policy_text, tuple((path, _git(root, "show", f"{base_ref}:{path}")) for path in paths if path))
+
+    def write(self, directory: Path) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
-        paths = (directory / "oracle-reviewers.yml", directory / "soundness-paths.txt", directory / "inert-paths.txt")
-        for path, text in zip(paths, (self.policy, self.soundness, self.inert), strict=True):
-            path.write_text(text, encoding="utf-8")
-        return paths
+        (directory / TRUSTED_POLICY_FILE).write_text(self.policy, encoding="utf-8")
+        for path, text in self.files:
+            target = directory / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        return directory / TRUSTED_POLICY_FILE
 
     def digest(self) -> str:
         package = Path(__file__).resolve().parent
         files = sorted(item for item in (*package.glob("*.py"), *package.glob("templates/*")) if item.is_file())
         digest = hashlib.sha256()
-        for text in (self.policy, self.soundness, self.inert):
+        for text in (self.policy, *(f"{path}\0{text}" for path, text in self.files)):
             digest.update(hashlib.sha256(text.encode("utf-8")).digest())
-        for item in (*files, cli.OMP_CONFIG_SOURCE):
+        for item in files:
             digest.update(item.name.encode("utf-8"))
             digest.update(item.read_bytes())
         return digest.hexdigest()
@@ -763,8 +778,7 @@ class Run:
     root: Path
     work: Path
     policy: Path
-    soundness: Path
-    inert: Path
+    trusted_root: Path
     repository: str
     head: str
     base_ref: str
@@ -796,9 +810,7 @@ class Run:
             scan_roots.append(Path.home())
         kept.update(
             {
-                "PYTHONPATH": str(PACKAGE_ROOT),
-                "SOUNDNESS_PATH_MANIFEST": str(self.soundness),
-                "INERT_PATH_MANIFEST": str(self.inert),
+                TRUSTED_ENV: str(self.trusted_root),
                 "GITHUB_RUN_ID": self.run_id,
                 "GITHUB_OUTPUT": str(self.work / "outputs" / f"{phase}.txt"),
                 "GITHUB_ENV": str(self.work / "harness-env.txt"),
@@ -845,8 +857,9 @@ class Run:
         output.write_text("", encoding="utf-8")
         argv = [
             sys.executable,
+            "-P",
             "-m",
-            "_project.scripts.oracle_reviewers.cli",
+            "theseus_reviewer",
             "drive",
             "--policy",
             str(self.policy),
@@ -856,7 +869,7 @@ class Run:
         ]
         result = subprocess.run(
             argv,
-            cwd=PACKAGE_ROOT,
+            cwd=self.work,
             env={**self._environ(phase, self.grants(phase)), **(extra or {})},
             capture_output=True,
             text=True,
@@ -1149,7 +1162,7 @@ def _run_review(
 ) -> Outcome:
     root = Path.cwd()
     trusted = Trusted.read(root, args.trusted_ref or args.base_ref, args.policy)
-    repository = _repository(root)
+    repository = _repository(root, getattr(args, "repo", ""))
     key = classifier_key()
     reporter.hide(key, *(_held(name) for name in ("TS_AUTHKEY", *GITHUB_ACCESS_ENV)), *host_token_values().values())
     pr = None
@@ -1158,13 +1171,13 @@ def _run_review(
             pr = open_pull(repository, _current_branch(root))
     work = Path(tempfile.mkdtemp(prefix="oracle-local-"))
     try:
-        policy, soundness, inert = trusted.write(work / "trusted")
+        trusted_root = work / "trusted"
+        policy = trusted.write(trusted_root)
         run = Run(
             root,
             work,
             policy,
-            soundness,
-            inert,
+            trusted_root,
             repository,
             head,
             args.base_ref,
@@ -1257,11 +1270,13 @@ def _member_outcome(outcome: Outcome, adjudicate: str) -> tuple[str, str]:
     return MEMBER_CLEAR, f"decided {outcome.label} with no Critical or High findings"
 
 
-def member_review_result(root: Path, base_sha: str, head_sha: str, trusted_sha: str) -> dict[str, Any] | None:
+def member_review_result(
+    root: Path, base_sha: str, head_sha: str, trusted_sha: str, policy_path: str
+) -> dict[str, Any] | None:
     try:
         for label, value in (("base", base_sha), ("head", head_sha), ("trusted", trusted_sha)):
             _commit_sha(root, label, value)
-        trusted = Trusted.read(root, trusted_sha, DEFAULT_POLICY)
+        trusted = Trusted.read(root, trusted_sha, policy_path)
         data = json.loads(
             _member_path(state_dir(), _member_key(base_sha, head_sha, trusted_sha, trusted)).read_text("utf-8")
         )
@@ -1302,6 +1317,15 @@ def _member_review(args: argparse.Namespace, reporter: Reporter) -> int:
     return EXIT_PROCEED
 
 
+def _default_base_ref(args: argparse.Namespace) -> None:
+    if args.base_ref:
+        return
+    try:
+        args.base_ref = f"origin/{load_policy(Path(args.policy)).consumer.gated_base}"
+    except (PolicyError, OSError, ValueError) as exc:
+        raise Refused(f"--base-ref was not given and the gated base cannot be read from {args.policy}: {exc}") from exc
+
+
 def command_review(args: argparse.Namespace) -> int:
     reporter = Reporter()
     member = getattr(args, "member", False)
@@ -1310,6 +1334,7 @@ def command_review(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     subject = "the member review" if member else "to open the PR"
     try:
+        _default_base_ref(args)
         return _member_review(args, reporter) if member else _review(args, reporter)
     except Refused as exc:
         reporter.say(f"Refusing {subject}: {exc}", error=True)

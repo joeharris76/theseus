@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from .classifier import ChangedFile
 
 LOCK_PATH = ".github/theseus-lock.json"
-INSTALLER_PATH = "_project/scripts/theseus_bootstrap.py"
 STAGED_PROMOTION_DIR = ".oracle-promotion"
 PROMOTION_PLAN_DIR = "promotion"
 UPSTREAM_DIFF_NAME = "upstream.diff"
@@ -1256,7 +1255,7 @@ def refusals(
     repo: str,
     complete: bool = True,
     base_time: datetime | None = None,
-    oracle_login: str = "benchbox-oracle",
+    oracle_login: str,
     rules: PromotionRules,
     comments: Sequence[Mapping[str, Any]] = (),
     is_ancestor: AncestorCheck | None = None,

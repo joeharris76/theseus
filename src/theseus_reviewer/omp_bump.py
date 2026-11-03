@@ -22,7 +22,6 @@ BUILD_HOST = "https://build.stencil.so"
 API_TIMEOUT_SECONDS = 30
 CHANNEL = "stable"
 HELP_DIFF_LINES = 120
-POLICY_PATH = omp_candidate.POLICY_PATH
 TARGETS = {
     "linux-x64": ("linux-x86_64", "omp-linux-x64"),
     "linux-arm64": ("linux-arm64", "omp-linux-arm64"),
@@ -195,6 +194,8 @@ def render_body(
 def prepare(
     policy_text: str,
     *,
+    omp_config: Path,
+    fixtures: Path,
     getter: JsonGetter = get_json,
     fetch: omp_pin.Fetch | None = None,
     chain_factory: ChainFactory | None = None,
@@ -218,7 +219,12 @@ def prepare(
 
         candidate = release.pin()
         binary = paths[host] if host in paths else None
-        kwargs: dict[str, Any] = {"fetch": local_copy, "binary": binary}
+        kwargs: dict[str, Any] = {
+            "omp_config": omp_config,
+            "fixtures": fixtures,
+            "fetch": local_copy,
+            "binary": binary,
+        }
         if chain_factory is not None:
             kwargs["chain_factory"] = chain_factory
         report = omp_candidate.check_candidate(candidate, **kwargs)
@@ -252,7 +258,11 @@ def _publish(values: Mapping[str, str]) -> None:
 def command_prepare(args: argparse.Namespace) -> int:
     out = Path(args.out_dir)
     try:
-        outcome = prepare(Path(args.policy).read_text(encoding="utf-8"))
+        outcome = prepare(
+            Path(args.policy).read_text(encoding="utf-8"),
+            omp_config=Path(args.omp_config),
+            fixtures=Path(args.fixtures),
+        )
     except (OSError, BumpError, omp_pin.PinError) as exc:
         print(f"omp-bump: error: {exc}", file=sys.stderr)
         return 1
@@ -270,7 +280,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="omp-bump")
     commands = parser.add_subparsers(dest="command", required=True)
     prepare_parser = commands.add_parser("prepare")
-    prepare_parser.add_argument("--policy", default=str(POLICY_PATH))
+    prepare_parser.add_argument("--policy", required=True)
+    prepare_parser.add_argument("--omp-config", required=True)
+    prepare_parser.add_argument("--fixtures", required=True)
     prepare_parser.add_argument("--out-dir", required=True)
     prepare_parser.set_defaults(handler=command_prepare)
     return parser
