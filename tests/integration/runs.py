@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,36 +16,46 @@ from theseus_reviewer import isolation, omp_pin
 
 from .fake_github import APP_TOKEN, JOB_TOKEN
 from .harness import (
-    ALPHA_ROOT,
     APP_PRIVATE_KEY,
     GATEWAY_TOKEN,
     HELD_SECRET,
     JEV_KEY,
     OAUTH_CLIENT_ID,
-    WORKFLOW,
+    PACKAGE,
+    POLICY,
+    REPO_ROOT,
     ReviewRun,
     Step,
     git,
+)
+from .harness import (
+    outputs as outputs_of,
 )
 
 if TYPE_CHECKING:
     from .harness import Harness
 
 GATEWAY_URL = "https://gateway.example.invalid"
+TRUSTED_CHECKOUT = "Check out the trusted gated-branch copy"
+BOOTSTRAP_CHECKOUT = "Check out the pinned Theseus bootstrap"
+HOSTED_REVIEW = REPO_ROOT / ".github" / "workflows" / "review.yml"
 ENVIRONMENT_STEPS = frozenset(
     {
-        "Refuse a dispatch from any ref other than develop",
-        "Check out the trusted develop copy",
-        "Install uv",
+        TRUSTED_CHECKOUT,
+        BOOTSTRAP_CHECKOUT,
         "Join the tailnet to reach the credential gateway",
     }
 )
+REVIEWER_PIN = "Install the reviewer pin from the trusted base lock"
+GATE_PIN = "Install the gate pin from the current gated-branch lock"
+GATE_CHECKOUT = "Check out the current gated-branch gate"
+GATE_FAILURE = "Fail the run when the gate was not posted from it"
 HEAD_CHECKOUT = "Check out the pull request head for reading only"
 MINT_STEP = "Mint the App token"
 ISOLATION_PHASE = "isolation"
 DECOYED_STEPS = frozenset({"prepare", "finalize", "publish"})
 SCANS = ("scan-before", "scan-after-join", "scan-after-exit")
-DRIVE_PHASE = re.compile(r"\bdrive --policy (?P<policy>\S+) (?P<phase>\w+)\s*$")
+DRIVE_PHASE = re.compile(r"\btheseus drive --policy \"\$(?P<policy>\w+)\" (?P<phase>\w+)\s*$")
 CONDITION = re.compile(
     r"(?P<left>steps\.\w+\.outputs\.\w+|steps\.\w+\.outcome|env\.\w+) (?P<operator>==|!=|>=) (?P<right>'[^']*'|\d+)"
 )
@@ -68,6 +79,12 @@ def scan_step(harness: Harness, name: str, env: dict[str, str], policy: str) -> 
     return harness.run(name, [sys.executable, "-c", SCAN_WITHOUT_SHARED_SCRATCH, policy], env)
 
 
+@dataclass(frozen=True)
+class Pins:
+    bootstrap: Path
+    mirror: str
+
+
 @dataclass
 class Options:
     classification: tuple[str, str] = ("medium", "standard")
@@ -76,15 +93,17 @@ class Options:
     tamper_attempts: Callable[[Path], None] | None = None
     plan_env: dict[str, str] | None = None
     before_guard: Callable[[], None] | None = None
+    before_gate: Callable[[], None] | None = None
     app: bool = True
+    pins: Pins | None = None
 
 
 def review_steps() -> list[dict[str, Any]]:
-    return yaml.safe_load((ALPHA_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["steps"]
+    return yaml.safe_load(HOSTED_REVIEW.read_text(encoding="utf-8"))["jobs"]["review"]["steps"]
 
 
 def review_job_env() -> dict[str, str]:
-    return yaml.safe_load((ALPHA_ROOT / WORKFLOW).read_text(encoding="utf-8"))["jobs"]["review"]["env"]
+    return yaml.safe_load(HOSTED_REVIEW.read_text(encoding="utf-8"))["jobs"]["review"]["env"]
 
 
 def phase_keys() -> dict[str, tuple[str, dict[str, Any]]]:
@@ -137,24 +156,33 @@ class WorkflowRunner:
         self.job_env = {key: self._expression(value) for key, value in review_job_env().items()}
         self.keys = {name: key for name, (key, _) in phase_keys().items()}
         self.waived: set[str] = set()
+        self.pin_path: list[str] = []
 
     def _output(self, step: str, key: str) -> str:
         found = self.record.steps.get(step)
         return found.outputs.get(key, "") if found is not None else ""
 
     def _expression(self, raw: str) -> str:
-        expression = _bare(str(raw))
+        text = str(raw)
+        if EXPRESSION.fullmatch(text.strip()) is None and EXPRESSION.search(text):
+            return EXPRESSION.sub(lambda found: self._expression(found.group(0)), text)
+        expression = _bare(text)
         known: dict[str, str] = {
             "github.token": JOB_TOKEN,
+            "github.workspace": str(self.temp),
+            "runner.temp": str(self.temp),
+            "inputs.policy_path": POLICY,
             "secrets.TYPESAFE_API_KEY": JEV_KEY,
             "secrets.TS_OAUTH_CI_SECRET": HELD_SECRET,
             "secrets.TS_OAUTH_CI_CLIENT_ID": OAUTH_CLIENT_ID,
             "secrets.ORACLE_GATEWAY_TOKEN": GATEWAY_TOKEN,
             "secrets.ORACLE_GATEWAY_URL": GATEWAY_URL,
-            "github.event.pull_request.number || github.event.issue.number || inputs.pr": str(self.pr),
+            "github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr": str(self.pr),
             "secrets.ORACLE_APP_ID != ''": "true" if self.options.app else "false",
             "secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != ''": "true",
         }
+        if expression == "github.sha":
+            return git(self.harness.repo, "rev-parse", "develop")
         step_output = STEP_OUTPUT.fullmatch(expression)
         if step_output:
             return self._output(*step_output.group(1, 2))
@@ -213,6 +241,11 @@ class WorkflowRunner:
         extra = {"GITHUB_ENV": str(env_file)}
         if phase == "scan":
             result = scan_step(self.harness, key, {**env, **extra}, policy)
+        elif self.options.pins is not None:
+            path = os.pathsep.join([*self.pin_path, env["PATH"]])
+            result = self.harness.run(
+                key, ["bash", "-e", "-c", step["run"]], {**env, **extra, "PATH": path}, cwd=self.temp / "trusted"
+            )
         else:
             result = self.harness.cli(key, ["drive", "--policy", policy, phase], {**env, **extra})
         written = env_file.read_text(encoding="utf-8")
@@ -242,6 +275,43 @@ class WorkflowRunner:
 
     def _mint(self) -> None:
         self.record.steps["app"] = Step("app", 0, "", "", {"token": APP_TOKEN})
+
+    def _clone(self, name: str) -> None:
+        target = self.temp / name
+        if target.exists():
+            shutil.rmtree(target)
+        git(self.harness.root, "clone", "--quiet", str(self.harness.repo), str(target))
+
+    def _bash(self, key: str, step: dict[str, Any]) -> Step:
+        pins = self.options.pins
+        assert pins is not None
+        github_output = self.temp / f"github-output-{key}.txt"
+        github_path = self.temp / f"github-path-{key}.txt"
+        for file in (github_output, github_path):
+            file.write_text("", encoding="utf-8")
+        env = {
+            **self.env,
+            "GITHUB_WORKSPACE": str(self.temp),
+            "GITHUB_OUTPUT": str(github_output),
+            "GITHUB_PATH": str(github_path),
+            "ORACLE_PROMOTION_MIRROR": pins.mirror,
+            "PATH": os.pathsep.join([str(Path(sys.executable).parent), self.env["PATH"]]),
+            **{name: self._expression(value) for name, value in step.get("env", {}).items()},
+        }
+        result = self.harness.run(key, ["bash", "-e", "-c", step["run"]], env, cwd=self.temp)
+        result.outputs = outputs_of(github_output)
+        self.pin_path = [
+            *(line for line in github_path.read_text(encoding="utf-8").splitlines() if line),
+            *self.pin_path,
+        ]
+        return result
+
+    def _install_pin(self, key: str, step: dict[str, Any]) -> None:
+        if self.options.pins is None:
+            if key == "gate_pin":
+                self.record.steps[key] = Step(key, 0, "", "", {"command": " ".join(PACKAGE)})
+            return
+        self.record.steps[key] = self._bash(key, step)
 
     def _upload(self, step: dict[str, Any]) -> None:
         settings = step["with"]
@@ -277,13 +347,31 @@ class WorkflowRunner:
     def _execute(self, step: dict[str, Any]) -> None:
         name = step["name"]
         if name in ENVIRONMENT_STEPS:
+            if self.options.pins is not None and name == TRUSTED_CHECKOUT:
+                self._clone("trusted")
+            if self.options.pins is not None and name == BOOTSTRAP_CHECKOUT:
+                target = self.temp / "theseus-bootstrap" / "src" / "theseus_reviewer"
+                target.mkdir(parents=True)
+                shutil.copy(self.options.pins.bootstrap, target / "bootstrap.py")
             return
         if not self._runs(step):
             return
         if name == HEAD_CHECKOUT:
             self._checkout_head()
+        elif name == GATE_CHECKOUT:
+            if self.options.before_gate is not None:
+                self.options.before_gate()
+            self._clone("gate")
         elif name == MINT_STEP:
             self._mint()
+        elif name == REVIEWER_PIN:
+            self._install_pin("reviewer_pin", step)
+        elif name == GATE_PIN:
+            self._install_pin("gate_pin", step)
+            if step.get("continue-on-error"):
+                self.waived.add("gate_pin")
+        elif name == GATE_FAILURE:
+            self.record.steps["gate_failure"] = Step("gate_failure", 1, "", "oracle-gate was not posted", {})
         elif str(step.get("uses", "")).startswith("actions/upload-artifact"):
             self._upload(step)
         else:
@@ -291,7 +379,7 @@ class WorkflowRunner:
             assert match is not None, f"workflow step is not modelled by the runner: {name}"
             phase = match.group("phase")
             self._before(step.get("id", phase))
-            self._drive(step, phase, match.group("policy"))
+            self._drive(step, phase, self.job_env[match.group("policy")])
             if phase == "harness" and self.options.swap_after_install:
                 self.harness.swap_omp()
 

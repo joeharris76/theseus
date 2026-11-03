@@ -323,6 +323,7 @@ def _post_gate(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
         sink.gate(env.repo, int(plan["pr"]), plan["head_sha"])
     except github.GitHubError as exc:
         print(f"::warning::oracle-gate was not posted from this run: {exc}", file=sys.stderr)
+        cli._output({"gate_failed": "true"})
 
 
 def _credentialed_sink(env: Environment) -> Sink | None:

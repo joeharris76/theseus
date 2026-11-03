@@ -26,12 +26,13 @@ def _run_step(harness: Harness, name: str, extra: dict[str, str]) -> Step:
         "PATH": f"{Path(sys.executable).parent}:{harness.base_env(temp)['PATH']}",
         "GITHUB_WORKSPACE": str(workspace),
         "TMPDIR": str(temp / "tmp"),
+        "POLICY_PATH": POLICY,
         **extra,
     }
     (temp / "tmp").mkdir(exist_ok=True)
     command = step_by_name(name)["run"]
     if name == JOIN_SCAN_STEP:
-        assert command.strip() == f"theseus drive --policy {POLICY} scan"
+        assert command.strip() == 'theseus drive --policy "$POLICY_PATH" scan'
         return scan_step(harness, name, env, POLICY)
     return harness.run(name, ["bash", "-e", "-c", command], env)
 

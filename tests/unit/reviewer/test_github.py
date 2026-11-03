@@ -1032,6 +1032,29 @@ def test_post_gate_defaults_to_the_installed_package_command(monkeypatch: pytest
     assert github.gate_command() == ["uv", "run", "theseus"]
 
 
+def test_post_gate_passes_the_trusted_gate_root_only_when_one_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record = _fake_gate_command(monkeypatch, tmp_path, 0)
+    monkeypatch.setenv(github.GATE_ROOT_ENV, str(tmp_path / "gate"))
+
+    github.post_gate(REPO, 7, SHA, "app-token", Path(".github/policy.yml"))
+
+    assert json.loads(record.read_text(encoding="utf-8"))["argv"][-2:] == ["--root", str(tmp_path / "gate")]
+    monkeypatch.delenv(github.GATE_ROOT_ENV)
+    github.post_gate(REPO, 7, SHA, "app-token", Path(".github/policy.yml"))
+    assert "--root" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_post_gate_refuses_an_empty_gate_command_instead_of_using_the_current_interpreter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blank: str
+) -> None:
+    monkeypatch.setenv(github.GATE_COMMAND_ENV, blank)
+    with pytest.raises(github.GitHubError, match="THESEUS_GATE_COMMAND is set but empty"):
+        github.post_gate(REPO, 7, SHA, "app-token", tmp_path / "policy.yml")
+
+
 @pytest.mark.parametrize("code", [1, 2])
 def test_post_gate_raises_when_the_gate_could_not_be_posted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, code: int

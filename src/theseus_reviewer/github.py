@@ -22,6 +22,7 @@ STATE_ARTIFACT_PREFIX = "oracle-verdict-state-"
 STATE_FILE = "state.json"
 WAITING_EXIT = 3
 GATE_COMMAND_ENV = "THESEUS_GATE_COMMAND"
+GATE_ROOT_ENV = "THESEUS_GATE_ROOT"
 
 
 class GitHubError(RuntimeError):
@@ -556,12 +557,19 @@ def dispatch_gate(repo: str, pr: int, head: str, token: str, base: str) -> None:
 
 
 def gate_command() -> list[str]:
-    configured = os.environ.get(GATE_COMMAND_ENV, "").strip()
-    return shlex.split(configured) if configured else [sys.executable, "-m", "theseus_reviewer"]
+    configured = os.environ.get(GATE_COMMAND_ENV)
+    if configured is None:
+        return [sys.executable, "-m", "theseus_reviewer"]
+    if not configured.strip():
+        raise GitHubError(f"{GATE_COMMAND_ENV} is set but empty: the trusted gate pin was not resolved")
+    return shlex.split(configured)
 
 
 def post_gate(repo: str, pr: int, head: str, token: str, policy: Path) -> None:
     argv = [*gate_command(), "gate", "--repo", repo, "--pr", str(pr), "--head-sha", head, "--policy", str(policy)]
+    root = os.environ.get(GATE_ROOT_ENV, "").strip()
+    if root:
+        argv += ["--root", root]
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, check=False, env={**os.environ, "GITHUB_TOKEN": token}

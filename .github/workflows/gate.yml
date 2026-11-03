@@ -1,0 +1,318 @@
+name: theseus-gate
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Name of the caller environment that holds the GitHub App secrets
+        required: true
+        type: string
+      theseus_ref:
+        description: Full commit SHA of this workflow; the caller pins the same SHA on its uses line
+        required: true
+        type: string
+      theseus_repository:
+        description: Repository that holds the bootstrap installer at theseus_ref
+        required: false
+        type: string
+        default: joeharris76/theseus
+      gated_base:
+        description: Branch the gate applies to; its tip supplies the trusted policy and lock
+        required: true
+        type: string
+      policy_path:
+        description: Repository-relative path of the consumer review policy in the trusted checkout
+        required: false
+        type: string
+        default: .github/oracle-reviewers.yml
+      trusted_paths:
+        description: Sparse-checkout patterns that cover the policy and manifests
+        required: false
+        type: string
+        default: .github
+      caller_workflow:
+        description: File name of the caller workflow that runs this one and receives the dispatch
+        required: false
+        type: string
+        default: oracle-gate.yml
+      review_workflow_name:
+        description: Name of the caller workflow whose completion bridges into the gate
+        required: false
+        type: string
+        default: oracle-review
+
+permissions: {}
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Refuse a malformed pin, a foreign caller or a dispatch from another branch
+        env:
+          THESEUS_REF: ${{ inputs.theseus_ref }}
+          GATED_BASE: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$THESEUS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "theseus-gate: error: theseus_ref must be a full 40-hex commit SHA" >&2
+            exit 2
+          fi
+          if [ -z "$GATED_BASE" ]; then
+            echo "theseus-gate: error: gated_base is required" >&2
+            exit 2
+          fi
+          case "$WORKFLOW_REF" in
+            "$REPOSITORY/.github/workflows/$CALLER_WORKFLOW@"*) ;;
+            *)
+              echo "theseus-gate: error: caller workflow $WORKFLOW_REF is not $REPOSITORY/.github/workflows/$CALLER_WORKFLOW" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$CURRENT_REF" != "refs/heads/$GATED_BASE" ]; then
+            echo "theseus-gate: error: dispatch runs only from $GATED_BASE" >&2
+            exit 2
+          fi
+
+  gate:
+    name: gate
+    needs: guard
+    if: >-
+      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      github.event_name != 'schedule' && github.event_name != 'workflow_run' && github.event_name != 'push' &&
+      (github.event_name != 'issue_comment' || (github.event.issue.pull_request && (contains(github.event.comment.body, 'Stand-in oracle review: APPROVE') || contains(github.event.comment.body, 'Omp candidate check: ') || contains(github.event.comment.body, 'Oracle adjudication: ') || (github.event.action == 'edited' && (contains(github.event.changes.body.from, 'Stand-in oracle review: APPROVE') || contains(github.event.changes.body.from, 'Omp candidate check: ') || contains(github.event.changes.body.from, 'Oracle adjudication: '))))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' && secrets.ORACLE_APP_PRIVATE_KEY != '' }}
+      REPO: ${{ github.repository }}
+      POLICY_PATH: ${{ inputs.policy_path }}
+    steps:
+      - name: Check out the trusted gated-branch copy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.gated_base }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the pinned Theseus bootstrap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install the gate pin from the current gated-branch lock
+        env:
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-gate-install
+        run: |
+          set -euo pipefail
+          GATE_SHA="$(git -C trusted rev-parse HEAD)"
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo trusted --commit "$GATE_SHA" --cache-dir "$INSTALL_CACHE")"
+          dirname "$EXECUTABLE" >> "$GITHUB_PATH"
+
+      - name: Resolve the pull request
+        id: resolve
+        env:
+          EVENT_PR: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr }}
+          INPUT_HEAD: ${{ github.event.inputs.head_sha }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="$EVENT_PR"
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*|0*)
+              echo "theseus-gate: error: cannot resolve a pull request number" >&2
+              exit 2
+              ;;
+          esac
+          echo "pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          HEAD_SHA="${INPUT_HEAD:-$EVENT_HEAD}"
+          if printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint the App token
+        id: app
+        if: steps.resolve.outputs.pr != '' && env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORACLE_APP_ID }}
+          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+          permission-pull-requests: read
+          permission-contents: read
+
+      - name: Post the gate for the head
+        if: steps.resolve.outputs.pr != '' && env.HAS_APP == 'true'
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          KNOWN_HEAD: ${{ steps.resolve.outputs.head_sha }}
+          HEAD_CHANGED: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') }}
+        run: |
+          set -euo pipefail
+          HEAD_ARGS=()
+          if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
+          if [ "$HEAD_CHANGED" = true ]; then HEAD_ARGS+=(--pending-first); fi
+          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}"
+
+      - name: Log the gate without posting when the App is not configured
+        if: steps.resolve.outputs.pr != '' && env.HAS_APP != 'true'
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          KNOWN_HEAD: ${{ steps.resolve.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          HEAD_ARGS=()
+          if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
+          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --no-post "${HEAD_ARGS[@]}"
+
+  bridge:
+    name: bridge
+    needs: guard
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.name == inputs.review_workflow_name &&
+      github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch the gate for the gated-branch pull request at this head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GATED_BASE: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_SHA" in
+            ''|*[!0-9a-f]*)
+              echo "theseus-gate: error: the completed run has no usable head SHA" >&2
+              exit 2
+              ;;
+          esac
+          PR_NUMBER="$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" | jq -r --arg sha "$HEAD_SHA" --arg base "$GATED_BASE" '[.[] | select(.base.ref == $base and .state == "open" and .head.sha == $sha) | .number][0] // empty')"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "theseus-gate: no open $GATED_BASE pull request has head $HEAD_SHA; nothing to gate"
+            exit 0
+          fi
+          gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$GATED_BASE" -f pr="$PR_NUMBER" -f head_sha="$HEAD_SHA"
+          echo "theseus-gate: dispatched the gate for #$PR_NUMBER at $HEAD_SHA"
+
+  sweep:
+    name: sweep
+    needs: guard
+    if: >-
+      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      (github.event_name == 'schedule' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' && secrets.ORACLE_APP_PRIVATE_KEY != '' }}
+      REPO: ${{ github.repository }}
+      POLICY_PATH: ${{ inputs.policy_path }}
+    steps:
+      - name: Check out the trusted gated-branch copy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.gated_base }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the pinned Theseus bootstrap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install the gate pin from the current gated-branch lock
+        env:
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-gate-install
+        run: |
+          set -euo pipefail
+          GATE_SHA="$(git -C trusted rev-parse HEAD)"
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo trusted --commit "$GATE_SHA" --cache-dir "$INSTALL_CACHE")"
+          dirname "$EXECUTABLE" >> "$GITHUB_PATH"
+
+      - name: Mint the App token
+        id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ORACLE_APP_ID }}
+          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          permission-statuses: write
+          permission-pull-requests: read
+          permission-contents: read
+
+      - name: Gate every open pull request targeting the gated branch
+        working-directory: trusted
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          GATED_BASE: ${{ inputs.gated_base }}
+        run: |
+          set -euo pipefail
+          POST=()
+          if [ "$HAS_APP" != true ]; then
+            POST=(--no-post)
+            echo "::notice::oracle-gate is not posted because the App secrets are not set"
+          fi
+          PRS="$(gh api --paginate "repos/$REPO/pulls?base=$GATED_BASE&state=open&per_page=100" --jq '.[] | "\(.number) \(.head.sha)"')"
+          FAILED=""
+          RESULT="$RUNNER_TEMP/oracle-gate-result"
+          while read -r PR_NUMBER HEAD_SHA; do
+            [ -n "$PR_NUMBER" ] || continue
+            rm -f "$RESULT"
+            STATUS=0
+            ORACLE_GATE_RESULT_FILE="$RESULT" theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --head-sha "$HEAD_SHA" "${POST[@]}" < /dev/null || STATUS=$?
+            REPORTED="$(cat "$RESULT" 2>/dev/null || true)"
+            if [ "$REPORTED" != "$STATUS" ] || { [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 3 ]; }; then
+              echo "::warning::oracle-gate failed for #$PR_NUMBER (exit $STATUS, reported ${REPORTED:-none})"
+              FAILED="$FAILED $PR_NUMBER"
+            fi
+          done <<< "$PRS"
+          if [ -n "$FAILED" ]; then
+            echo "::error::oracle-gate failed for:$FAILED"
+            exit 1
+          fi

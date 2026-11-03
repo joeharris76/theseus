@@ -315,7 +315,9 @@ def test_a_refused_gate_post_leaves_the_published_result_and_warns(
     assert driver.publish(environment, argparse.Namespace()) == 0
 
     assert [item[0] for item in sink.calls] == ["comment", "review", "status"]
-    assert "state_recorded=true" in outputs.read_text(encoding="utf-8")
+    written = outputs.read_text(encoding="utf-8")
+    assert "state_recorded=true" in written
+    assert "gate_failed=true" in written
     assert "::warning::oracle-gate was not posted from this run: the gate was refused" in capsys.readouterr().err
 
 

@@ -52,7 +52,7 @@ PHASE_SECRETS = {
         "TS_OAUTH_CI_SECRET",
         "JOB_TOKEN",
     },
-    "publish": {"GH_TOKEN", "JOB_TOKEN"},
+    "publish": {"GH_TOKEN", "JOB_TOKEN", "THESEUS_GATE_COMMAND", "THESEUS_GATE_ROOT"},
     "dispatch": {"GH_TOKEN", "JOB_TOKEN"},
 }
 
