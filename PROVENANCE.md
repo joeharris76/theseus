@@ -7,7 +7,7 @@ Theseus is extracted from BenchBox. This file records the exact source baseline,
 - Source repository: BenchBox (`BenchBox-dev/BenchBox`)
 - Baseline commit: `95c423c35efd3fb4962145bdc628006d5aaaad26` (`origin/develop` after PR #3929)
 - Decision records: `_project/decisions/theseus-oracle-extraction-2026-11-02.md` and its inventory, in the baseline commit.
-- Seed commit: the first commit on `feat/initial-extraction` after `main`. It holds every mapped file byte-identical to the baseline blob at its mapped path, plus `tools/seed_map.json`, `tools/seed_hash.py` and this file. Later commits adapt the code; `git diff <seed commit> HEAD -- src` is the reviewable adaptation delta.
+- Seed commit: `d15442eaacac8afb600f6cd4e0880c99bdf5da43`, the first commit on `feat/initial-extraction` after `main`. It holds every mapped file byte-identical to the baseline blob at its mapped path, plus `tools/seed_map.json`, `tools/seed_hash.py` and this file. Later commits adapt the code; `git diff <seed commit> HEAD -- src` is the reviewable adaptation delta.
 
 ## Notices
 
@@ -33,13 +33,34 @@ python3 tools/seed_hash.py --benchbox-repo <BenchBox checkout> --kind test --kin
 python3 tools/seed_hash.py --git-rev <seed commit> --kind test --kind fixture
 ```
 
-All four must agree pairwise with the values above. `--verify HEX` fails on mismatch. The machine-readable map is `tools/seed_map.json`.
+All four must agree pairwise with the values above. `--verify HEX` fails on mismatch. The machine-readable map is `tools/seed_map.json`. `--tree` and the `--kind test/fixture` hashes describe the seed commit only: later commits adapt, move and delete files, so verify later heads with `--git-rev <seed commit>`.
 
 ## Scope
 
 Moved: the reviewer engine and gate (`_project/scripts/oracle_reviewers/`, `oracle_gate.py`, `oracle_review_check.py`), the soundness/inert path matchers, templates, and the matching unit and integration tests and captured fixtures.
 
 Not moved (BenchBox-owned consumer code): policy and manifests, read-index scanning, PR lifecycle, trigger wrappers, `oracle_gateway_host.sh`, `soundness_merge_digest.py`, `soundness_drain_report.py`, and `test_oracle_local_review.py`. The consumer policy and manifest files under `tests/fixtures/consumer/` are BenchBox's baseline copies, kept as test fixtures only; the package ships none of them.
+
+## Adaptation after the seed
+
+Reviewable as `git diff d15442e HEAD -- src` (source) and by commit:
+
+1. Imports became relative package imports (`oracle_reviewers.*`, `oracle_gate`, `oracle_review_check`, `_project.scripts.*` to `theseus_reviewer.*`); no behavior change.
+2. Consumer identity and paths moved out of the code: the policy now requires a `consumer` section (gated base, attesters, soundness, inert and OMP config manifests) beside `bot_login`; `PromotionRules` lost its BenchBox repository and reviewer defaults; every removed constant (`ORACLE_LOGIN`, `STANDIN_ATTESTERS`, `ATTESTERS`, `GATED_BASE`, `DEVELOP`, `TRUSTED_BRANCH`, `POLICY_PATH`, `REPO_ROOT`, default cache, default repository, default policy) became a parameter; the gate evaluates with the configured `bot_login`. See [docs/consumer-policy.md](docs/consumer-policy.md).
+3. `soundness_paths.py` became the standalone, import-pure matcher module with no default manifest and union semantics; `inert_paths.py` kept only matching; `matchers.py`, `matcher_cli.py` and `theseus matcher verify` add loading and vendored-drift detection. See [docs/matcher.md](docs/matcher.md).
+4. The `theseus` CLI (`main.py`, `__main__.py`) wraps the seeded argparse dispatcher and adds `gate`, `promotion-check`, `bootstrap`, `matcher` and the OMP maintenance commands. The in-process gate import became a `theseus gate` subprocess.
+5. `bootstrap.py` is the consumer installer. See [docs/bootstrap.md](docs/bootstrap.md).
+6. Seeded tests were ported; BenchBox-owned tests were removed (see below) and new tests cover identity isolation, the installer refusal matrix and the isolated matcher.
+
+## Retained identities and wording
+
+These stay because they are protocol, persisted-format or service contracts, not consumer bindings: the `oracle-verdict` and `oracle-gate` contexts, marker grammars, `oracle-verdict-*` artifact prefixes, the persisted member-review schema string `benchbox_member_review_v1` (preserves existing local findings), the three prompt templates (their domain wording is the reviewed protocol text), the gateway and provider secret names (`ORACLE_GATEWAY_URL`, `OMP_GATEWAY_TOKEN`, `TYPESAFE_API_KEY`, `TS_*`), the jev API default and the OMP build host. The hosted-workflow work reconciles the secret and workflow wiring.
+
+## Not carried
+
+BenchBox keeps: `soundness_merge_digest.py`, `soundness_drain_report.py`, `oracle_gateway_host.sh`, `oracle_local_review.py`, `pr_arm.py`, `pr_landing.py`, remote closeout and review wrappers, the inert-path read-index scanner and symlink guard, selectors and CI workflow YAML. Removed tests: `test_oracle_local_review.py`, `test_soundness_merge_digest*.py`, `test_gateway_host.py`, `test_pr_arm_scenario.py`, `test_pr_landing_soundness_scenario.py`, the five BenchBox bump-workflow shell scenarios in `test_omp_pin_scenarios.py`, and the scanner, symlink, reader-index, selector and workflow-parity tests from `test_inert_paths.py`, `test_soundness_paths.py` and `test_scan_scratch.py`.
+
+Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-shaped consumer data: the baseline policy and manifests plus a rewritten `oracle-verdict.yml` for the scenario runner) and `tests/fixtures/consumer/beta/` (a synthetic second consumer with its own App, attesters and base branch). Nineteen golden plans gained the `omp_config` plan field.
 
 ## Path map
 

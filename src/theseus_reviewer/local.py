@@ -59,6 +59,7 @@ CLOUD_STATUS_FILE = "theseus-cloud-gateway.status"
 TRUSTED_POLICY_FILE = "policy.yml"
 REMOTE_SLUG = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 CACHE_SCHEMA = 2
+LOCAL_STATE_OVERRIDE_ENV = "THESEUS_LOCAL_STATE"
 CAPTURE_DIR = "captures"
 POOL_BLOCKS_FILE = "pool-blocks.json"
 LOCK_WAIT_SECONDS = 3600.0
@@ -136,7 +137,8 @@ class Reporter:
 
 
 def state_dir() -> Path:
-    return Path.home() / ".cache" / "theseus" / "local-oracle"
+    configured = os.environ.get(LOCAL_STATE_OVERRIDE_ENV, "").strip()
+    return Path(configured) if configured else Path.home() / ".cache" / "theseus" / "local-oracle"
 
 
 def _git_bytes(root: Path, *args: str) -> bytes:

@@ -341,9 +341,7 @@ def inspect_wheel(entries: Mapping[str, bytes], name: str, version: str, label: 
     _require(normalize(metadata.get("Name", "")) == normalize(name), f"{label} METADATA names another distribution")
     _require(metadata.get("Version") == version, f"{label} METADATA version differs from the lock")
     wheel = _headers(entries[f"{dist_info}WHEEL"])
-    _require(
-        (wheel.get("Root-Is-Purelib") or "").lower() == "true", f"{label} is not a purelib wheel for this installer"
-    )
+    _require(wheel.get("Wheel-Version", "").startswith("1."), f"{label} has an unsupported wheel version")
     tags = []
     for tag in wheel.get_all("Tag") or []:
         parts = tag.split("-")
