@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from oracle_review_check import (
+from .review_check import (
     API_ROOT,
     ERROR,
     PASS,
@@ -33,7 +33,7 @@ from oracle_review_check import (
     fetch_text,
     path_matcher,
 )
-from oracle_reviewers.policy import PromotionRules
+from .policy import PromotionRules
 
 GATE_CONTEXT = "oracle-gate"
 GATED_BASE = "develop"
@@ -125,7 +125,7 @@ def _post_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any])
 
 def load_policy_rules() -> tuple[tuple[str, ...], tuple[str, ...]]:
     try:
-        from oracle_reviewers.policy import load_policy
+        from .policy import load_policy
 
         classifier = load_policy(Path(".github/oracle-reviewers.yml")).classifier
         return classifier.exempt_paths, classifier.gate_paths
@@ -136,7 +136,7 @@ def load_policy_rules() -> tuple[tuple[str, ...], tuple[str, ...]]:
 def load_promotion_policy(token: str, repo: str, base_ref: str) -> PromotionRules:
     try:
         import yaml
-        from oracle_reviewers.policy import parse_policy
+        from .policy import parse_policy
 
         raw = fetch_text(token, repo, ".github/oracle-reviewers.yml", base_ref)
         return parse_policy(yaml.safe_load(raw)).promotion
@@ -171,7 +171,7 @@ def evaluate(repo: str, pr: int, token: str) -> tuple[str, int, str]:
         reviews = fetch_reviews(token, repo, pr)
         annotate_receipt(token, reviews, head_sha, base_date)
         bump = fetch_bump_refusals(token, repo, pull, files, len(items), comments)
-        from oracle_reviewers import promotion
+        from . import promotion
 
         promo_policy = (
             load_promotion_policy(token, repo, pull["base"].get("sha") or pull["base"]["ref"])

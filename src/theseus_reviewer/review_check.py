@@ -13,9 +13,9 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from inert_paths import is_inert_path
-from oracle_reviewers.policy import PromotionRules
-from soundness_paths import is_soundness_path
+from .inert_paths import is_inert_path
+from .policy import PromotionRules
+from .soundness_paths import is_soundness_path
 
 ORACLE_LOGIN = "benchbox-oracle"
 ORACLE_CONTEXT = "oracle-verdict"
@@ -96,7 +96,7 @@ def standin_not_before(base_change: Moment | None, verdicts: Iterable[tuple[Mome
 
 
 def _survives_base_change(moment: datetime, base_time: datetime | None) -> bool:
-    from oracle_reviewers.base_change import survives
+    from .base_change import survives
 
     return survives(moment, base_time)
 
@@ -125,7 +125,7 @@ def _strip_run_suffix(description: str | None) -> str:
 
 
 def _receipt_run_uuid(receipt: dict[str, Any]) -> str | None:
-    from oracle_reviewers.protocol import decode_marker
+    from .protocol import decode_marker
 
     try:
         record = decode_marker(receipt.get("body") or "")
@@ -194,7 +194,7 @@ def _latest_decisive(verdicts: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _edit_hold(status: dict[str, Any]) -> bool:
-    from oracle_reviewers.edits import EDITED_REASON
+    from .edits import EDITED_REASON
 
     return status["state"] == "pending" and (status.get("description") or "").startswith(EDITED_REASON)
 
@@ -209,7 +209,7 @@ def _open_findings(verdicts: list[dict[str, Any]]) -> bool:
 
 
 def _open_findings_message(verdicts: list[dict[str, Any]], head_sha: str) -> str:
-    from oracle_reviewers.adjudication import GRAMMAR
+    from .adjudication import GRAMMAR
 
     decisive = _latest_decisive(verdicts)
     match = _ESCALATED.search((decisive or {}).get("description") or "")
@@ -499,7 +499,7 @@ def fetch_bump_refusals(
     listed_files: int,
     comments: list[dict[str, Any]],
 ) -> list[str]:
-    from oracle_reviewers import omp_bump_gate
+    from . import omp_bump_gate
 
     complete = listed_files >= pull["changed_files"]
     if omp_bump_gate.POLICY_PATH not in files and complete:
@@ -547,7 +547,7 @@ def fetch_promotion_refusals(
     rules: PromotionRules,
     comments: Sequence[dict[str, Any]] = (),
 ) -> tuple[bool, list[str]]:
-    from oracle_reviewers import promotion
+    from . import promotion
 
     complete = listed_files >= pull["changed_files"]
     if promotion.has_planted_promotion_path(files):

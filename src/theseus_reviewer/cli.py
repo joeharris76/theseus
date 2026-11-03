@@ -17,7 +17,7 @@ from time import sleep
 from typing import Any
 from urllib.parse import urlparse
 
-from _project.scripts.inert_paths import is_machine_read_doc
+from .inert_paths import is_machine_read_doc
 
 from . import (
     adjudication,
@@ -157,7 +157,7 @@ def _event() -> dict[str, Any]:
 
 
 def _soundness_predicate() -> Any:
-    from _project.scripts.soundness_paths import is_soundness_path
+    from .soundness_paths import is_soundness_path
 
     return is_soundness_path
 

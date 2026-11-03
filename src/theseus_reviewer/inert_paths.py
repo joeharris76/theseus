@@ -12,9 +12,9 @@ import sys
 from pathlib import Path
 
 try:
-    from _project.scripts.soundness_paths import _glob_matches, _load_rules, normalize_path
+    from .soundness_paths import _glob_matches, _load_rules, normalize_path
 except ImportError:
-    from soundness_paths import _glob_matches, _load_rules, normalize_path
+    from .soundness_paths import _glob_matches, _load_rules, normalize_path
 
 DATA_PATH = Path(
     os.environ.get(

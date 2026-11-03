@@ -430,8 +430,8 @@ def check(
     if brief_mode == INLINE or not ships:
         return None
     if is_protected is None:
-        from _project.scripts.inert_paths import is_machine_read_doc
-        from _project.scripts.soundness_paths import is_soundness_path
+        from .inert_paths import is_machine_read_doc
+        from .soundness_paths import is_soundness_path
 
         def is_protected(path: str) -> bool:
             return is_soundness_path(path) or is_machine_read_doc(path)

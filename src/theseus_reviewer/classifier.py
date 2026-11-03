@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from _project.scripts.inert_paths import is_inert_path
+from .inert_paths import is_inert_path
 
 from .policy import ClassifierRules
 
