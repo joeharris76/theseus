@@ -77,11 +77,11 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `c3aa269e9ceec485cb4f2504f9eea85d4cfab966` (shipped source clean) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `d722518a22c392d8f1239b9722cc38cd23865108` (0.1.2, shipped source clean; adds the Windows-capable first-stage lock and launcher) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
 
 ```
-frozen source hash   e8aaf67647f3a1bca1d85984c801c6e1c7720b0dd4d6118651c555312cdaab2f
-wheel                theseus_reviewer-0.1.0-py3-none-any.whl  sha256 82dda4d8c40f5c2244a82b975ad39de362a8fa3d6e0a3ef5600cab8654079ff5
+frozen source hash   c8c94a6169e48b82c3ee087f16134568a681c7967c09cc27f3dace52bebf4336
+wheel                theseus_reviewer-0.1.2-py3-none-any.whl  sha256 a0b1a9b22cd30f1f2a240f1f51ee621d17062e7bd29134662f973b48f27592bb
 scenario tests       223 on each side, all passing or identically skipped, except the one listed below
 captures compared    44: 18 identical, 26 differing only as listed
 unexplained differences  0
