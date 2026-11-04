@@ -57,6 +57,11 @@
       "port_commit": "7d01388d3fb86bf4255e68c54f564d7846631dec",
       "effects": "interface: SourceLoader takes an optional prefixes tuple and extract_tar_tree, load_tree_from_dir, _git_archive_tree and default_source_loader's load thread it through (skipping entries outside the prefixes before the count and size limits); archive member names lose only a literal ./ prefix. No policy, lock, cache or persisted-format effect; promotion records and hashes are unchanged for rooted archives. The same squash commit adds BenchBox's own promotion policy section (repository, baseline commit, path map, bootstrap reviewer, empty dependency allowlist) and repoints its promotion scenario at joeharris76/theseus: consumer-owned policy data that Theseus ships none of (no-op), with the slug already in Theseus's promotion fixtures (67df15f).",
       "evidence": "test_baseline_archive_is_bounded_only_by_the_mapped_paths and test_unrooted_archive_keeps_leading_dot_paths in tests/unit/reviewer/test_promotion.py and the promotion scenario suite."
+    },
+    {
+      "commit": "71b0bd8525e873824706d340b5372dd6181bce7f",
+      "disposition": "noop",
+      "rationale": "Changes BenchBox's omp-pin-bump workflow (refresh and supersede candidate PRs) and the scenario harness that drives that consumer-owned open-pr shell step (open_bump_pull, PREPARED_BASE). No engine source changed. Theseus removed the BenchBox bump-workflow shell scenarios from test_omp_pin_scenarios.py at the seed and its harness has no open_bump_pull, so there is nothing to port; BenchBox keeps that coverage in tests/unit/workflows/test_omp_pin_bump_workflow.py."
     }
   ]
 }
