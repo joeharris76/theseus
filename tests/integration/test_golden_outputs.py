@@ -190,10 +190,16 @@ def test_golden_unreadable_attempt_is_an_integrity_error(harness: Harness) -> No
     _check("integrity_error", harness, harness.review(86, tamper_attempts=damage), 86)
 
 
-def test_golden_app_not_configured_posts_nothing(harness: Harness) -> None:
-    _open(harness, 87)
+def test_a_review_without_the_app_secrets_fails_before_anything_runs_and_posts_nothing(harness: Harness) -> None:
+    head = _open(harness, 87)
     harness.script_omp([SHIP])
-    _check("app_missing", harness, harness.review(87, app=False), 87)
+    run = harness.review(87, app=False)
+    refusal = run.steps["app_refusal"]
+    assert refusal.code == 1
+    assert refusal.stdout.startswith("::error::") and "environment oracle" in refusal.stdout
+    assert set(run.steps) == {"app_refusal"}
+    assert run.run["conclusion"] == "failure"
+    assert not any(posted(harness, 87, head).values())
 
 
 def test_golden_guard_that_cannot_read_history_fails_the_run(harness: Harness) -> None:

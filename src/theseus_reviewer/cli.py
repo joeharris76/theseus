@@ -1669,7 +1669,7 @@ def _surface_twice_failed(
     runs: tuple[sweep.Run, ...],
     status_context: str,
     bot_login: str,
-    token: str | None,
+    token: str,
     base_changed_at: datetime | None,
 ) -> None:
     latest = next(run for run in runs if run.status == sweep.COMPLETED and run.conclusion not in sweep.NEUTRAL)
@@ -1685,12 +1685,6 @@ def _surface_twice_failed(
         if newest.get("target_url") == run_url and newest.get("description") == description:
             _summary(f"retry not dispatched for #{number}: the failure is already surfaced as pending")
             return
-    if token is None:
-        _summary(
-            f"retry not dispatched for #{number}: two runs on the current head failed without a result, "
-            "and the App is not configured to surface it"
-        )
-        return
     github.post_status(
         repo,
         head,
@@ -1914,7 +1908,7 @@ def _bounded_retry(
     now: datetime,
     status_context: str,
     bot_login: str,
-    token: str | None,
+    token: str,
     base_changed_at: datetime | None,
 ) -> str | None:
     failures = sweep.stateless_failures(head_runs, since)
@@ -1943,7 +1937,9 @@ def command_sweep(args: argparse.Namespace) -> int:
     policy = load_policy(Path(args.policy))
     repo = os.environ["GITHUB_REPOSITORY"]
     now = _now()
-    token = os.environ.get("SURFACE_TOKEN") or None
+    token = os.environ.get("SURFACE_TOKEN", "")
+    if not token:
+        raise SystemExit("oracle-verdict: error: SURFACE_TOKEN is not set")
     runs: dict[int, tuple[sweep.Run, ...]] | None
     try:
         listing = github.verdict_runs(repo, WORKFLOW_FILE, now - sweep.RUN_WINDOW)

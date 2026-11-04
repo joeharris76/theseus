@@ -51,6 +51,7 @@ GATE_CHECKOUT = "Check out the current gated-branch gate"
 GATE_FAILURE = "Fail the run when the gate was not posted from it"
 HEAD_CHECKOUT = "Check out the pull request head for reading only"
 MINT_STEP = "Mint the App token"
+APP_REFUSAL = "Refuse a caller that did not pass the App secrets"
 ISOLATION_PHASE = "isolation"
 DECOYED_STEPS = frozenset({"prepare", "finalize", "publish"})
 SCANS = ("scan-before", "scan-after-join", "scan-after-exit")
@@ -167,6 +168,7 @@ class WorkflowRunner:
             return EXPRESSION.sub(lambda found: self._expression(found.group(0)), text)
         expression = _bare(text)
         known: dict[str, str] = {
+            "inputs.environment": "oracle",
             "github.token": JOB_TOKEN,
             "github.workspace": str(self.temp),
             "runner.temp": str(self.temp),
@@ -369,6 +371,12 @@ class WorkflowRunner:
             self._install_pin("gate_pin", step)
             if step.get("continue-on-error"):
                 self.waived.add("gate_pin")
+        elif name == APP_REFUSAL:
+            scoped = {key: self._expression(value) for key, value in step.get("env", {}).items()}
+            command = ["bash", "-e", "-c", step["run"]]
+            self.record.steps["app_refusal"] = self.harness.run(
+                "app_refusal", command, {"PATH": self.env["PATH"], **scoped}, cwd=self.temp
+            )
         elif name == GATE_FAILURE:
             self.record.steps["gate_failure"] = Step("gate_failure", 1, "", "oracle-gate was not posted", {})
         elif str(step.get("uses", "")).startswith("actions/upload-artifact"):
@@ -386,4 +394,6 @@ class WorkflowRunner:
         (self.temp / "trusted").mkdir(exist_ok=True)
         for step in review_steps():
             self._execute(step)
-        self.harness.github.complete_run(self.record.run, "success")
+        refused = self.record.steps.get("app_refusal")
+        conclusion = "failure" if refused is not None and refused.code != 0 else "success"
+        self.harness.github.complete_run(self.record.run, conclusion)
