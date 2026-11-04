@@ -46,6 +46,9 @@ permissions: {}
 jobs:
   guard:
     name: guard
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base
+    outputs:
+      trusted_commit: ${{ steps.lock.outputs.trusted_commit }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -92,23 +95,26 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Refuse a pin that differs from the trusted consumer lock
+        id: lock
         env:
           THESEUS_REF: ${{ inputs.theseus_ref }}
         run: |
           set -euo pipefail
           LOCK_PATH=.github/theseus-lock.json
           TRUSTED_COMMIT="$(git -C trusted rev-parse HEAD)"
-          if ! LOCK_JSON="$(git -C trusted show "$TRUSTED_COMMIT:$LOCK_PATH" 2>/dev/null)"; then
+          LOCK_FILE="$(mktemp)"
+          trap 'rm -f "$LOCK_FILE"' EXIT
+          if ! git -C trusted show "$TRUSTED_COMMIT:$LOCK_PATH" >"$LOCK_FILE" 2>/dev/null; then
             echo "theseus-gate: error: no $LOCK_PATH at trusted commit $TRUSTED_COMMIT" >&2
             exit 2
           fi
-          export LOCK_JSON
           python3 -I -S -c '
           import json, os, sys
 
           pin = os.environ["THESEUS_REF"]
           try:
-              lock = json.loads(os.environ["LOCK_JSON"])
+              with open(sys.argv[1], encoding="utf-8") as handle:
+                  lock = json.load(handle)
               workflow, source = lock["workflow_sha"], lock["source_commit"]
           except (ValueError, KeyError, TypeError) as error:
               print("theseus-gate: error: trusted consumer lock is unreadable: " + repr(error), file=sys.stderr)
@@ -116,7 +122,8 @@ jobs:
           if not pin == workflow == source:
               print("theseus-gate: error: theseus_ref " + pin + " is not the trusted lock workflow_sha " + str(workflow) + " and source_commit " + str(source), file=sys.stderr)
               raise SystemExit(2)
-          '
+          ' "$LOCK_FILE"
+          echo "trusted_commit=$TRUSTED_COMMIT" >> "$GITHUB_OUTPUT"
 
   gate:
     name: gate
@@ -139,7 +146,7 @@ jobs:
       - name: Check out the trusted gated-branch copy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.gated_base }}
+          ref: ${{ needs.guard.outputs.trusted_commit }}
           path: trusted
           persist-credentials: false
           sparse-checkout: ${{ inputs.trusted_paths }}
@@ -285,7 +292,7 @@ jobs:
       - name: Check out the trusted gated-branch copy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.gated_base }}
+          ref: ${{ needs.guard.outputs.trusted_commit }}
           path: trusted
           persist-credentials: false
           sparse-checkout: ${{ inputs.trusted_paths }}
