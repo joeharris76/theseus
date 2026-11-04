@@ -483,3 +483,63 @@ def test_the_callee_caller_workflow_defaults_match_the_example_file_names() -> N
         and (EXAMPLES / "oracle-verdict.yml").is_file()
     )
     assert gate_inputs["caller_workflow"]["default"] == "oracle-gate.yml" and (EXAMPLES / "oracle-gate.yml").is_file()
+
+
+GUARD_STEP = "Refuse a malformed pin, a foreign caller or a dispatch from another branch"
+
+
+def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
+    run = step_named(load(WORKFLOWS / "review.yml"), "guard", GUARD_STEP)["run"]
+    return subprocess.run(
+        ["bash", "-c", run],
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "THESEUS_REF": "a" * 40,
+            "GATED_BASE": "main",
+            "CALLER_WORKFLOW": "oracle-verdict.yml",
+            "TAILSCALE_TAG": tag,
+            "WORKFLOW_REF": "o/r/.github/workflows/oracle-verdict.yml@refs/heads/main",
+            "REPOSITORY": "o/r",
+            "EVENT_NAME": "push",
+            "CURRENT_REF": "refs/heads/main",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_review_callee_takes_an_optional_tailscale_tag_that_defaults_to_the_shared_identity() -> None:
+    document = load(WORKFLOWS / "review.yml")
+    spec = document["on"]["workflow_call"]["inputs"]["tailscale_tag"]
+    assert spec["required"] is False and spec["type"] == "string" and spec["default"] == "tag:oracle-ci"
+    assert step_named(document, "guard", GUARD_STEP)["env"]["TAILSCALE_TAG"] == "${{ inputs.tailscale_tag }}"
+    join = step_named(document, "review", "Join the tailnet to reach the credential gateway")
+    assert join["with"]["tags"] == "${{ inputs.tailscale_tag }}"
+    assert "tag:oracle-ci" not in yaml.safe_dump(document["jobs"])
+
+
+@pytest.mark.parametrize("tag", ["tag:oracle-ci", "tag:theseus-ci", "tag:a1-b2"])
+def test_the_guard_accepts_a_well_formed_tailscale_tag(tag: str) -> None:
+    assert _guard_with_tag(tag).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "",
+        "oracle-ci",
+        "tag:",
+        "tag:Oracle",
+        "tag:a_b",
+        "tag:a b",
+        "tag:a,tag:b",
+        "tag:a\nx",
+        "tag:a\n",
+        "tag:ok\ntag:evil",
+    ],
+)
+def test_the_guard_refuses_a_malformed_tailscale_tag(tag: str) -> None:
+    result = _guard_with_tag(tag)
+    assert result.returncode == 2
+    assert "tailscale_tag must match" in result.stderr

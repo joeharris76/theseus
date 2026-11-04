@@ -29,6 +29,7 @@ A called workflow sees the caller's `github` context: `github.event_name`, `gith
 | `policy_path` | no | `.github/oracle-reviewers.yml` | Consumer policy, read from the trusted checkout |
 | `trusted_paths` | no | `.github` | Sparse-checkout patterns for the trusted checkout; add the directories of any `consumer` manifest outside `.github`. The example gate caller reruns on every push to the gated branch (no `paths:` filter), so a manifest change outside `.github` re-evaluates standing gate statuses immediately rather than at the next hourly sweep |
 | `caller_workflow` | no | `oracle-verdict.yml` / `oracle-gate.yml` | File name of the caller; the guard compares it with `github.workflow_ref`, and the bridge dispatches it |
+| `tailscale_tag` | no (`review.yml`) | `tag:oracle-ci` | Tailscale tag the review job's runner joins the tailnet under to reach the credential gateway; the guard refuses a value that does not match `^tag:[a-z0-9-]+$`. Set it when more than one consumer shares a tailnet so each caller has its own runner identity |
 | `review_workflow_name` | no (`gate.yml`) | `oracle-review` | `name:` of the workflow whose completion bridges into the gate |
 
 ## Pinned workflow ref
