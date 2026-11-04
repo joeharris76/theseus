@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import http.server
 import inspect
 import json
 import os
+import socket
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -224,40 +228,53 @@ def test_status_payload_clips_long_descriptions_to_the_api_limit() -> None:
     assert payload["target_url"] == "https://example.invalid/run"
 
 
-def test_post_status_writes_the_gate_context_to_the_head(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
+@pytest.fixture
+def status_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
+    received: list[dict[str, Any]] = []
 
-    class _Response:
-        def __enter__(self) -> _Response:
-            return self
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            received.append(
+                {
+                    "path": self.path,
+                    "auth": self.headers.get("Authorization"),
+                    "body": json.loads(self.rfile.read(length).decode()),
+                }
+            )
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
 
-        def __exit__(self, *exc: Any) -> None:
+        def log_message(self, *args: Any) -> None:
             return None
 
-        def read(self) -> bytes:
-            return b"{}"
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(gate, "API_ROOT", f"http://127.0.0.1:{server.server_address[1]}")
+    try:
+        yield received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
-    def fake_urlopen(request: Any) -> _Response:
-        seen["url"] = request.full_url
-        seen["method"] = request.get_method()
-        seen["body"] = json.loads(request.data.decode())
-        seen["auth"] = request.get_header("Authorization")
-        return _Response()
 
-    monkeypatch.setattr(gate.urllib.request, "urlopen", fake_urlopen)
+def test_post_status_writes_the_gate_context_to_the_head(status_api: list[dict[str, Any]]) -> None:
     gate.post_status("token", "o/r", HEAD, gate.PASS, "oracle-review: pass")
-    assert seen["url"] == f"https://api.github.com/repos/o/r/statuses/{HEAD}"
-    assert seen["method"] == "POST"
-    assert seen["auth"] == "Bearer token"
-    assert seen["body"]["context"] == "oracle-gate"
-    assert seen["body"]["state"] == "success"
+    assert [(item["path"], item["auth"]) for item in status_api] == [(f"/repos/o/r/statuses/{HEAD}", "Bearer token")]
+    assert status_api[0]["body"]["context"] == "oracle-gate"
+    assert status_api[0]["body"]["state"] == "success"
 
 
 def test_post_status_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    def failing_urlopen(request: Any) -> Any:
-        raise gate.urllib.error.URLError("down")
-
-    monkeypatch.setattr(gate.urllib.request, "urlopen", failing_urlopen)
+    unused = socket.socket()
+    unused.bind(("127.0.0.1", 0))
+    port = unused.getsockname()[1]
+    unused.close()
+    monkeypatch.setattr(gate, "API_ROOT", f"http://127.0.0.1:{port}")
     with pytest.raises(gate.CheckError):
         gate.post_status("token", "o/r", HEAD, gate.PASS, "msg")
 
