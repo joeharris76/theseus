@@ -77,11 +77,11 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `09e401882d1ad7c552fc989a18bb2be38e51f00b` (0.1.5, shipped source clean; adds the fail-closed gate on an unloadable policy, case-insensitive repository slug comparisons, the `tailscale_tag` input and the job failure on empty App secrets) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `f1de977d92be594260f94d7eb3b3ca7e892515e5` (0.1.6, shipped source unchanged from 0.1.5; the release adds the declared and by-name workflow secrets, which touch no source) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above. The 0.1.5 changes in the source are the fail-closed gate on an unloadable policy, case-insensitive repository slug comparisons and the removal of the App-absent paths:
 
 ```
 frozen source hash   91d8b8da5b387707b149d9f77d83e444b18a807824d6786ac0d76f1ecee4458f
-wheel                theseus_reviewer-0.1.5-py3-none-any.whl  sha256 cb54a2a18b6eb21117f9752a1b23e8b3fb1fae3e4daf04caf5ccd1a17331c271
+wheel                theseus_reviewer-0.1.6-py3-none-any.whl  sha256 2ee87f815945da19a4329954b7513ad4545fec75aa12ac2a32fd2ba6d616e83e
 scenario tests       223 on each side, all passing or identically skipped, except the one listed below
 captures compared    43: 18 identical, 25 differing only as listed
 unexplained differences  0
