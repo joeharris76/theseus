@@ -280,7 +280,7 @@ def test_secrets_are_read_only_in_jobs_bound_to_the_caller_environment(callee: t
             assert mentions
         else:
             assert mentions == [], job
-    assert set(document["on"]["workflow_call"]) == {"inputs"}
+    assert set(document["on"]["workflow_call"]) == {"inputs", "secrets"}
 
 
 def test_job_level_env_holds_only_derived_booleans_and_the_policy_path(callee: tuple[str, dict[str, Any]]) -> None:
@@ -438,7 +438,9 @@ def test_the_example_callers_keep_protocol_names_pin_the_callee_and_grant_the_pe
     assert caller["concurrency"]["group"].startswith(group)
     assert set(caller["on"]) >= {"schedule", "workflow_dispatch", "pull_request_target"}
     (job,) = caller["jobs"].values()
-    assert job["secrets"] == "inherit" and "steps" not in job
+    declared_secrets = load(WORKFLOWS / callee_name)["on"]["workflow_call"]["secrets"]
+    assert job["secrets"] != "inherit" and "steps" not in job
+    assert job["secrets"] == {name: f"${{{{ secrets.{name} }}}}" for name in declared_secrets}
     uses, _, ref = job["uses"].partition("@")
     assert uses == f"joeharris76/theseus/.github/workflows/{callee_name}"
     assert ref == job["with"]["theseus_ref"] == PLACEHOLDER
@@ -572,3 +574,29 @@ def test_the_gate_no_longer_has_a_quiet_path_without_the_app() -> None:
     text = (WORKFLOWS / "gate.yml").read_text(encoding="utf-8")
     assert "--no-post" not in text
     assert "::notice::" not in text
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_each_callee_declares_exactly_the_secrets_it_references_and_all_are_required(name: str) -> None:
+    document = load(WORKFLOWS / name)
+    declared = document["on"]["workflow_call"]["secrets"]
+    referenced = set(SECRET.findall((WORKFLOWS / name).read_text(encoding="utf-8")))
+    assert set(declared) == referenced
+    assert all(spec["required"] is True for spec in declared.values())
+
+
+def test_the_callees_declare_the_secrets_the_docs_list() -> None:
+    declared = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["secrets"]
+    assert set(declared) == {
+        "ORACLE_APP_ID",
+        "ORACLE_APP_PRIVATE_KEY",
+        "ORACLE_GATEWAY_TOKEN",
+        "ORACLE_GATEWAY_URL",
+        "TS_OAUTH_CI_CLIENT_ID",
+        "TS_OAUTH_CI_SECRET",
+        "TYPESAFE_API_KEY",
+    }
+    assert set(load(WORKFLOWS / "gate.yml")["on"]["workflow_call"]["secrets"]) == {
+        "ORACLE_APP_ID",
+        "ORACLE_APP_PRIVATE_KEY",
+    }

@@ -40,6 +40,28 @@ on:
         required: false
         type: string
         default: tag:oracle-ci
+    secrets:
+      ORACLE_APP_ID:
+        description: Id of the GitHub App that posts the review, status and gate
+        required: true
+      ORACLE_APP_PRIVATE_KEY:
+        description: Private key of that GitHub App
+        required: true
+      ORACLE_GATEWAY_TOKEN:
+        description: Token for the credential gateway the reviewers reach over the tailnet
+        required: true
+      ORACLE_GATEWAY_URL:
+        description: Address of the credential gateway
+        required: true
+      TS_OAUTH_CI_CLIENT_ID:
+        description: Tailscale OAuth client id the runner joins the tailnet with
+        required: true
+      TS_OAUTH_CI_SECRET:
+        description: Tailscale OAuth client secret
+        required: true
+      TYPESAFE_API_KEY:
+        description: Key for the classification and review model API
+        required: true
 
 permissions: {}
 

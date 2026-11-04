@@ -42,4 +42,6 @@ jobs:
       environment: oracle
       theseus_ref: THESEUS_COMMIT_SHA
       gated_base: main
-    secrets: inherit
+    secrets:
+      ORACLE_APP_ID: ${{ secrets.ORACLE_APP_ID }}
+      ORACLE_APP_PRIVATE_KEY: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
