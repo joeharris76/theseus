@@ -604,17 +604,19 @@ def _load_artifact(
     cache: Path, label: str, urls: Sequence[str], sha256: str, fetch: Fetch, *, verify_all: bool
 ) -> bytes:
     retained = _retained(cache, sha256)
-    with _file_lock(retained.parent / ".lock"):
-        if retained.is_file() and not verify_all:
-            cached = retained.read_bytes()
-            if sha256_hex(cached) == sha256:
-                return cached
-            retained.unlink()
-        raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
+    if retained.is_file() and not verify_all:
+        cached = retained.read_bytes()
+        if sha256_hex(cached) == sha256:
+            return cached
+    raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
+    with _file_lock(retained.parent / f".lock-{sha256}"):
         staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
-        staged.write_bytes(raw)
-        os.replace(staged, retained)
-        return raw
+        try:
+            staged.write_bytes(raw)
+            os.replace(staged, retained)
+        finally:
+            staged.unlink(missing_ok=True)
+    return raw
 
 
 def build_plan(lock: Lock, cache: Path, fetch: Fetch, *, verify_all: bool = False) -> Plan:
@@ -693,10 +695,16 @@ def expected_files(plan: Plan, root: Path, interpreter: Mapping[str, Any]) -> di
             _require(target not in files, f"two wheels install {name!r}")
             files[target] = content
     python = str(interpreter["executable"])
-    _require(
-        not any(ch.isspace() for ch in python) and len(python) < 120,
-        "the interpreter path is unsuitable for a launcher shebang",
-    )
+    if _windows():
+        _require(
+            "%" not in python and python.isascii(),
+            "the interpreter path contains '%' or non-ASCII characters, which a cmd wrapper cannot carry safely",
+        )
+    else:
+        _require(
+            not any(ch.isspace() for ch in python) and len(python) < 120,
+            "the interpreter path is unsuitable for a launcher shebang",
+        )
     for script, module, attribute in plan.infos[0].console_scripts:
         files[f"bin/{script}"] = launcher_text(python, site, module, attribute).encode("utf-8")
         if _windows():
@@ -801,7 +809,8 @@ def install(
         raise BootstrapError(f"cannot install into {root}: {exc}") from exc
 
 
-WINDOWS_LOCK_ATTEMPTS = 360
+WINDOWS_LOCK_ATTEMPTS = 1200
+WINDOWS_LOCK_INTERVAL = 0.5
 
 
 def _windows() -> bool:
@@ -821,12 +830,12 @@ def _lock_windows(handle: Any) -> Callable[[], None]:
     handle.seek(0)
     for attempt in range(WINDOWS_LOCK_ATTEMPTS):
         try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             break
         except OSError:
             if attempt == WINDOWS_LOCK_ATTEMPTS - 1:
                 raise
-            time.sleep(min(0.05 * (attempt + 1), 1.0))
+            time.sleep(WINDOWS_LOCK_INTERVAL)
 
     def release() -> None:
         handle.seek(0)
@@ -891,16 +900,19 @@ def verify_installed(lock: Lock, cache: Path | None, fetch: Fetch | None = None)
     interpreter, platform = interpreter_identity(), platform_identity()
     key = install_key(lock, interpreter, platform)
     root = cache / "installs" / key
-    _require((root / MANIFEST).is_file(), f"no install exists for {lock.package} {lock.version} at {root}")
-    plan = build_plan(lock, cache, fetch)
-    expected = expected_files(plan, root, interpreter)
-    _require(
-        (root / MANIFEST).read_text(encoding="utf-8") == manifest_text(key, lock, interpreter, platform),
-        f"the install at {root} was recorded for a different lock",
-    )
-    _require(content_matches(root / "tree", expected), f"the install at {root} does not match the verified bytes")
-    script = plan.infos[0].console_scripts[0][0]
-    return Installed(_entry_path(root, script), root, key, False)
+    try:
+        _require((root / MANIFEST).is_file(), f"no install exists for {lock.package} {lock.version} at {root}")
+        plan = build_plan(lock, cache, fetch)
+        expected = expected_files(plan, root, interpreter)
+        _require(
+            (root / MANIFEST).read_text(encoding="utf-8") == manifest_text(key, lock, interpreter, platform),
+            f"the install at {root} was recorded for a different lock",
+        )
+        _require(content_matches(root / "tree", expected), f"the install at {root} does not match the verified bytes")
+        script = plan.infos[0].console_scripts[0][0]
+        return Installed(_entry_path(root, script), root, key, False)
+    except OSError as exc:
+        raise BootstrapError(f"cannot verify the install at {root}: {exc}") from exc
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -921,6 +933,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     _common(install_parser)
     install_parser.add_argument("--verify-all-sources", action="store_true", help="Require every byte source to match.")
     install_parser.add_argument("--reinstall", action="store_true", help="Discard a mismatched warm install.")
+    install_parser.add_argument(
+        "--print-argv",
+        action="store_true",
+        help="Print the launch argv as a JSON list (interpreter, -IBS, script) instead of the executable path.",
+    )
     verify_parser = commands.add_parser("verify", help="Verify an existing install without creating one.")
     _common(verify_parser)
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
@@ -940,7 +957,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"theseus bootstrap: refused: {exc}", file=sys.stderr)
         return 1
-    print(installed.executable)
+    if getattr(args, "print_argv", False):
+        script = installed.executable.parent / installed.executable.name.removesuffix(".cmd")
+        print(json.dumps([str(interpreter_identity()["executable"]), "-IBS", str(script)]))
+    else:
+        print(installed.executable)
     return 0
 
 
