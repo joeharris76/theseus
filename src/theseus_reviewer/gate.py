@@ -14,7 +14,7 @@ from typing import Any
 
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
-from .policy import Binding, Consumer, Policy, PolicyError, PromotionRules, load_policy, parse_policy
+from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
 from .review_check import (
     API_ROOT,
     ERROR,
@@ -143,7 +143,7 @@ def load_gate_config(policy_path: str, root: Path) -> GateConfig:
     try:
         policy = load_policy(root / policy_path)
         return GateConfig(policy, policy_path, load_matchers(policy.consumer, root))
-    except (OSError, PolicyError, ValueError, yaml.YAMLError) as exc:
+    except Exception as exc:
         raise CheckError(f"cannot load the review policy {policy_path}: {exc}") from exc
 
 
@@ -294,7 +294,7 @@ def _owned_head(args: argparse.Namespace, token: str) -> str | None:
     return head_sha
 
 
-def _read_failed(args: argparse.Namespace, token: str, exc: PullReadFailed, known_head: str | None) -> int:
+def _read_failed(args: argparse.Namespace, token: str, exc: Exception, known_head: str | None) -> int:
     head_sha = known_head
     if head_sha is None and not args.no_post:
         head_sha = _owned_head(args, token)
@@ -319,8 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_gate_config(args.policy, Path(args.root))
     except CheckError as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
-        return ERROR
+        return _read_failed(args, token, exc, None)
     return post_gate(args, token, config)
 
 
