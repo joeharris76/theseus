@@ -62,7 +62,7 @@ These stay because they are protocol, persisted-format or service contracts, not
 
 BenchBox keeps: `soundness_merge_digest.py`, `soundness_drain_report.py`, `oracle_gateway_host.sh`, `oracle_local_review.py`, `pr_arm.py`, `pr_landing.py`, remote closeout and review wrappers, the inert-path read-index scanner and symlink guard, selectors and CI workflow YAML. Removed tests: `test_oracle_local_review.py`, `test_soundness_merge_digest*.py`, `test_gateway_host.py` (the shell-script test; `tests/integration/test_gateway_host.py` now covers the installed `install-omp` and `gateway-clients` call sites), `test_pr_arm_scenario.py`, `test_pr_landing_soundness_scenario.py`, the five BenchBox bump-workflow shell scenarios in `test_omp_pin_scenarios.py`, and the scanner, symlink, reader-index, selector and workflow-parity tests from `test_inert_paths.py`, `test_soundness_paths.py` and `test_scan_scratch.py`.
 
-Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-shaped consumer data: the baseline policy and manifests plus a rewritten `oracle-verdict.yml` for the scenario runner) and `tests/fixtures/consumer/beta/` (a synthetic second consumer with its own App, attesters and base branch). Nineteen golden plans gained the `omp_config` plan field.
+Test fixtures added after the seed: `tests/fixtures/consumer/alpha/` (BenchBox-shaped consumer data: the baseline policy and manifests plus a rewritten `oracle-verdict.yml` for the scenario runner) and `tests/fixtures/consumer/beta/` (a synthetic second consumer with its own App, attesters and base branch). Eighteen golden plans gained the `omp_config` plan field.
 
 ## Upstream port ledger
 
@@ -77,13 +77,13 @@ uv run python tools/parity.py --benchbox-repo <BenchBox checkout> --report parit
 uv run python tools/parity.py --source-hash
 ```
 
-Run at Theseus commit `d0bb5d2d6863bc6afaf9553dcdde321889f34091` (0.1.4, shipped source clean; adds injectable seams for `Run.phase` and the bootstrap lock and publish steps) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
+Run at Theseus commit `09e401882d1ad7c552fc989a18bb2be38e51f00b` (0.1.5, shipped source clean; adds the fail-closed gate on an unloadable policy, case-insensitive repository slug comparisons, the `tailscale_tag` input and the job failure on empty App secrets) against baseline `95c423c35efd3fb4962145bdc628006d5aaaad26`, whose extracted source hashes to the recorded seed value above:
 
 ```
-frozen source hash   d9454bb1c8f8ccfc192eaebc730ada393774debe61443042878fe467f43e507a
-wheel                theseus_reviewer-0.1.4-py3-none-any.whl  sha256 36742ec4ba9b3849204051e42f0f20aa4721271c6823d0450a0025663e7ceda6
+frozen source hash   91d8b8da5b387707b149d9f77d83e444b18a807824d6786ac0d76f1ecee4458f
+wheel                theseus_reviewer-0.1.5-py3-none-any.whl  sha256 cb54a2a18b6eb21117f9752a1b23e8b3fb1fae3e4daf04caf5ccd1a17331c271
 scenario tests       223 on each side, all passing or identically skipped, except the one listed below
-captures compared    44: 18 identical, 26 differing only as listed
+captures compared    43: 18 identical, 25 differing only as listed
 unexplained differences  0
 parity PASS
 ```
@@ -92,10 +92,11 @@ The frozen source hash is the sha256 over the sorted lines `<path>\t<sha256 of f
 
 Differences, each intentional and listed in `tools/parity.py`:
 
-- Output: the `plan` capture carries `omp_config`, the consumer-configured omp config path the baseline hard-coded (26 captures).
+- Output: the `plan` capture carries `omp_config`, the consumer-configured omp config path the baseline hard-coded (25 captures).
 - Outcome: `test_a_cloud_review_without_the_recorded_proxy_refuses_and_says_how_to_start_it` passes on Theseus and fails on the baseline, whose remedy text names the consumer command `make cloud-gateway`; Theseus says `start the cloud gateway`.
 - Configuration: the policy `consumer` section, the `--policy`/`--root`, `--repo`, `--omp-config` and `--manifest` flags, the neutral local-state and OMP-cache roots, the `THESEUS_*` environment names and `theseus-cloud-gateway.status`, and cache file names keyed by the installed package digest. The baseline side maps each to its own name or flag.
 - Ported after the baseline: the path-bounded first-promotion source loader and leading-dot archive fix, and the removal of the member-result store (both in BenchBox `develop` at `ef52509`, ledgered in UPSTREAM.md), are not in the `95c423c` baseline the parity run compares against; they change no captured scenario output and are covered by `tests/unit/reviewer/test_promotion.py` and `tests/unit/reviewer/test_local_review.py`.
+- Removed after the baseline: the App-absent path (`gate.yml` logging without posting, the publish notice, the sweep's unconfigured-App branch, `has_app`) is gone because a missing App now fails the job, so the baseline's `app_missing` scenario has no Theseus counterpart and is no longer compared. The gate now posts a failure when its policy or a manifest cannot be loaded (the baseline loaded them inside the evaluation that already failed closed), and repository slugs are compared without case; neither changes a captured scenario output, and both are covered by `tests/unit/test_gate.py`, `tests/unit/test_hosted_workflows.py` and the slug tests under `tests/unit/`.
 - Runtime: the installed side runs from a wheel with no dependencies in a clean venv without PyYAML (its YAML parser is the vendored copy); the baseline side runs in its own venv with PyYAML 6.0.3 because the baseline imports it. Review and gate outputs are unchanged by the vendoring.
 - Process model: local-review phase children re-exec the running interpreter with `-I -B -S` and the verified package directory (the baseline ran `python -m` with `PYTHONPATH` set to its export), and `THESEUS_GATE_COMMAND` is required with no fallback. Neither changes a captured output; `tests/integration/test_launcher_local_review.py` covers the launcher path.
 - Excluded for having no baseline counterpart: `test_two_consumers`, `test_hosted_pins`, `test_gateway_host`, `test_launcher_local_review`, and the in-process CI-versus-local adapter comparison in `test_local_driver_scenarios`.
