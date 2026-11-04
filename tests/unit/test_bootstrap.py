@@ -419,7 +419,7 @@ def test_pth_hooks_in_a_dependency_refuse(repo, cache):
 
 def test_environment_markers_skip_requirements_that_do_not_apply(repo, cache):
     other = build_world(
-        main_requires=("fakedep>=2,<3", "winonly>=1; sys_platform == 'win32'", "oldpython; python_version < '3.8'")
+        main_requires=("fakedep>=2,<3", "winonly>=1; sys_platform == 'plan9'", "oldpython; python_version < '3.8'")
     )
     installed = bootstrap.install(_lock(other, repo), cache, other.net)
     assert _run(installed.executable).returncode == 0
@@ -511,6 +511,7 @@ def test_the_installer_runs_standalone_without_the_package(world, repo, cache, t
     module = Path(bootstrap.__file__)
     env = {
         "PATH": os.environ.get("PATH", ""),
+        **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
         "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path),
         "THESEUS_INSTALL_CACHE": str(cache),
     }
@@ -646,3 +647,194 @@ def test_every_requirers_specifier_is_checked_against_the_locked_version(repo, c
     other.net.blobs[middle_url] = compatible
     other.lock["dependencies"][-1]["sha256"] = sha(compatible)
     assert bootstrap.install(_lock(other, repo), cache / "ok", other.net).executable.is_file()
+
+
+class _FakeMsvcrt:
+    LK_LOCK = 1
+    LK_NBLCK = 2
+    LK_UNLCK = 0
+
+    def __init__(self, busy: int = 0) -> None:
+        self.busy = busy
+        self.calls: list[tuple[int, int]] = []
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None:
+        assert nbytes == 1
+        if mode == self.LK_NBLCK and self.busy:
+            self.busy -= 1
+            raise OSError("locked")
+        self.calls.append((mode, nbytes))
+
+
+def test_key_lock_uses_msvcrt_on_windows_and_retries_while_contended(monkeypatch, cache):
+    fake = _FakeMsvcrt(busy=3)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    with bootstrap._key_lock(cache, "k"):
+        assert fake.calls == [(fake.LK_NBLCK, 1)]
+    assert fake.calls == [(fake.LK_NBLCK, 1), (fake.LK_UNLCK, 1)]
+    assert (cache / "installs" / ".lock-k").is_file()
+
+
+def test_key_lock_windows_gives_up_after_bounded_retries(monkeypatch, cache):
+    fake = _FakeMsvcrt(busy=10**6)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    with pytest.raises(OSError, match="locked"), bootstrap._key_lock(cache, "k"):
+        pytest.fail("lock must not be granted")
+    assert 10**6 - fake.busy == bootstrap.WINDOWS_LOCK_ATTEMPTS
+    assert bootstrap.WINDOWS_LOCK_ATTEMPTS * bootstrap.WINDOWS_LOCK_INTERVAL <= 600
+
+
+def test_windows_lock_sleeps_between_nonblocking_attempts(monkeypatch, cache):
+    sleeps: list[float] = []
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=2))
+    monkeypatch.setattr(bootstrap.time, "sleep", sleeps.append)
+    with bootstrap._key_lock(cache, "k"):
+        pass
+    assert sleeps == [bootstrap.WINDOWS_LOCK_INTERVAL] * 2
+
+
+def test_key_lock_windows_failure_becomes_bootstrap_error(world, repo, cache, monkeypatch):
+    lock = _lock(world, repo)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=10**6))
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    with pytest.raises(bootstrap.BootstrapError, match="cannot install into .*locked"):
+        bootstrap.install(lock, cache, world.net)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX flock")
+def test_key_lock_uses_flock_on_posix(monkeypatch, cache):
+    import fcntl
+
+    calls: list[int] = []
+    monkeypatch.setattr(bootstrap, "_windows", lambda: False)
+    monkeypatch.setattr(fcntl, "flock", lambda handle, op: calls.append(op))
+    with bootstrap._key_lock(cache, "k"):
+        assert calls == [fcntl.LOCK_EX]
+    assert calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
+
+
+def test_windows_install_adds_a_cmd_wrapper_and_returns_it(world, repo, cache, monkeypatch):
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    lock = _lock(world, repo)
+    installed = bootstrap.install(lock, cache, world.net)
+    assert installed.executable.name == "fake.cmd"
+    wrapper = installed.executable.read_bytes().decode("utf-8")
+    assert wrapper == f'@"{bootstrap.interpreter_identity()["executable"]}" -IBS "%~dp0fake" %*\r\n'
+    assert (installed.executable.parent / "fake").is_file()
+    assert bootstrap.verify_installed(lock, cache, world.net).executable == installed.executable
+
+
+def test_artifact_lock_is_per_artifact_and_not_held_while_fetching(world, repo, cache, monkeypatch):
+    names: list[str] = []
+    state = {"held": 0}
+    real = bootstrap._file_lock
+
+    @bootstrap.contextlib.contextmanager
+    def tracking(path):
+        names.append(path.name)
+        with real(path):
+            state["held"] += 1
+            try:
+                yield
+            finally:
+                state["held"] -= 1
+
+    def fetch(url):
+        assert state["held"] == 0
+        return world.net(url)
+
+    monkeypatch.setattr(bootstrap, "_file_lock", tracking)
+    bootstrap.install(_lock(world, repo), cache, fetch)
+    assert f".lock-{world.lock['artifact']['sha256']}" in names
+    assert ".lock" not in names
+
+
+def test_print_argv_emits_the_isolated_launch_argv(world, repo, cache, tmp_path):
+    commit = commit_lock(repo, world.lock)
+    env = {
+        **os.environ,
+        "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path),
+        "THESEUS_INSTALL_CACHE": str(cache),
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "theseus_reviewer", "bootstrap", "install", "--repo", str(repo), "--commit", commit]
+        + ["--print-argv"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    interpreter, flags, script = json.loads(result.stdout)
+    assert flags == "-IBS"
+    ran = subprocess.run([interpreter, flags, script], capture_output=True, text=True, check=False)
+    assert ran.stdout.strip() == "fakepkg ok 7 1 1"
+
+
+def test_warm_artifact_read_takes_no_lock(world, repo, cache, monkeypatch):
+    lock = _lock(world, repo)
+    bootstrap.install(lock, cache, world.net)
+    monkeypatch.setattr(bootstrap, "_file_lock", lambda path: pytest.fail("no lock for a warm read"))
+    bootstrap.build_plan(lock, cache, world.net)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_verify_on_a_read_only_cache_succeeds_and_unreadable_refuses_cleanly(world, repo, cache):
+    lock = _lock(world, repo)
+    installed = bootstrap.install(lock, cache, world.net)
+    for path in [cache, *cache.rglob("*")]:
+        if path.is_dir():
+            path.chmod(0o555)
+    try:
+        assert bootstrap.verify_installed(lock, cache, world.net).executable == installed.executable
+    finally:
+        for path in [cache, *cache.rglob("*")]:
+            if path.is_dir():
+                path.chmod(0o755)
+
+
+def test_verify_turns_os_errors_into_a_refusal(world, repo, cache, monkeypatch):
+    lock = _lock(world, repo)
+    bootstrap.install(lock, cache, world.net)
+
+    def boom(*args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(bootstrap, "build_plan", boom)
+    with pytest.raises(bootstrap.BootstrapError, match="cannot verify the install .*read-only"):
+        bootstrap.verify_installed(lock, cache, world.net)
+
+
+def test_windows_allows_spaces_in_the_interpreter_path(world, repo, cache, monkeypatch):
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    identity = {**bootstrap.interpreter_identity(), "executable": "C:\\Program Files\\Python\\python.exe"}
+    monkeypatch.setattr(bootstrap, "interpreter_identity", lambda: identity)
+    installed = bootstrap.install(_lock(world, repo), cache, world.net)
+    assert installed.executable.read_bytes().startswith(b'@"C:\\Program Files\\Python\\python.exe" -IBS')
+
+
+@pytest.mark.parametrize("path", ["C:\\100%\\python.exe", "C:\\Jörg\\python.exe"])
+def test_windows_refuses_percent_and_non_ascii_interpreter_paths(world, repo, cache, monkeypatch, path):
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    identity = {**bootstrap.interpreter_identity(), "executable": path}
+    monkeypatch.setattr(bootstrap, "interpreter_identity", lambda: identity)
+    with pytest.raises(bootstrap.BootstrapError, match="cmd wrapper cannot carry"):
+        bootstrap.install(_lock(world, repo), cache, world.net)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX install path takes an fcntl lock")
+def test_posix_still_refuses_whitespace_in_the_interpreter_path(world, repo, cache, monkeypatch):
+    monkeypatch.setattr(bootstrap, "_windows", lambda: False)
+    identity = {**bootstrap.interpreter_identity(), "executable": "/opt/my python/bin/python"}
+    monkeypatch.setattr(bootstrap, "interpreter_identity", lambda: identity)
+    with pytest.raises(bootstrap.BootstrapError, match="unsuitable for a launcher shebang"):
+        bootstrap.install(_lock(world, repo), cache, world.net)

@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -607,12 +608,14 @@ def _load_artifact(
         cached = retained.read_bytes()
         if sha256_hex(cached) == sha256:
             return cached
-        retained.unlink()
     raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
-    retained.parent.mkdir(parents=True, exist_ok=True)
-    staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
-    staged.write_bytes(raw)
-    os.replace(staged, retained)
+    with _file_lock(retained.parent / f".lock-{sha256}"):
+        staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
+        try:
+            staged.write_bytes(raw)
+            os.replace(staged, retained)
+        finally:
+            staged.unlink(missing_ok=True)
     return raw
 
 
@@ -679,6 +682,10 @@ def launcher_text(python: str, site: Path, module: str, attribute: str) -> str:
     )
 
 
+def windows_wrapper_text(python: str, script: str) -> str:
+    return f'@"{python}" -IBS "%~dp0{script}" %*\r\n'
+
+
 def expected_files(plan: Plan, root: Path, interpreter: Mapping[str, Any]) -> dict[str, bytes]:
     site = root / "tree" / "site"
     files: dict[str, bytes] = {}
@@ -688,12 +695,20 @@ def expected_files(plan: Plan, root: Path, interpreter: Mapping[str, Any]) -> di
             _require(target not in files, f"two wheels install {name!r}")
             files[target] = content
     python = str(interpreter["executable"])
-    _require(
-        not any(ch.isspace() for ch in python) and len(python) < 120,
-        "the interpreter path is unsuitable for a launcher shebang",
-    )
+    if _windows():
+        _require(
+            "%" not in python and python.isascii(),
+            "the interpreter path contains '%' or non-ASCII characters, which a cmd wrapper cannot carry safely",
+        )
+    else:
+        _require(
+            not any(ch.isspace() for ch in python) and len(python) < 120,
+            "the interpreter path is unsuitable for a launcher shebang",
+        )
     for script, module, attribute in plan.infos[0].console_scripts:
         files[f"bin/{script}"] = launcher_text(python, site, module, attribute).encode("utf-8")
+        if _windows():
+            files[f"bin/{script}.cmd"] = windows_wrapper_text(python, script).encode("utf-8")
     return files
 
 
@@ -778,33 +793,74 @@ def install(
     interpreter, platform = interpreter_identity(), platform_identity()
     key = install_key(lock, interpreter, platform)
     root = cache / "installs" / key
-    plan = build_plan(lock, cache, fetch, verify_all=verify_all)
-    expected = expected_files(plan, root, interpreter)
-    manifest = manifest_text(key, lock, interpreter, platform)
-    scripts = plan.infos[0].console_scripts
-    name = entry or (scripts[0][0] if scripts else "")
-    _require(
-        bool(name) and any(script[0] == name for script in scripts), f"{lock.package} has no console script {entry!r}"
-    )
     try:
+        plan = build_plan(lock, cache, fetch, verify_all=verify_all)
+        expected = expected_files(plan, root, interpreter)
+        manifest = manifest_text(key, lock, interpreter, platform)
+        scripts = plan.infos[0].console_scripts
+        name = entry or (scripts[0][0] if scripts else "")
+        _require(
+            bool(name) and any(script[0] == name for script in scripts),
+            f"{lock.package} has no console script {entry!r}",
+        )
         with _key_lock(cache, key):
             return _settle(root, key, name, expected, manifest, reinstall)
     except OSError as exc:
         raise BootstrapError(f"cannot install into {root}: {exc}") from exc
 
 
-@contextlib.contextmanager
-def _key_lock(cache: Path, key: str) -> Iterator[None]:
+WINDOWS_LOCK_ATTEMPTS = 1200
+WINDOWS_LOCK_INTERVAL = 0.5
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _lock_posix(handle: Any) -> Callable[[], None]:
     import fcntl
 
-    directory = cache / "installs"
-    directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / f".lock-{key}", "a", encoding="utf-8") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return lambda: fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _lock_windows(handle: Any) -> Callable[[], None]:
+    import msvcrt
+
+    handle.seek(0)
+    for attempt in range(WINDOWS_LOCK_ATTEMPTS):
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            break
+        except OSError:
+            if attempt == WINDOWS_LOCK_ATTEMPTS - 1:
+                raise
+            time.sleep(WINDOWS_LOCK_INTERVAL)
+
+    def release() -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+    return release
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as handle:
+        release = (_lock_windows if _windows() else _lock_posix)(handle)
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            release()
+
+
+def _key_lock(cache: Path, key: str) -> contextlib.AbstractContextManager[None]:
+    return _file_lock(cache / "installs" / f".lock-{key}")
+
+
+def _entry_path(root: Path, name: str) -> Path:
+    return root / "tree" / "bin" / (f"{name}.cmd" if _windows() else name)
 
 
 def _settle(
@@ -819,7 +875,7 @@ def _settle(
                 "platform than this lock requires; refusing to use it (pass --reinstall to rebuild it)",
             )
             if content_matches(root / "tree", expected):
-                return Installed(root / "tree" / "bin" / name, root, key, False)
+                return Installed(_entry_path(root, name), root, key, False)
     reconstructed = root.exists()
     staging = root.parent / f".build-{key}-{os.getpid()}-{secrets.token_hex(4)}"
     try:
@@ -835,7 +891,7 @@ def _settle(
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     _require(content_matches(root / "tree", expected), "the installed content does not match the verified bytes")
-    return Installed(root / "tree" / "bin" / name, root, key, reconstructed)
+    return Installed(_entry_path(root, name), root, key, reconstructed)
 
 
 def verify_installed(lock: Lock, cache: Path | None, fetch: Fetch | None = None) -> Installed:
@@ -844,16 +900,19 @@ def verify_installed(lock: Lock, cache: Path | None, fetch: Fetch | None = None)
     interpreter, platform = interpreter_identity(), platform_identity()
     key = install_key(lock, interpreter, platform)
     root = cache / "installs" / key
-    _require((root / MANIFEST).is_file(), f"no install exists for {lock.package} {lock.version} at {root}")
-    plan = build_plan(lock, cache, fetch)
-    expected = expected_files(plan, root, interpreter)
-    _require(
-        (root / MANIFEST).read_text(encoding="utf-8") == manifest_text(key, lock, interpreter, platform),
-        f"the install at {root} was recorded for a different lock",
-    )
-    _require(content_matches(root / "tree", expected), f"the install at {root} does not match the verified bytes")
-    script = plan.infos[0].console_scripts[0][0]
-    return Installed(root / "tree" / "bin" / script, root, key, False)
+    try:
+        _require((root / MANIFEST).is_file(), f"no install exists for {lock.package} {lock.version} at {root}")
+        plan = build_plan(lock, cache, fetch)
+        expected = expected_files(plan, root, interpreter)
+        _require(
+            (root / MANIFEST).read_text(encoding="utf-8") == manifest_text(key, lock, interpreter, platform),
+            f"the install at {root} was recorded for a different lock",
+        )
+        _require(content_matches(root / "tree", expected), f"the install at {root} does not match the verified bytes")
+        script = plan.infos[0].console_scripts[0][0]
+        return Installed(_entry_path(root, script), root, key, False)
+    except OSError as exc:
+        raise BootstrapError(f"cannot verify the install at {root}: {exc}") from exc
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -874,6 +933,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     _common(install_parser)
     install_parser.add_argument("--verify-all-sources", action="store_true", help="Require every byte source to match.")
     install_parser.add_argument("--reinstall", action="store_true", help="Discard a mismatched warm install.")
+    install_parser.add_argument(
+        "--print-argv",
+        action="store_true",
+        help="Print the launch argv as a JSON list (interpreter, -IBS, script) instead of the executable path.",
+    )
     verify_parser = commands.add_parser("verify", help="Verify an existing install without creating one.")
     _common(verify_parser)
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
@@ -893,7 +957,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"theseus bootstrap: refused: {exc}", file=sys.stderr)
         return 1
-    print(installed.executable)
+    if getattr(args, "print_argv", False):
+        script = installed.executable.parent / installed.executable.name.removesuffix(".cmd")
+        print(json.dumps([str(interpreter_identity()["executable"]), "-IBS", str(script)]))
+    else:
+        print(installed.executable)
     return 0
 
 

@@ -4,7 +4,7 @@
 
 ```
 theseus bootstrap install --repo CONSUMER_CHECKOUT --commit FULL_SHA [--lock-path .github/theseus-lock.json]
-                          [--cache-dir DIR] [--entry theseus] [--verify-all-sources] [--reinstall]
+                          [--cache-dir DIR] [--entry theseus] [--verify-all-sources] [--reinstall] [--print-argv]
 theseus bootstrap verify  --repo ... --commit ...     # verify an existing install, create nothing
 ```
 
@@ -32,3 +32,7 @@ An install is built in a private staging directory and renamed into place, so an
 ## Smoke
 
 `uv build` produces the wheel; the installer test suite (`tests/unit/test_bootstrap.py`) exercises the matrix against synthetic wheels and a loopback mirror (`ORACLE_PROMOTION_MIRROR`, the same loopback convention as `promotion-check`).
+
+## Windows
+
+On Windows `tree/bin` also holds a verified `<script>.cmd` wrapper that runs `python -IBS bin/<script> %*`, and `install` prints that path. Use it from a shell or CI step you write yourself. Programmatic callers that pass arguments they do not fully control MUST NOT start the `.cmd` (cmd re-parses its arguments, so a crafted argument can run another command). Run `install --print-argv` instead: it prints a JSON list `[<python>, "-IBS", <bin/script>]` that can be executed directly with no shell. The installer refuses an interpreter path containing `%` or non-ASCII characters on Windows (the wrapper is read in the OEM code page); spaces are allowed. Cache locks use `msvcrt` byte-range locks with a bounded wait of about ten minutes; the artifact lock is per artifact and is held only around the final replace, never while downloading.
