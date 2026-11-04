@@ -646,3 +646,74 @@ def test_every_requirers_specifier_is_checked_against_the_locked_version(repo, c
     other.net.blobs[middle_url] = compatible
     other.lock["dependencies"][-1]["sha256"] = sha(compatible)
     assert bootstrap.install(_lock(other, repo), cache / "ok", other.net).executable.is_file()
+
+
+class _FakeMsvcrt:
+    LK_LOCK = 1
+    LK_UNLCK = 0
+
+    def __init__(self, busy: int = 0) -> None:
+        self.busy = busy
+        self.calls: list[tuple[int, int]] = []
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None:
+        assert nbytes == 1
+        if mode == self.LK_LOCK and self.busy:
+            self.busy -= 1
+            raise OSError("locked")
+        self.calls.append((mode, nbytes))
+
+
+def test_key_lock_uses_msvcrt_on_windows_and_retries_while_contended(monkeypatch, cache):
+    fake = _FakeMsvcrt(busy=3)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    with bootstrap._key_lock(cache, "k"):
+        assert fake.calls == [(fake.LK_LOCK, 1)]
+    assert fake.calls == [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)]
+    assert (cache / "installs" / ".lock-k").is_file()
+
+
+def test_key_lock_windows_gives_up_after_bounded_retries(monkeypatch, cache):
+    fake = _FakeMsvcrt(busy=10**6)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    with pytest.raises(OSError, match="locked"), bootstrap._key_lock(cache, "k"):
+        pytest.fail("lock must not be granted")
+    assert 10**6 - fake.busy == bootstrap.WINDOWS_LOCK_ATTEMPTS
+
+
+def test_key_lock_windows_failure_becomes_bootstrap_error(world, repo, cache, monkeypatch):
+    lock = _lock(world, repo)
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=10**6))
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    monkeypatch.setattr(bootstrap, "expected_files", lambda *args: {})
+    with pytest.raises(bootstrap.BootstrapError, match="cannot install into .*locked"):
+        bootstrap.install(lock, cache, world.net)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX flock")
+def test_key_lock_uses_flock_on_posix(monkeypatch, cache):
+    import fcntl
+
+    calls: list[int] = []
+    monkeypatch.setattr(bootstrap, "_windows", lambda: False)
+    monkeypatch.setattr(fcntl, "flock", lambda handle, op: calls.append(op))
+    with bootstrap._key_lock(cache, "k"):
+        assert calls == [fcntl.LOCK_EX]
+    assert calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
+
+
+def test_windows_install_adds_a_cmd_wrapper_and_returns_it(world, repo, cache, monkeypatch):
+    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
+    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    lock = _lock(world, repo)
+    installed = bootstrap.install(lock, cache, world.net)
+    assert installed.executable.name == "fake.cmd"
+    wrapper = installed.executable.read_bytes().decode("utf-8")
+    assert wrapper == f'@"{bootstrap.interpreter_identity()["executable"]}" -IBS "%~dp0fake" %*\r\n'
+    assert (installed.executable.parent / "fake").is_file()
+    assert bootstrap.verify_installed(lock, cache, world.net).executable == installed.executable

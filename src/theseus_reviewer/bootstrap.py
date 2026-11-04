@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -679,6 +680,10 @@ def launcher_text(python: str, site: Path, module: str, attribute: str) -> str:
     )
 
 
+def windows_wrapper_text(python: str, script: str) -> str:
+    return f'@"{python}" -IBS "%~dp0{script}" %*\r\n'
+
+
 def expected_files(plan: Plan, root: Path, interpreter: Mapping[str, Any]) -> dict[str, bytes]:
     site = root / "tree" / "site"
     files: dict[str, bytes] = {}
@@ -694,6 +699,8 @@ def expected_files(plan: Plan, root: Path, interpreter: Mapping[str, Any]) -> di
     )
     for script, module, attribute in plan.infos[0].console_scripts:
         files[f"bin/{script}"] = launcher_text(python, site, module, attribute).encode("utf-8")
+        if _windows():
+            files[f"bin/{script}.cmd"] = windows_wrapper_text(python, script).encode("utf-8")
     return files
 
 
@@ -793,18 +800,54 @@ def install(
         raise BootstrapError(f"cannot install into {root}: {exc}") from exc
 
 
-@contextlib.contextmanager
-def _key_lock(cache: Path, key: str) -> Iterator[None]:
+WINDOWS_LOCK_ATTEMPTS = 360
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _lock_posix(handle: Any) -> Callable[[], None]:
     import fcntl
 
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return lambda: fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _lock_windows(handle: Any) -> Callable[[], None]:
+    import msvcrt
+
+    handle.seek(0)
+    for attempt in range(WINDOWS_LOCK_ATTEMPTS):
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            break
+        except OSError:
+            if attempt == WINDOWS_LOCK_ATTEMPTS - 1:
+                raise
+            time.sleep(min(0.05 * (attempt + 1), 1.0))
+
+    def release() -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+    return release
+
+
+@contextlib.contextmanager
+def _key_lock(cache: Path, key: str) -> Iterator[None]:
     directory = cache / "installs"
     directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / f".lock-{key}", "a", encoding="utf-8") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    with open(directory / f".lock-{key}", "a+", encoding="utf-8") as handle:
+        release = (_lock_windows if _windows() else _lock_posix)(handle)
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            release()
+
+
+def _entry_path(root: Path, name: str) -> Path:
+    return root / "tree" / "bin" / (f"{name}.cmd" if _windows() else name)
 
 
 def _settle(
@@ -819,7 +862,7 @@ def _settle(
                 "platform than this lock requires; refusing to use it (pass --reinstall to rebuild it)",
             )
             if content_matches(root / "tree", expected):
-                return Installed(root / "tree" / "bin" / name, root, key, False)
+                return Installed(_entry_path(root, name), root, key, False)
     reconstructed = root.exists()
     staging = root.parent / f".build-{key}-{os.getpid()}-{secrets.token_hex(4)}"
     try:
@@ -835,7 +878,7 @@ def _settle(
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     _require(content_matches(root / "tree", expected), "the installed content does not match the verified bytes")
-    return Installed(root / "tree" / "bin" / name, root, key, reconstructed)
+    return Installed(_entry_path(root, name), root, key, reconstructed)
 
 
 def verify_installed(lock: Lock, cache: Path | None, fetch: Fetch | None = None) -> Installed:
@@ -853,7 +896,7 @@ def verify_installed(lock: Lock, cache: Path | None, fetch: Fetch | None = None)
     )
     _require(content_matches(root / "tree", expected), f"the install at {root} does not match the verified bytes")
     script = plan.infos[0].console_scripts[0][0]
-    return Installed(root / "tree" / "bin" / script, root, key, False)
+    return Installed(_entry_path(root, script), root, key, False)
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
