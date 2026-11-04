@@ -831,6 +831,7 @@ def test_windows_refuses_percent_and_non_ascii_interpreter_paths(world, repo, ca
         bootstrap.install(_lock(world, repo), cache, world.net)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX install path takes an fcntl lock")
 def test_posix_still_refuses_whitespace_in_the_interpreter_path(world, repo, cache, monkeypatch):
     monkeypatch.setattr(bootstrap, "_windows", lambda: False)
     identity = {**bootstrap.interpreter_identity(), "executable": "/opt/my python/bin/python"}
