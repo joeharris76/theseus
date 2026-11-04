@@ -49,7 +49,8 @@ An urgent BenchBox fix after a freeze lands in BenchBox, is ported here, and inv
 
 ## Status
 
-Checked against BenchBox `origin/develop` at `ef52509983e1e3e345ec0b76b8c0f79c7d863867` (`python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop`, after `git fetch origin develop`): five commits since the baseline, two touching the inventory, both recorded, none pending, exit 0, "ledger current: no un-ported upstream change".
+Checked against BenchBox `origin/develop` at `f1a710362cbd6915c8900d00569f629356a50604` (`python3 tools/upstream_ledger.py check --benchbox-repo <BenchBox checkout> --ref origin/develop`, after `git fetch origin develop`): three commits touching the inventory, all recorded, none pending, exit 0, "ledger current: no un-ported upstream change".
 
 - `ee619c3` (#3933, batch execution remediation): ported in `c6f2fed` (the member-result store is removed and `member_binding()` is exposed); its `pr_arm`, `pr_landing`, `remote_closeout`, skills, docs and tracker-discovery fixture changes are consumer-owned.
 - `ef52509` (#3936, first Theseus promotion): the path-bounded first-promotion source loader and leading-dot archive fix are ported in `7d01388`; its policy section for BenchBox is consumer-owned data (no-op).
+- `71b0bd8` (#3939, OMP pin candidate refresh): no-op; it changes only BenchBox's bump workflow and the harness for its consumer-owned shell step, which Theseus does not carry.
