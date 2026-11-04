@@ -16,7 +16,7 @@ A called workflow sees the caller's `github` context: `github.event_name`, `gith
 
 - Triggers, `run-name`, `concurrency` and the job-level `permissions` ceiling belong to the caller. The callees declare no workflow-level `concurrency` and no `run-name`, so a callee can never share a group with its caller. The example callers use groups prefixed `oracle-verdict-` and `oracle-gate-`; the two never collide with each other or with CI groups.
 - `github.sha` is the tip of the branch the event ran against. The review runs only when `github.ref` is `refs/heads/<gated_base>`; a pull request against any other base skips the jobs. A `workflow_dispatch` from any other ref is refused by the guard job.
-- The guard job (no permissions, no secrets, no environment) refuses before any secret job starts: a `theseus_ref` that is not a full 40-hex commit, an empty `gated_base`, and a caller whose `github.workflow_ref` is not `<repository>/.github/workflows/<caller_workflow>@...`.
+- The guard job (`contents: read` only, no secrets, no environment) refuses before any secret job starts: a `theseus_ref` that is not a full 40-hex commit, an empty `gated_base`, a caller whose `github.workflow_ref` is not `<repository>/.github/workflows/<caller_workflow>@...`, and a `theseus_ref` that is not the pin recorded in the trusted consumer lock (below).
 
 ## Inputs
 
@@ -49,6 +49,10 @@ The organisation Actions allow-list must permit `joeharris76/theseus/.github/wor
 
 Neither workflow installs `latest` or reads a lock from a pull request head.
 
+### The pin must equal the trusted lock
+
+The caller's `uses: joeharris76/theseus/.github/workflows/<callee>@<sha>` and its `theseus_ref` input are chosen by the caller workflow file, which a pull request can edit. So the guard job binds them to the reviewed lock. It sparse-checks-out `.github/theseus-lock.json` from the trusted ref (`review.yml`: `github.sha`, the base tip for a pull request event; `gate.yml`: the current tip of `gated_base`), reads it from that commit's object, and refuses with exit 2 unless `theseus_ref == workflow_sha == source_commit`. A missing, unparsable or incomplete lock is refused too. A lock on the pull request head is never read, so a pull request that repoints the pin to an unreviewed Theseus commit without a reviewed lock change cannot run. Every secret-bearing job (`review`, `sweep`, `gate`, `bridge`) has `needs: guard`, so none starts when the check fails. The lock location is fixed at `.github/theseus-lock.json`.
+
 1. **Reviewer pin A.** The review checks out the trusted copy of the gated branch at `github.sha` (sparse, `persist-credentials: false`) and runs the bootstrap installer from `theseus_ref` against it: `bootstrap.py install --repo trusted --commit "$github.sha"`. The installer reads `.github/theseus-lock.json` from that commit's object, verifies every wheel hash, refuses anything it cannot verify, installs into an isolated tree and prints the launcher. The launcher directory goes on `PATH`, so every later step runs `theseus drive --policy "$POLICY_PATH" <phase>` from that install. The pull request head is checked out later, into a separate directory, for reading only.
 2. **Gate pin B.** After the reviewer has exited and the result is finalised, the workflow checks out the *current* gated branch into `gate/`, resolves its tip with `git rev-parse HEAD` and installs that commit's lock into a separate cache. Its launcher path is passed to the publish step only, as `THESEUS_GATE_COMMAND`, with `THESEUS_GATE_ROOT` naming the `gate/` checkout. The reviewer posts the verdict, then runs `<pin B launcher> gate --repo ... --pr ... --head-sha ... --policy ... --root gate/` as a subprocess. The gate decision is therefore computed by pin B's code against pin B's policy and manifests. Pin A never imports pin B and pin B never imports pin A; they share no interpreter.
 
@@ -73,7 +77,7 @@ A callee job can hold at most what the caller's calling job grants. The example 
 
 | Job | Ceiling the caller must grant | Job permissions |
 |---|---|---|
-| `guard` | none | `{}` |
+| `guard` | `contents: read` | `contents: read`; it checks out only `.github/theseus-lock.json` from the trusted ref |
 | `review` (`review.yml`) | `actions: write`, `contents: read`, `pull-requests: read` | the same; `actions: write` lets the retry sweep and the dispatch step run |
 | `sweep` (`review.yml`) | same | same |
 | `gate` (`gate.yml`) | `contents: read`, `pull-requests: read` | the same |
