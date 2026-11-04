@@ -419,7 +419,7 @@ def test_pth_hooks_in_a_dependency_refuse(repo, cache):
 
 def test_environment_markers_skip_requirements_that_do_not_apply(repo, cache):
     other = build_world(
-        main_requires=("fakedep>=2,<3", "winonly>=1; sys_platform == 'win32'", "oldpython; python_version < '3.8'")
+        main_requires=("fakedep>=2,<3", "winonly>=1; sys_platform == 'plan9'", "oldpython; python_version < '3.8'")
     )
     installed = bootstrap.install(_lock(other, repo), cache, other.net)
     assert _run(installed.executable).returncode == 0
@@ -511,6 +511,7 @@ def test_the_installer_runs_standalone_without_the_package(world, repo, cache, t
     module = Path(bootstrap.__file__)
     env = {
         "PATH": os.environ.get("PATH", ""),
+        **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
         "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path),
         "THESEUS_INSTALL_CACHE": str(cache),
     }
@@ -690,7 +691,6 @@ def test_key_lock_windows_failure_becomes_bootstrap_error(world, repo, cache, mo
     monkeypatch.setattr(bootstrap, "_windows", lambda: True)
     monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=10**6))
     monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
-    monkeypatch.setattr(bootstrap, "expected_files", lambda *args: {})
     with pytest.raises(bootstrap.BootstrapError, match="cannot install into .*locked"):
         bootstrap.install(lock, cache, world.net)
 

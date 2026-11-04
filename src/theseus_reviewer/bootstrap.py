@@ -604,17 +604,17 @@ def _load_artifact(
     cache: Path, label: str, urls: Sequence[str], sha256: str, fetch: Fetch, *, verify_all: bool
 ) -> bytes:
     retained = _retained(cache, sha256)
-    if retained.is_file() and not verify_all:
-        cached = retained.read_bytes()
-        if sha256_hex(cached) == sha256:
-            return cached
-        retained.unlink()
-    raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
-    retained.parent.mkdir(parents=True, exist_ok=True)
-    staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
-    staged.write_bytes(raw)
-    os.replace(staged, retained)
-    return raw
+    with _file_lock(retained.parent / ".lock"):
+        if retained.is_file() and not verify_all:
+            cached = retained.read_bytes()
+            if sha256_hex(cached) == sha256:
+                return cached
+            retained.unlink()
+        raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
+        staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
+        staged.write_bytes(raw)
+        os.replace(staged, retained)
+        return raw
 
 
 def build_plan(lock: Lock, cache: Path, fetch: Fetch, *, verify_all: bool = False) -> Plan:
@@ -785,15 +785,16 @@ def install(
     interpreter, platform = interpreter_identity(), platform_identity()
     key = install_key(lock, interpreter, platform)
     root = cache / "installs" / key
-    plan = build_plan(lock, cache, fetch, verify_all=verify_all)
-    expected = expected_files(plan, root, interpreter)
-    manifest = manifest_text(key, lock, interpreter, platform)
-    scripts = plan.infos[0].console_scripts
-    name = entry or (scripts[0][0] if scripts else "")
-    _require(
-        bool(name) and any(script[0] == name for script in scripts), f"{lock.package} has no console script {entry!r}"
-    )
     try:
+        plan = build_plan(lock, cache, fetch, verify_all=verify_all)
+        expected = expected_files(plan, root, interpreter)
+        manifest = manifest_text(key, lock, interpreter, platform)
+        scripts = plan.infos[0].console_scripts
+        name = entry or (scripts[0][0] if scripts else "")
+        _require(
+            bool(name) and any(script[0] == name for script in scripts),
+            f"{lock.package} has no console script {entry!r}",
+        )
         with _key_lock(cache, key):
             return _settle(root, key, name, expected, manifest, reinstall)
     except OSError as exc:
@@ -835,15 +836,18 @@ def _lock_windows(handle: Any) -> Callable[[], None]:
 
 
 @contextlib.contextmanager
-def _key_lock(cache: Path, key: str) -> Iterator[None]:
-    directory = cache / "installs"
-    directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / f".lock-{key}", "a+", encoding="utf-8") as handle:
+def _file_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as handle:
         release = (_lock_windows if _windows() else _lock_posix)(handle)
         try:
             yield
         finally:
             release()
+
+
+def _key_lock(cache: Path, key: str) -> contextlib.AbstractContextManager[None]:
+    return _file_lock(cache / "installs" / f".lock-{key}")
 
 
 def _entry_path(root: Path, name: str) -> Path:
