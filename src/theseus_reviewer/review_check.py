@@ -571,7 +571,7 @@ def fetch_promotion_refusals(
     if promotion.LOCK_PATH not in files and complete:
         return False, []
     head_repo = ((pull["head"].get("repo") or {}).get("full_name")) or repo
-    if head_repo != repo and promotion.LOCK_PATH in files:
+    if head_repo.casefold() != repo.casefold() and promotion.LOCK_PATH in files:
         return True, ["fork pull requests cannot promote theseus; open the promotion from a repository branch"]
     base_ref = pull["base"].get("sha") or pull["base"]["ref"]
     head_sha = pull["head"]["sha"]

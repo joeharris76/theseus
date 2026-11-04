@@ -395,6 +395,23 @@ def test_rename_from_docs_into_code_requires_review(monkeypatch: pytest.MonkeyPa
     assert plan["scope_paths"] == ["benchbox/new.py", "docs/old.md"]
 
 
+def test_a_head_repository_that_differs_from_the_base_only_in_case_is_not_a_fork(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pull = _pull(head={"sha": HEAD, "repo": {"full_name": REPO.lower()}})
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(pull, SOUNDNESS))
+    assert values["decision"] == "review"
+
+
+@pytest.mark.parametrize("head_repo", ["BenchBox-dev/other", "other-dev/BenchBox"])
+def test_a_head_repository_with_another_owner_or_name_is_a_fork(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, head_repo: str
+) -> None:
+    pull = _pull(head={"sha": HEAD, "repo": {"full_name": head_repo}})
+    _, values, _ = _plan(monkeypatch, tmp_path, FakeGitHub(pull, SOUNDNESS))
+    assert values["decision"] == "fork"
+
+
 def test_fork_pr_never_reaches_a_reviewer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pull = _pull(head={"sha": HEAD, "repo": {"full_name": "someone/BenchBox"}})
     _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(pull, SOUNDNESS))
@@ -1209,6 +1226,17 @@ def test_a_manual_retry_inside_backoff_runs_once_after_the_owner_reset(
     fake.comments = _reset_comments()
     _, values, plan = _plan(monkeypatch, consumed, fake, event_name="issue_comment", event=event)
     assert values["decision"] == "skip" and "backoff" in plan["decision_reason"]
+
+
+def test_sweep_dispatches_for_a_head_repository_that_differs_only_in_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pull = _pull(head={"sha": HEAD, "repo": {"full_name": REPO.lower()}})
+    fake = FakeGitHub(pull, SOUNDNESS, _due_state())
+    fake.install(monkeypatch)
+    _env(monkeypatch, tmp_path, "schedule", {}, "refs/heads/develop")
+    assert cli.main(["sweep", "--policy", str(POLICY_PATH)]) == 0
+    assert fake.dispatched == [7]
 
 
 @pytest.mark.parametrize(
