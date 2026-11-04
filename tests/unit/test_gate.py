@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import http.server
 import inspect
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -144,14 +149,121 @@ def test_gate_config_fails_when_a_manifest_is_missing(tmp_path: Path) -> None:
         gate.load_gate_config(POLICY_REL, tmp_path)
 
 
-def test_main_fails_closed_without_posting_when_the_policy_cannot_be_loaded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+class GateApi:
+    def __init__(self, head: str) -> None:
+        self.head = head
+        self.statuses: list[tuple[str, str]] = []
+
+    def latest(self, sha: str) -> str | None:
+        states = [state for posted, state in self.statuses if posted == sha]
+        return states[-1] if states else None
+
+
+@pytest.fixture
+def gate_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[GateApi]:
+    api = GateApi(HEAD)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length).decode())
+            if self.path == "/graphql":
+                reply: dict[str, Any] = {"data": {"repository": {"pullRequest": {"headRefOid": api.head}}}}
+            else:
+                api.statuses.append((self.path.rsplit("/", 1)[-1], body["state"]))
+                reply = {}
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(reply).encode())
+
+        def log_message(self, *args: Any) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    root = f"http://127.0.0.1:{server.server_address[1]}"
+    monkeypatch.setattr(gate, "API_ROOT", root)
+    monkeypatch.setattr(review_check, "API_ROOT", root)
+    try:
+        yield api
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _unloadable_root(tmp_path: Path, kind: str) -> Path:
+    github = tmp_path / ".github"
+    shutil.copytree(CONSUMER_ALPHA / ".github", github)
+    if kind == "policy":
+        (github / "oracle-reviewers.yml").write_text("promotion: [unterminated", encoding="utf-8")
+    elif kind == "missing-policy":
+        (github / "oracle-reviewers.yml").unlink()
+    elif kind in SHAPE_BREAKS:
+        with (github / "oracle-reviewers.yml").open("a", encoding="utf-8") as handle:
+            handle.write(SHAPE_BREAKS[kind])
+    else:
+        (github / "soundness-paths.txt").unlink()
+    return tmp_path
+
+
+SHAPE_BREAKS = {"classifier-shape": "\nclassifier: [1]\n", "max-attempts-shape": "\nmax_attempts: [1]\n"}
+UNLOADABLE = ["policy", "missing-policy", "soundness-manifest", *SHAPE_BREAKS]
+
+
+def _unloadable_argv(root: Path, *extra: str) -> list[str]:
+    return ["--repo", "o/r", "--pr", "7", "--policy", POLICY_REL, "--root", str(root), *extra]
+
+
+@pytest.mark.parametrize("kind", UNLOADABLE)
+def test_an_unloadable_config_posts_a_failure_over_an_earlier_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi, kind: str
 ) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
-    posts = _record_posts(monkeypatch)
-    argv = ["--repo", "o/r", "--pr", "7", "--policy", POLICY_REL, "--root", str(tmp_path)]
+    gate_api.statuses.append((HEAD, "success"))
+    assert gate.main(_unloadable_argv(_unloadable_root(tmp_path, kind))) == gate.ERROR
+    assert gate_api.statuses == [(HEAD, "success"), (HEAD, "failure")]
+    assert gate_api.latest(HEAD) == "failure"
+
+
+@pytest.mark.parametrize("kind", UNLOADABLE)
+def test_an_unloadable_config_with_the_owned_head_given_posts_a_failure_and_no_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi, kind: str
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    argv = _unloadable_argv(_unloadable_root(tmp_path, kind), "--head-sha", HEAD, "--pending-first")
     assert gate.main(argv) == gate.ERROR
-    assert posts == []
+    assert gate_api.statuses == [(HEAD, "failure")]
+
+
+@pytest.mark.parametrize("kind", UNLOADABLE)
+def test_an_unloadable_config_with_no_post_posts_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi, kind: str
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    assert gate.main(_unloadable_argv(_unloadable_root(tmp_path, kind), "--no-post")) == gate.ERROR
+    assert gate_api.statuses == []
+
+
+@pytest.mark.parametrize("kind", UNLOADABLE)
+def test_an_unloadable_config_with_a_head_the_pull_request_does_not_own_posts_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi, kind: str
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    argv = _unloadable_argv(_unloadable_root(tmp_path, kind), "--head-sha", "b" * 40)
+    assert gate.main(argv) == gate.ERROR
+    assert gate_api.statuses == []
+
+
+def test_an_unloadable_config_posts_nothing_when_the_head_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    gate_api.head = "not-a-sha"
+    assert gate.main(_unloadable_argv(_unloadable_root(tmp_path, "policy"))) == gate.ERROR
+    assert gate_api.statuses == []
 
 
 def test_exempt_only_change_passes() -> None:
@@ -224,40 +336,53 @@ def test_status_payload_clips_long_descriptions_to_the_api_limit() -> None:
     assert payload["target_url"] == "https://example.invalid/run"
 
 
-def test_post_status_writes_the_gate_context_to_the_head(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
+@pytest.fixture
+def status_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
+    received: list[dict[str, Any]] = []
 
-    class _Response:
-        def __enter__(self) -> _Response:
-            return self
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            received.append(
+                {
+                    "path": self.path,
+                    "auth": self.headers.get("Authorization"),
+                    "body": json.loads(self.rfile.read(length).decode()),
+                }
+            )
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
 
-        def __exit__(self, *exc: Any) -> None:
+        def log_message(self, *args: Any) -> None:
             return None
 
-        def read(self) -> bytes:
-            return b"{}"
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(gate, "API_ROOT", f"http://127.0.0.1:{server.server_address[1]}")
+    try:
+        yield received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
-    def fake_urlopen(request: Any) -> _Response:
-        seen["url"] = request.full_url
-        seen["method"] = request.get_method()
-        seen["body"] = json.loads(request.data.decode())
-        seen["auth"] = request.get_header("Authorization")
-        return _Response()
 
-    monkeypatch.setattr(gate.urllib.request, "urlopen", fake_urlopen)
+def test_post_status_writes_the_gate_context_to_the_head(status_api: list[dict[str, Any]]) -> None:
     gate.post_status("token", "o/r", HEAD, gate.PASS, "oracle-review: pass")
-    assert seen["url"] == f"https://api.github.com/repos/o/r/statuses/{HEAD}"
-    assert seen["method"] == "POST"
-    assert seen["auth"] == "Bearer token"
-    assert seen["body"]["context"] == "oracle-gate"
-    assert seen["body"]["state"] == "success"
+    assert [(item["path"], item["auth"]) for item in status_api] == [(f"/repos/o/r/statuses/{HEAD}", "Bearer token")]
+    assert status_api[0]["body"]["context"] == "oracle-gate"
+    assert status_api[0]["body"]["state"] == "success"
 
 
 def test_post_status_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    def failing_urlopen(request: Any) -> Any:
-        raise gate.urllib.error.URLError("down")
-
-    monkeypatch.setattr(gate.urllib.request, "urlopen", failing_urlopen)
+    unused = socket.socket()
+    unused.bind(("127.0.0.1", 0))
+    port = unused.getsockname()[1]
+    unused.close()
+    monkeypatch.setattr(gate, "API_ROOT", f"http://127.0.0.1:{port}")
     with pytest.raises(gate.CheckError):
         gate.post_status("token", "o/r", HEAD, gate.PASS, "msg")
 
