@@ -14,7 +14,7 @@ from typing import Any
 
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
-from .policy import Binding, Consumer, Policy, PolicyError, PromotionRules, load_policy, parse_policy
+from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
 from .review_check import (
     API_ROOT,
     ERROR,
@@ -143,7 +143,7 @@ def load_gate_config(policy_path: str, root: Path) -> GateConfig:
     try:
         policy = load_policy(root / policy_path)
         return GateConfig(policy, policy_path, load_matchers(policy.consumer, root))
-    except (OSError, PolicyError, ValueError, yaml.YAMLError) as exc:
+    except Exception as exc:
         raise CheckError(f"cannot load the review policy {policy_path}: {exc}") from exc
 
 

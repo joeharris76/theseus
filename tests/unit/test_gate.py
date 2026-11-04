@@ -201,12 +201,16 @@ def _unloadable_root(tmp_path: Path, kind: str) -> Path:
         (github / "oracle-reviewers.yml").write_text("promotion: [unterminated", encoding="utf-8")
     elif kind == "missing-policy":
         (github / "oracle-reviewers.yml").unlink()
+    elif kind in SHAPE_BREAKS:
+        with (github / "oracle-reviewers.yml").open("a", encoding="utf-8") as handle:
+            handle.write(SHAPE_BREAKS[kind])
     else:
         (github / "soundness-paths.txt").unlink()
     return tmp_path
 
 
-UNLOADABLE = ["policy", "missing-policy", "soundness-manifest"]
+SHAPE_BREAKS = {"classifier-shape": "\nclassifier: [1]\n", "max-attempts-shape": "\nmax_attempts: [1]\n"}
+UNLOADABLE = ["policy", "missing-policy", "soundness-manifest", *SHAPE_BREAKS]
 
 
 def _unloadable_argv(root: Path, *extra: str) -> list[str]:
