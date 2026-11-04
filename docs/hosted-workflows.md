@@ -114,7 +114,9 @@ Both workflow files declare `permissions: {}` at the top. No job requests `id-to
 
 ## Environment secrets
 
-The secret-bearing jobs (`review`, `sweep`, `gate`) name the caller's environment through the `environment` input. Secrets are read from that environment, not from repository secrets and not through `secrets: inherit`, so a caller needs no `secrets:` block and the callee needs no declared secrets. The environment must hold:
+The secret-bearing jobs (`review`, `sweep`, `gate`) name the caller's environment through the `environment` input and read their secrets from it. GitHub does not expose environment secrets to a reusable workflow just because its jobs declare `environment:`; they reach the callee's `secrets` context only when the caller passes `secrets: inherit` on the job that calls it (see [actions/runner#4453](https://github.com/actions/runner/issues/4453)). Every example caller therefore sets `secrets: inherit`, and a caller without it sees every secret as empty: the jobs report the missing App secrets as an error and fail instead of passing quietly.
+
+`secrets: inherit` also exposes the caller's repository and organization secrets to the callee's `secrets` context. That is acceptable only because the callee is pinned by full commit SHA to the commit recorded in the locked consumer lock, and it references only the secrets named below; a different pin is refused by the guard before any secret-bearing job starts. Keep repository-level and organization-level secrets out of any repository that calls these workflows beyond what the environment needs. The environment must hold:
 
 | Secret | Used by |
 |---|---|

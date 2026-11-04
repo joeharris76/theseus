@@ -438,7 +438,7 @@ def test_the_example_callers_keep_protocol_names_pin_the_callee_and_grant_the_pe
     assert caller["concurrency"]["group"].startswith(group)
     assert set(caller["on"]) >= {"schedule", "workflow_dispatch", "pull_request_target"}
     (job,) = caller["jobs"].values()
-    assert "secrets" not in job and "steps" not in job
+    assert job["secrets"] == "inherit" and "steps" not in job
     uses, _, ref = job["uses"].partition("@")
     assert uses == f"joeharris76/theseus/.github/workflows/{callee_name}"
     assert ref == job["with"]["theseus_ref"] == PLACEHOLDER

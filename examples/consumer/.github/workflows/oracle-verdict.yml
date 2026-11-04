@@ -43,3 +43,4 @@ jobs:
       environment: oracle
       theseus_ref: THESEUS_COMMIT_SHA
       gated_base: main
+    secrets: inherit
