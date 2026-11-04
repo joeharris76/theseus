@@ -294,7 +294,7 @@ def _owned_head(args: argparse.Namespace, token: str) -> str | None:
     return head_sha
 
 
-def _read_failed(args: argparse.Namespace, token: str, exc: PullReadFailed, known_head: str | None) -> int:
+def _read_failed(args: argparse.Namespace, token: str, exc: Exception, known_head: str | None) -> int:
     head_sha = known_head
     if head_sha is None and not args.no_post:
         head_sha = _owned_head(args, token)
@@ -319,8 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_gate_config(args.policy, Path(args.root))
     except CheckError as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
-        return ERROR
+        return _read_failed(args, token, exc, None)
     return post_gate(args, token, config)
 
 
