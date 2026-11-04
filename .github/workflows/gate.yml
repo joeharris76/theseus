@@ -40,6 +40,13 @@ on:
         required: false
         type: string
         default: oracle-review
+    secrets:
+      ORACLE_APP_ID:
+        description: Id of the GitHub App that posts the gate status
+        required: true
+      ORACLE_APP_PRIVATE_KEY:
+        description: Private key of that GitHub App
+        required: true
 
 permissions: {}
 
