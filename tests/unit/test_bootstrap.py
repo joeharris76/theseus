@@ -240,21 +240,21 @@ def test_modified_dependency_file_is_rebuilt(world, repo, cache):
 
 def test_interrupted_install_leaves_no_usable_partial_state(world, repo, cache, monkeypatch):
     lock = _lock(world, repo)
-    real = bootstrap.os.replace
+    real = bootstrap._publish
 
-    def interrupted(source, destination):
-        if ".build-" in str(source) and str(destination).endswith(
+    def interrupted(staging, root):
+        if ".build-" in str(staging) and str(root).endswith(
             bootstrap.install_key(lock, bootstrap.interpreter_identity(), bootstrap.platform_identity())
         ):
             raise KeyboardInterrupt
-        return real(source, destination)
+        return real(staging, root)
 
-    monkeypatch.setattr(bootstrap.os, "replace", interrupted)
+    monkeypatch.setattr(bootstrap, "_publish", interrupted)
     with pytest.raises(KeyboardInterrupt):
         bootstrap.install(lock, cache, world.net)
     installs = cache.resolve() / "installs"
     assert [path for path in installs.iterdir() if path.name.startswith(".build-")] == []
-    monkeypatch.setattr(bootstrap.os, "replace", real)
+    monkeypatch.setattr(bootstrap, "_publish", real)
     key = bootstrap.install_key(lock, bootstrap.interpreter_identity(), bootstrap.platform_identity())
     (installs / key).mkdir()
     (installs / key / "tree").mkdir()
@@ -666,34 +666,40 @@ class _FakeMsvcrt:
         self.calls.append((mode, nbytes))
 
 
-def test_key_lock_uses_msvcrt_on_windows_and_retries_while_contended(monkeypatch, cache):
+_REAL_LOCK_WINDOWS = bootstrap._lock_windows
+
+
+def _windows_lock(fake: _FakeMsvcrt, sleep=lambda _: None):
+    return lambda handle: _REAL_LOCK_WINDOWS(handle, fake, sleep)
+
+
+def _key_lock_with(cache, key, lock):
+    return bootstrap._file_lock(cache / "installs" / f".lock-{key}", lock)
+
+
+def _granted(handle):
+    return lambda: None
+
+
+def test_key_lock_uses_msvcrt_on_windows_and_retries_while_contended(cache):
     fake = _FakeMsvcrt(busy=3)
-    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", fake)
-    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
-    with bootstrap._key_lock(cache, "k"):
+    with _key_lock_with(cache, "k", _windows_lock(fake)):
         assert fake.calls == [(fake.LK_NBLCK, 1)]
     assert fake.calls == [(fake.LK_NBLCK, 1), (fake.LK_UNLCK, 1)]
     assert (cache / "installs" / ".lock-k").is_file()
 
 
-def test_key_lock_windows_gives_up_after_bounded_retries(monkeypatch, cache):
+def test_key_lock_windows_gives_up_after_bounded_retries(cache):
     fake = _FakeMsvcrt(busy=10**6)
-    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", fake)
-    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
-    with pytest.raises(OSError, match="locked"), bootstrap._key_lock(cache, "k"):
+    with pytest.raises(OSError, match="locked"), _key_lock_with(cache, "k", _windows_lock(fake)):
         pytest.fail("lock must not be granted")
     assert 10**6 - fake.busy == bootstrap.WINDOWS_LOCK_ATTEMPTS
     assert bootstrap.WINDOWS_LOCK_ATTEMPTS * bootstrap.WINDOWS_LOCK_INTERVAL <= 600
 
 
-def test_windows_lock_sleeps_between_nonblocking_attempts(monkeypatch, cache):
+def test_windows_lock_sleeps_between_nonblocking_attempts(cache):
     sleeps: list[float] = []
-    monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=2))
-    monkeypatch.setattr(bootstrap.time, "sleep", sleeps.append)
-    with bootstrap._key_lock(cache, "k"):
+    with _key_lock_with(cache, "k", _windows_lock(_FakeMsvcrt(busy=2), sleeps.append)):
         pass
     assert sleeps == [bootstrap.WINDOWS_LOCK_INTERVAL] * 2
 
@@ -701,8 +707,7 @@ def test_windows_lock_sleeps_between_nonblocking_attempts(monkeypatch, cache):
 def test_key_lock_windows_failure_becomes_bootstrap_error(world, repo, cache, monkeypatch):
     lock = _lock(world, repo)
     monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt(busy=10**6))
-    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+    monkeypatch.setattr(bootstrap, "_lock_windows", _windows_lock(_FakeMsvcrt(busy=10**6)))
     with pytest.raises(bootstrap.BootstrapError, match="cannot install into .*locked"):
         bootstrap.install(lock, cache, world.net)
 
@@ -711,17 +716,26 @@ def test_key_lock_windows_failure_becomes_bootstrap_error(world, repo, cache, mo
 def test_key_lock_uses_flock_on_posix(monkeypatch, cache):
     import fcntl
 
-    calls: list[int] = []
     monkeypatch.setattr(bootstrap, "_windows", lambda: False)
-    monkeypatch.setattr(fcntl, "flock", lambda handle, op: calls.append(op))
+    path = cache / "installs" / ".lock-k"
+
+    def contended() -> bool:
+        with open(path, "a+", encoding="utf-8") as other:
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(other, fcntl.LOCK_UN)
+            return False
+
     with bootstrap._key_lock(cache, "k"):
-        assert calls == [fcntl.LOCK_EX]
-    assert calls == [fcntl.LOCK_EX, fcntl.LOCK_UN]
+        assert contended()
+    assert not contended()
 
 
 def test_windows_install_adds_a_cmd_wrapper_and_returns_it(world, repo, cache, monkeypatch):
     monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    monkeypatch.setattr(bootstrap, "_lock_windows", _granted)
     lock = _lock(world, repo)
     installed = bootstrap.install(lock, cache, world.net)
     assert installed.executable.name == "fake.cmd"
@@ -814,7 +828,7 @@ def test_verify_turns_os_errors_into_a_refusal(world, repo, cache, monkeypatch):
 
 def test_windows_allows_spaces_in_the_interpreter_path(world, repo, cache, monkeypatch):
     monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    monkeypatch.setattr(bootstrap, "_lock_windows", _granted)
     identity = {**bootstrap.interpreter_identity(), "executable": "C:\\Program Files\\Python\\python.exe"}
     monkeypatch.setattr(bootstrap, "interpreter_identity", lambda: identity)
     installed = bootstrap.install(_lock(world, repo), cache, world.net)
@@ -824,7 +838,7 @@ def test_windows_allows_spaces_in_the_interpreter_path(world, repo, cache, monke
 @pytest.mark.parametrize("path", ["C:\\100%\\python.exe", "C:\\Jörg\\python.exe"])
 def test_windows_refuses_percent_and_non_ascii_interpreter_paths(world, repo, cache, monkeypatch, path):
     monkeypatch.setattr(bootstrap, "_windows", lambda: True)
-    monkeypatch.setitem(sys.modules, "msvcrt", _FakeMsvcrt())
+    monkeypatch.setattr(bootstrap, "_lock_windows", _granted)
     identity = {**bootstrap.interpreter_identity(), "executable": path}
     monkeypatch.setattr(bootstrap, "interpreter_identity", lambda: identity)
     with pytest.raises(bootstrap.BootstrapError, match="cmd wrapper cannot carry"):

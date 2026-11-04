@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -793,6 +793,7 @@ class Run:
     relayed: set[str] = field(default_factory=set)
     rebuttals: str = ""
     adjudicate: str = ""
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
 
     @property
     def layout(self) -> driver.Layout:
@@ -866,7 +867,7 @@ class Run:
             driver.LOCAL,
             phase,
         ]
-        result = subprocess.run(
+        result = self.runner(
             argv,
             cwd=self.trusted_root,
             env=selfexec.scrubbed_environment({**self._environ(phase, self.grants(phase)), **(extra or {})}),

@@ -824,31 +824,34 @@ def _lock_posix(handle: Any) -> Callable[[], None]:
     return lambda: fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _lock_windows(handle: Any) -> Callable[[], None]:
-    import msvcrt
+def _lock_windows(
+    handle: Any, locking_api: Any = None, sleep: Callable[[float], None] = time.sleep
+) -> Callable[[], None]:
+    if locking_api is None:
+        import msvcrt as locking_api
 
     handle.seek(0)
     for attempt in range(WINDOWS_LOCK_ATTEMPTS):
         try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            locking_api.locking(handle.fileno(), locking_api.LK_NBLCK, 1)
             break
         except OSError:
             if attempt == WINDOWS_LOCK_ATTEMPTS - 1:
                 raise
-            time.sleep(WINDOWS_LOCK_INTERVAL)
+            sleep(WINDOWS_LOCK_INTERVAL)
 
     def release() -> None:
         handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        locking_api.locking(handle.fileno(), locking_api.LK_UNLCK, 1)
 
     return release
 
 
 @contextlib.contextmanager
-def _file_lock(path: Path) -> Iterator[None]:
+def _file_lock(path: Path, lock: Callable[[Any], Callable[[], None]] | None = None) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a+", encoding="utf-8") as handle:
-        release = (_lock_windows if _windows() else _lock_posix)(handle)
+        release = (lock or (_lock_windows if _windows() else _lock_posix))(handle)
         try:
             yield
         finally:
@@ -861,6 +864,10 @@ def _key_lock(cache: Path, key: str) -> contextlib.AbstractContextManager[None]:
 
 def _entry_path(root: Path, name: str) -> Path:
     return root / "tree" / "bin" / (f"{name}.cmd" if _windows() else name)
+
+
+def _publish(staging: Path, root: Path) -> None:
+    os.replace(staging, root)
 
 
 def _settle(
@@ -886,7 +893,7 @@ def _settle(
         _require(content_matches(staging / "tree", expected), "the staged install does not match the verified bytes")
         if root.exists():
             shutil.rmtree(root)
-        os.replace(staging, root)
+        _publish(staging, root)
     finally:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
