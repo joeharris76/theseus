@@ -887,7 +887,7 @@ def test_a_phase_runs_the_installed_package_from_the_trusted_root_with_the_trust
         seen.update(argv=argv, cwd=kwargs["cwd"], env=kwargs["env"])
         return subprocess.CompletedProcess(argv, 0, "slot 1: started\noracle-local: hello\n", "")
 
-    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    run.runner = fake_run
     monkeypatch.setenv("PYTHONPATH", "/ambient")
 
     code, values = run.phase("prepare")
