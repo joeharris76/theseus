@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +84,7 @@ def test_no_callee_asks_for_an_oidc_token_inherits_secrets_or_runs_on_a_candidat
 def test_the_guard_job_has_no_permissions_environment_or_secrets(callee: tuple[str, dict[str, Any]]) -> None:
     name, document = callee
     guard = document["jobs"]["guard"]
-    assert guard["permissions"] == {}
+    assert guard["permissions"] == {"contents": "read"}
     assert "environment" not in guard
     assert "secrets." not in yaml.safe_dump(guard)
     assert all(body.get("needs") == "guard" for job, body in document["jobs"].items() if job != "guard")
@@ -91,6 +93,181 @@ def test_the_guard_job_has_no_permissions_environment_or_secrets(callee: tuple[s
     assert "refs/heads/$GATED_BASE" in command
     assert "$REPOSITORY/.github/workflows/$CALLER_WORKFLOW@" in command
     assert "github.workflow_ref" in guard["steps"][0]["env"]["WORKFLOW_REF"]
+
+
+LOCK_STEP = "Refuse a pin that differs from the trusted consumer lock"
+LOCK_CHECKOUT = "Check out the trusted copy of the consumer lock"
+LOCK_FILE = ".github/theseus-lock.json"
+PIN_A = "a" * 40
+PIN_B = "b" * 40
+TRUSTED_LOCK_REF = {"review.yml": "${{ github.sha }}", "gate.yml": "${{ inputs.gated_base }}"}
+
+
+def _git(root: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _commit_lock(root: Path, lock: dict[str, str] | None) -> str:
+    target = root / LOCK_FILE
+    if lock is None:
+        (root / "marker").write_text("no lock", encoding="utf-8")
+    else:
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(json.dumps(lock), encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "state")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _pin_lock(workflow: str, source: str | None = None) -> dict[str, str]:
+    return {"workflow_sha": workflow, "source_commit": source or workflow}
+
+
+def _lock_check(name: str, root: Path, pin: str) -> subprocess.CompletedProcess[str]:
+    document = load(WORKFLOWS / name)
+    run = step_named(document, "guard", LOCK_STEP)["run"]
+    return subprocess.run(
+        ["bash", "-c", run],
+        cwd=root.parent,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "THESEUS_REF": pin,
+            "HOME": str(root.parent),
+            "GITHUB_OUTPUT": str(root.parent / "github-output"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.fixture
+def trusted(tmp_path: Path) -> Path:
+    root = tmp_path / "trusted"
+    root.mkdir()
+    _git(root, "init", "-q")
+    return root
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_the_guard_runs_when_the_pin_equals_the_trusted_lock_workflow_sha_and_source_commit(
+    name: str, trusted: Path
+) -> None:
+    _commit_lock(trusted, _pin_lock(PIN_A))
+    done = _lock_check(name, trusted, PIN_A)
+    assert done.returncode == 0, done.stderr
+    written = (trusted.parent / "github-output").read_text(encoding="utf-8")
+    assert written == f"trusted_commit={_git(trusted, 'rev-parse', 'HEAD')}\n"
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_the_guard_refuses_a_pin_that_differs_from_the_lock_workflow_sha(name: str, trusted: Path) -> None:
+    _commit_lock(trusted, _pin_lock(PIN_A))
+    done = _lock_check(name, trusted, PIN_B)
+    assert done.returncode == 2
+    assert f"theseus_ref {PIN_B} is not the trusted lock workflow_sha {PIN_A}" in done.stderr
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_the_guard_refuses_a_lock_whose_source_commit_differs_from_the_pin(name: str, trusted: Path) -> None:
+    _commit_lock(trusted, _pin_lock(PIN_A, PIN_B))
+    done = _lock_check(name, trusted, PIN_A)
+    assert done.returncode == 2
+    assert f"source_commit {PIN_B}" in done.stderr
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_the_guard_refuses_when_the_trusted_commit_has_no_lock(name: str, trusted: Path) -> None:
+    _commit_lock(trusted, None)
+    done = _lock_check(name, trusted, PIN_A)
+    assert done.returncode == 2
+    assert "no .github/theseus-lock.json at trusted commit" in done.stderr
+
+
+@pytest.mark.parametrize("name", CALLEES)
+@pytest.mark.parametrize("raw", ["not json", "[]", '{"workflow_sha": "' + PIN_A + '"}'])
+def test_the_guard_refuses_an_unreadable_or_incomplete_lock(name: str, raw: str, trusted: Path) -> None:
+    (trusted / ".github").mkdir()
+    (trusted / LOCK_FILE).write_text(raw, encoding="utf-8")
+    _git(trusted, "add", "-A")
+    _git(trusted, "commit", "-q", "-m", "state")
+    done = _lock_check(name, trusted, PIN_A)
+    assert done.returncode == 2
+    assert "trusted consumer lock is unreadable" in done.stderr
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_a_pull_request_head_lock_with_a_matching_pin_does_not_satisfy_the_guard(name: str, trusted: Path) -> None:
+    base = _commit_lock(trusted, _pin_lock(PIN_A))
+    _commit_lock(trusted, _pin_lock(PIN_B))
+    _git(trusted, "checkout", "-q", base)
+    assert json.loads((trusted / LOCK_FILE).read_text(encoding="utf-8"))["workflow_sha"] == PIN_A
+    done = _lock_check(name, trusted, PIN_B)
+    assert done.returncode == 2
+    assert f"workflow_sha {PIN_A}" in done.stderr
+
+
+def test_the_guard_reads_the_lock_from_the_trusted_commit_object_not_the_working_tree(trusted: Path) -> None:
+    _commit_lock(trusted, _pin_lock(PIN_A))
+    (trusted / LOCK_FILE).write_text(json.dumps(_pin_lock(PIN_B)), encoding="utf-8")
+    assert _lock_check("review.yml", trusted, PIN_B).returncode == 2
+    assert _lock_check("review.yml", trusted, PIN_A).returncode == 0
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_the_lock_comes_from_the_trusted_ref_and_precedes_nothing_secret_bearing(name: str) -> None:
+    document = load(WORKFLOWS / name)
+    checkout = step_named(document, "guard", LOCK_CHECKOUT)
+    assert checkout["with"]["ref"] == TRUSTED_LOCK_REF[name]
+    assert "pull_request" not in checkout["with"]["ref"] and "head" not in checkout["with"]["ref"]
+    assert checkout["with"]["path"] == "trusted"
+    assert checkout["with"]["persist-credentials"] is False
+    names = [step["name"] for step in steps_of(document, "guard")]
+    assert names.index(LOCK_CHECKOUT) < names.index(LOCK_STEP)
+    assert names[0] == "Refuse a malformed pin, a foreign caller or a dispatch from another branch"
+    assert step_named(document, "guard", LOCK_STEP)["env"] == {"THESEUS_REF": "${{ inputs.theseus_ref }}"}
+    assert "inputs.theseus_ref" in yaml.safe_dump(step_named(document, "guard", LOCK_STEP))
+    for job, body in document["jobs"].items():
+        if job != "guard":
+            assert body["needs"] == "guard"
+
+
+@pytest.mark.parametrize("name", CALLEES)
+def test_a_refused_guard_writes_no_trusted_commit_output(name: str, trusted: Path) -> None:
+    _commit_lock(trusted, _pin_lock(PIN_A))
+    assert _lock_check(name, trusted, PIN_B).returncode == 2
+    assert not (trusted.parent / "github-output").exists()
+
+
+def test_the_lock_never_travels_through_the_environment() -> None:
+    for name in CALLEES:
+        step = step_named(load(WORKFLOWS / name), "guard", LOCK_STEP)
+        assert "LOCK_JSON" not in step["run"] and "export" not in step["run"]
+        assert set(step["env"]) == {"THESEUS_REF"}
+
+
+def test_both_guards_skip_pull_requests_for_other_bases() -> None:
+    expected = "github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base"
+    for name in CALLEES:
+        assert load(WORKFLOWS / name)["jobs"]["guard"]["if"] == expected
+
+
+def test_the_guard_exports_the_resolved_trusted_commit_and_the_gate_jobs_check_out_exactly_it() -> None:
+    gate = load(WORKFLOWS / "gate.yml")
+    assert gate["jobs"]["guard"]["outputs"] == {"trusted_commit": "${{ steps.lock.outputs.trusted_commit }}"}
+    assert step_named(gate, "guard", LOCK_STEP)["id"] == "lock"
+    for job in ("gate", "sweep"):
+        checkout = step_named(gate, job, "Check out the trusted gated-branch copy")
+        assert checkout["with"]["ref"] == "${{ needs.guard.outputs.trusted_commit }}"
+        assert "gated_base" not in checkout["with"]["ref"]
+    review = load(WORKFLOWS / "review.yml")
+    assert review["jobs"]["guard"]["outputs"] == {"trusted_commit": "${{ steps.lock.outputs.trusted_commit }}"}
 
 
 def test_secrets_are_read_only_in_jobs_bound_to_the_caller_environment(callee: tuple[str, dict[str, Any]]) -> None:
