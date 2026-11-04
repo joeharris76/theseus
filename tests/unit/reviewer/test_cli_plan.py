@@ -264,6 +264,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, event_name: str, event
     output = tmp_path / "out.txt"
     output.write_text("", encoding="utf-8")
     for key, value in {
+        "SURFACE_TOKEN": "surface-token",
         "GITHUB_REPOSITORY": REPO,
         "GITHUB_RUN_ID": "99",
         "GITHUB_EVENT_NAME": event_name,
@@ -802,14 +803,8 @@ def test_a_state_that_cannot_be_read_isolates_to_its_pull_request(
     assert fake.dispatched == [22]
 
 
-def _surfaced_sweep(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: FakeGitHub, token: str | None = "surface-token"
-) -> int:
+def _surfaced_sweep(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: FakeGitHub) -> int:
     fake.install(monkeypatch)
-    if token is None:
-        monkeypatch.delenv("SURFACE_TOKEN", raising=False)
-    else:
-        monkeypatch.setenv("SURFACE_TOKEN", token)
     _env(monkeypatch, tmp_path, "schedule", {}, "refs/heads/develop")
     return cli.main(["sweep", "--policy", str(POLICY_PATH)])
 
@@ -946,16 +941,19 @@ def test_a_recorded_verdict_is_never_overwritten_by_the_failure_status(
     assert fake.dispatched == [] and fake.posted == []
 
 
-def test_a_second_failure_without_an_app_token_is_reported_but_not_an_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_sweep_without_the_surface_token_refuses_before_dispatching(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake = _stateless_fake(
         _verdict_run(7, conclusion="failure", age=timedelta(hours=1)),
         _verdict_run(7, conclusion="failure", age=timedelta(hours=2)),
     )
-    assert _surfaced_sweep(monkeypatch, tmp_path, fake, token=None) == 0
+    fake.install(monkeypatch)
+    _env(monkeypatch, tmp_path, "schedule", {}, "refs/heads/develop")
+    monkeypatch.delenv("SURFACE_TOKEN")
+    with pytest.raises(SystemExit, match="SURFACE_TOKEN is not set"):
+        cli.main(["sweep", "--policy", str(POLICY_PATH)])
     assert fake.dispatched == [] and fake.posted == []
-    assert "not configured to surface it" in capsys.readouterr().out
 
 
 def test_a_failure_after_a_finished_run_is_a_first_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

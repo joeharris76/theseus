@@ -343,12 +343,16 @@ class Harness:
             args.append("--pending-first")
         return self.run("gate", args, env)
 
-    def sweep(self, *, surface: bool = True) -> Step:
+    def sweep(self) -> Step:
         temp = self.root / f"sweep-{len(list(self.root.glob('sweep-*')))}"
         temp.mkdir()
-        env = {**self.base_env(temp), "GH_TOKEN": JOB_TOKEN, "GITHUB_RUN_ID": "1", "GITHUB_EVENT_NAME": "schedule"}
-        if surface:
-            env["SURFACE_TOKEN"] = APP_TOKEN
+        env = {
+            **self.base_env(temp),
+            "GH_TOKEN": JOB_TOKEN,
+            "SURFACE_TOKEN": APP_TOKEN,
+            "GITHUB_RUN_ID": "1",
+            "GITHUB_EVENT_NAME": "schedule",
+        }
         step = self.cli("sweep", ["drive", "--policy", POLICY, "sweep"], env)
         summary = Path(env["GITHUB_STEP_SUMMARY"])
         step.outputs["summary"] = summary.read_text(encoding="utf-8") if summary.is_file() else ""

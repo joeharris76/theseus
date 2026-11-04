@@ -269,7 +269,6 @@ class LocalEnvironment:
     scan_excludes: tuple[Path, ...]
     proxy: str
     loopback_http: bool = True
-    has_app: bool = False
     rebuttals: str = ""
     adjudicate: str = ""
     scan_secrets: tuple[str, ...] = ("TYPESAFE_API_KEY", "TS_AUTHKEY", "OMP_GATEWAY_TOKEN", *HOST_TOKEN_FILES)

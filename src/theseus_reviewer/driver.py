@@ -103,7 +103,6 @@ class Environment(Protocol):
     policy: Path
     pr: str
     repo: str
-    has_app: bool
     scan_roots: tuple[Path, ...]
     scan_secrets: tuple[str, ...]
     redacted_secrets: tuple[str, ...]
@@ -125,7 +124,6 @@ class CiEnvironment:
     policy: Path
     pr: str
     repo: str
-    has_app: bool
     scan_roots: tuple[Path, ...]
     app_token: str
     job_token: str
@@ -154,7 +152,6 @@ class CiEnvironment:
             policy=policy,
             pr=environ.get("PR_NUMBER", ""),
             repo=environ.get("GITHUB_REPOSITORY", ""),
-            has_app=environ.get("HAS_APP") == "true",
             scan_roots=roots,
             app_token=environ.get("GH_TOKEN", ""),
             job_token=environ.get("JOB_TOKEN", ""),
@@ -182,10 +179,6 @@ class CiEnvironment:
 
 def _read(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _read_if(path: Path) -> Any:
-    return _read(path) if path.is_file() else None
 
 
 def _scan(env: Environment) -> int:
@@ -338,13 +331,6 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
     plan = _read(env.layout.plan_file)
     final = env.layout.final
     has_state = (final / STATE_FILE).is_file()
-    if not env.has_app:
-        state = (_read_if(final / "status.json") or {}).get("state", "")
-        print(
-            "::notice::oracle-verdict is not posted because the App secrets are not set; "
-            f"result {state} for {plan['head_sha']}"
-        )
-        return 0
     sink = _credentialed_sink(env)
     if sink is None:
         return 1

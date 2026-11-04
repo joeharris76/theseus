@@ -25,7 +25,6 @@ def _environment(tmp_path: Path, **overrides: str) -> CiEnvironment:
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_WORKSPACE": str(tmp_path),
         "GITHUB_REPOSITORY": REPO,
-        "HAS_APP": "true",
         "PR_NUMBER": "7",
         "GH_TOKEN": "app-token",
         "JOB_TOKEN": "job-token",
@@ -228,19 +227,18 @@ def test_prepare_classifies_only_a_plan_that_will_be_reviewed_and_survives_a_cla
     assert "classification failed: RuntimeError" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("scenario", ["posts", "skipped", "guard_failed", "no_app"])
+@pytest.mark.parametrize("scenario", ["posts", "skipped", "guard_failed"])
 def test_publish_posts_status_comment_review_then_the_gate_and_never_dispatches_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     outputs: Path,
     sink: RecordingSink,
-    capsys: pytest.CaptureFixture[str],
     scenario: str,
 ) -> None:
-    environment = _environment(tmp_path, HAS_APP="false" if scenario == "no_app" else "true")
+    environment = _environment(tmp_path)
     _plan(environment.layout)
     _final(environment.layout.final, comment=True, review=True)
-    decisions = {"posts": (0, False), "skipped": (0, True), "guard_failed": (2, False), "no_app": (0, False)}
+    decisions = {"posts": (0, False), "skipped": (0, True), "guard_failed": (2, False)}
     monkeypatch.setattr(cli, "guard_decision", lambda plan: decisions[scenario])
 
     code = driver.publish(environment, argparse.Namespace())
@@ -255,13 +253,9 @@ def test_publish_posts_status_comment_review_then_the_gate_and_never_dispatches_
     elif scenario == "skipped":
         assert code == 0 and sink.calls == []
         assert "skip=true" in written and "state_recorded" not in written
-    elif scenario == "guard_failed":
+    else:
         assert code == 2 and sink.calls == []
         assert "skip=" not in written and "state_recorded" not in written
-    else:
-        assert code == 0 and sink.calls == []
-        assert written == ""
-        assert "is not posted because the App secrets are not set; result success" in capsys.readouterr().out
 
 
 def test_publish_posts_only_the_status_and_gate_when_no_comment_or_review_was_written(

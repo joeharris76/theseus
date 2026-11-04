@@ -186,7 +186,6 @@ jobs:
 
       - name: Mint the App token for failure statuses
         id: app
-        if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.ORACLE_APP_ID }}
@@ -424,7 +423,7 @@ jobs:
 
       - name: Mint the App token
         id: app
-        if: steps.prepare.outputs.post == 'true' && env.HAS_APP == 'true'
+        if: steps.prepare.outputs.post == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.ORACLE_APP_ID }}
@@ -544,7 +543,7 @@ jobs:
           retention-days: 30
 
       - name: Dispatch the gate for the reviewed head
-        if: steps.prepare.outputs.post == 'true' && env.HAS_APP == 'true' && steps.publish.outputs.skip != 'true'
+        if: steps.prepare.outputs.post == 'true' && steps.publish.outputs.skip != 'true'
         timeout-minutes: 5
         working-directory: trusted
         env:

@@ -536,7 +536,7 @@ def test_the_local_environment_reads_its_adapter_values_and_posts_nothing(tmp_pa
 
     assert env.layout.attempts == tmp_path / "work" / "attempts"
     assert env.scan_roots == (Path("/a"), Path("/b")) and env.scan_excludes == (Path("/a/x"),)
-    assert env.pr == "" and env.has_app is False and env.loopback_http is True
+    assert env.pr == "" and env.loopback_http is True
     assert {"TYPESAFE_API_KEY", "TS_AUTHKEY", *HOST_TOKENS} <= set(env.redacted_secrets)
     with pytest.raises(local.driver.CredentialError, match="posts nothing"):
         env.sink()
