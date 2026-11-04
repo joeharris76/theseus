@@ -75,7 +75,8 @@ def test_no_callee_asks_for_an_oidc_token_inherits_secrets_or_runs_on_a_candidat
     name, document = callee
     text = (WORKFLOWS / name).read_text(encoding="utf-8")
     assert "id-token" not in text
-    assert "secrets: inherit" not in text
+    assert all(line.strip() != "secrets: inherit" for line in text.splitlines())
+    assert all("secrets" not in body for body in document["jobs"].values())
     assert "pull_request_target" not in yaml.safe_dump(document["on"])
     for body in document["jobs"].values():
         assert set(body.get("permissions", {})) <= {"actions", "contents", "pull-requests"}
@@ -353,7 +354,7 @@ def test_the_app_is_minted_only_after_the_reviewer_has_run_and_the_result_is_fin
     for name in names:
         step = step_named(review, "review", name)
         if "ORACLE_APP" in yaml.safe_dump(step):
-            assert name == "Mint the App token"
+            assert name in {"Mint the App token", APP_REFUSAL}
     assert mint > max(i for i, name in enumerate(names) if "attempt loop" in name or "Run the attempt" in name)
     assert mint > names.index("Decide the verdict and redact every secret value from the results")
     assert mint < names.index("Post the result")
@@ -543,3 +544,31 @@ def test_the_guard_refuses_a_malformed_tailscale_tag(tag: str) -> None:
     result = _guard_with_tag(tag)
     assert result.returncode == 2
     assert "tailscale_tag must match" in result.stderr
+
+
+APP_REFUSAL = "Refuse a caller that did not pass the App secrets"
+APP_JOBS = [("review.yml", "sweep"), ("review.yml", "review"), ("gate.yml", "gate"), ("gate.yml", "sweep")]
+
+
+@pytest.mark.parametrize(("name", "job"), APP_JOBS)
+def test_a_secret_bearing_job_fails_loudly_first_when_the_app_secrets_are_empty(name: str, job: str) -> None:
+    document = load(WORKFLOWS / name)
+    first = steps_of(document, job)[0]
+    assert first["name"] == APP_REFUSAL
+    assert first["if"] == "env.HAS_APP != 'true'"
+    result = subprocess.run(
+        ["bash", "-c", first["run"]],
+        env={"PATH": "/usr/bin:/bin", "ENVIRONMENT": "oracle"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert result.stdout.startswith("::error::")
+    assert "environment oracle" in result.stdout and "secrets: inherit" in result.stdout
+
+
+def test_the_gate_no_longer_has_a_quiet_path_without_the_app() -> None:
+    text = (WORKFLOWS / "gate.yml").read_text(encoding="utf-8")
+    assert "--no-post" not in text
+    assert "::notice::" not in text

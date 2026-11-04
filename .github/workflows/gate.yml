@@ -143,6 +143,14 @@ jobs:
       REPO: ${{ github.repository }}
       POLICY_PATH: ${{ inputs.policy_path }}
     steps:
+      - name: Refuse a caller that did not pass the App secrets
+        if: env.HAS_APP != 'true'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must pass secrets: inherit and the environment must hold both"
+          exit 1
+
       - name: Check out the trusted gated-branch copy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -220,20 +228,6 @@ jobs:
           if [ "$HEAD_CHANGED" = true ]; then HEAD_ARGS+=(--pending-first); fi
           theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}"
 
-      - name: Log the gate without posting when the App is not configured
-        if: steps.resolve.outputs.pr != '' && env.HAS_APP != 'true'
-        working-directory: trusted
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
-          KNOWN_HEAD: ${{ steps.resolve.outputs.head_sha }}
-        run: |
-          set -euo pipefail
-          HEAD_ARGS=()
-          if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
-          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --no-post "${HEAD_ARGS[@]}"
-
   bridge:
     name: bridge
     needs: guard
@@ -289,6 +283,14 @@ jobs:
       REPO: ${{ github.repository }}
       POLICY_PATH: ${{ inputs.policy_path }}
     steps:
+      - name: Refuse a caller that did not pass the App secrets
+        if: env.HAS_APP != 'true'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must pass secrets: inherit and the environment must hold both"
+          exit 1
+
       - name: Check out the trusted gated-branch copy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -337,11 +339,6 @@ jobs:
           GATED_BASE: ${{ inputs.gated_base }}
         run: |
           set -euo pipefail
-          POST=()
-          if [ "$HAS_APP" != true ]; then
-            POST=(--no-post)
-            echo "::notice::oracle-gate is not posted because the App secrets are not set"
-          fi
           PRS="$(gh api --paginate "repos/$REPO/pulls?base=$GATED_BASE&state=open&per_page=100" --jq '.[] | "\(.number) \(.head.sha)"')"
           FAILED=""
           RESULT="$RUNNER_TEMP/oracle-gate-result"
@@ -349,7 +346,7 @@ jobs:
             [ -n "$PR_NUMBER" ] || continue
             rm -f "$RESULT"
             STATUS=0
-            ORACLE_GATE_RESULT_FILE="$RESULT" theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --head-sha "$HEAD_SHA" "${POST[@]}" < /dev/null || STATUS=$?
+            ORACLE_GATE_RESULT_FILE="$RESULT" theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --head-sha "$HEAD_SHA" < /dev/null || STATUS=$?
             REPORTED="$(cat "$RESULT" 2>/dev/null || true)"
             if [ "$REPORTED" != "$STATUS" ] || { [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 3 ]; }; then
               echo "::warning::oracle-gate failed for #$PR_NUMBER (exit $STATUS, reported ${REPORTED:-none})"
