@@ -117,4 +117,4 @@ def test_a_gate_without_consumer_configuration_fails_instead_of_defaulting(harne
 
     assert result.code == 2
     assert "consumer section" in result.stderr
-    assert harness.github.gate_statuses(head) == []
+    assert [status["state"] for status in harness.github.gate_statuses(head)] == ["failure"]
