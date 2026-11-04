@@ -77,6 +77,14 @@ def test_a_lock_for_another_repository_is_refused(case, capsys):
     assert "does not match consumer policy" in capsys.readouterr().err
 
 
+def test_a_lock_for_the_policy_repository_in_another_case_passes(case, capsys):
+    args, lock, lock_path = case
+    lock["repository"] = REPOSITORY.upper()
+    lock["artifact"]["urls"] = [url.replace(REPOSITORY, REPOSITORY.upper()) for url in lock["artifact"]["urls"]]
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    assert promotion_check.command_check(args) == 0
+
+
 def test_a_policy_without_a_promotion_section_is_refused(case, tmp_path, capsys):
     args, _, _ = case
     data = yaml.safe_load(ALPHA_POLICY.read_text(encoding="utf-8"))

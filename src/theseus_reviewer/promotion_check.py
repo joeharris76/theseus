@@ -15,7 +15,7 @@ def command_check(args: argparse.Namespace) -> int:
         if not rules.repository:
             raise promotion.PromotionError("the consumer policy has no promotion section")
         lock = promotion.parse_lock(Path(args.lock).read_text(encoding="utf-8"))
-        if (lock.package, lock.repository) != (rules.package, rules.repository):
+        if (lock.package, lock.repository.casefold()) != (rules.package, rules.repository.casefold()):
             raise promotion.PromotionError("theseus lock package or repository does not match consumer policy")
         tree = promotion.load_tree_from_dir(Path(args.source))
         actual = promotion.tree_sha256(tree)

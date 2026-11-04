@@ -613,7 +613,7 @@ def default_source_loader(
             if (base / ".git").exists():
                 return _git_archive_tree(base, commit_sha, prefixes)
             raise PromotionError(f"promotion source {commit_sha} was not found under {SOURCES_ENV}")
-        if local_git_root is not None and local_consumer_repo == repo_slug:
+        if local_git_root is not None and (local_consumer_repo or "").casefold() == repo_slug.casefold():
             return _git_archive_tree(local_git_root, commit_sha, prefixes)
         try:
             archive = github._gh_bytes(f"repos/{repo_slug}/tarball/{commit_sha}")
@@ -635,7 +635,7 @@ def _check_https_host(url: str, allowed_hosts: frozenset[str], *, github_prefix:
     _require(host in allowed_hosts, f"artifact host {host!r} is not in allowed_artifact_hosts")
     if github_prefix is not None and host == "github.com":
         _require(
-            parsed.path.startswith(github_prefix),
+            parsed.path.casefold().startswith(github_prefix.casefold()),
             f"github.com artifact url must start with {github_prefix}",
         )
 
@@ -908,7 +908,7 @@ def _validate_bootstrap_against_policy(
             "first theseus promotion requires bootstrap_baseline_commit and bootstrap_path_map in the review policy"
         ]
     reasons: list[str] = []
-    if bootstrap.baseline_repo != repo:
+    if bootstrap.baseline_repo.casefold() != repo.casefold():
         reasons.append("bootstrap baseline_repo does not match this repository")
     if bootstrap.approved_head != head_lock.source_commit:
         reasons.append("bootstrap approved_head does not match the promoted source_commit")
@@ -946,7 +946,10 @@ def prepare_promotion(
         return None
     head_lock = parse_lock(head_lock_text)
     _require(head_lock.package == rules.package, "theseus lock package does not match consumer policy")
-    _require(head_lock.repository == rules.repository, "theseus lock repository does not match consumer policy")
+    _require(
+        head_lock.repository.casefold() == rules.repository.casefold(),
+        "theseus lock repository does not match consumer policy",
+    )
     validate_lock_policy(head_lock, rules)
     if base_lock_text is not None:
         base_lock = parse_lock(base_lock_text)
@@ -1185,7 +1188,7 @@ def _baseline_expectations(
     reasons: list[str] = []
     if head_lock.package != rules.package:
         reasons.append("theseus lock package does not match consumer policy")
-    if head_lock.repository != rules.repository:
+    if head_lock.repository.casefold() != rules.repository.casefold():
         reasons.append("theseus lock repository does not match consumer policy")
     if base_lock is not None:
         if head_lock.bootstrap is not None:

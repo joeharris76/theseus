@@ -104,6 +104,16 @@ def test_trusted_run_rejects_a_pull_request_target_run_from_another_workflow() -
     assert not github.trusted_run(_target_run(repository={"full_name": "someone/BenchBox"}), REPO, PR, BASE, _always)
 
 
+def test_trusted_run_accepts_a_repository_that_differs_only_in_case() -> None:
+    assert github.trusted_run(_run(repository={"full_name": REPO.lower()}), REPO, PR, BASE, _always)
+    assert github.trusted_run(_run(), REPO.upper(), PR, BASE, _always)
+
+
+@pytest.mark.parametrize("name", ["BenchBox-dev/Other", "Other-dev/BenchBox"])
+def test_trusted_run_rejects_a_repository_with_another_owner_or_name(name: str) -> None:
+    assert not github.trusted_run(_run(repository={"full_name": name}), REPO, PR, BASE, _always)
+
+
 @pytest.mark.parametrize(
     "run",
     [

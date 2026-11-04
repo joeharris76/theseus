@@ -314,7 +314,7 @@ def trusted_run(
     event = run.get("event")
     if not (
         str(run.get("path", "")).split("@", 1)[0] == workflow_path
-        and (run.get("repository") or {}).get("full_name") == repo
+        and str((run.get("repository") or {}).get("full_name") or "").casefold() == repo.casefold()
         and event in TRUSTED_EVENTS
         and re.fullmatch(r"[0-9a-f]{40}", head_sha) is not None
     ):

@@ -553,6 +553,53 @@ def test_bootstrap_preparation_requires_authenticated_approval_but_local_remains
     assert promotion.prepare_promotion(**inputs) is not None
 
 
+def test_bootstrap_preparation_compares_the_baseline_repository_without_case() -> None:
+    inputs = _preparation_inputs(bootstrap=True)
+    inputs["approval_comments"] = None
+    inputs["repo"] = "benchbox-dev/benchbox"
+    assert promotion.prepare_promotion(**inputs) is not None
+    for other in ("BenchBox-dev/Other", "Other-dev/BenchBox"):
+        inputs["repo"] = other
+        with pytest.raises(promotion.PromotionError, match="baseline_repo does not match"):
+            promotion.prepare_promotion(**inputs)
+
+
+def test_the_lock_repository_is_compared_with_the_policy_without_case() -> None:
+    inputs = _preparation_inputs()
+    inputs["rules"] = replace(inputs["rules"], repository="JoeHarris76/Theseus")
+    assert promotion.prepare_promotion(**inputs) is not None
+    for other in ("joeharris76/other", "other/theseus"):
+        inputs["rules"] = replace(inputs["rules"], repository=other)
+        with pytest.raises(promotion.PromotionError, match="repository does not match consumer policy"):
+            promotion.prepare_promotion(**inputs)
+
+
+def test_a_github_artifact_url_is_matched_to_the_lock_repository_without_case() -> None:
+    payload = _lock_payload()
+    payload["dependencies"] = []
+    rules = PromotionRules(repository="joeharris76/theseus")
+    payload["artifact"]["urls"][0] = payload["artifact"]["urls"][0].replace(
+        "joeharris76/theseus", "JoeHarris76/Theseus"
+    )
+    promotion.validate_lock_policy(promotion.parse_lock(json.dumps(payload)), rules)
+    payload["artifact"]["urls"][0] = payload["artifact"]["urls"][0].replace("JoeHarris76/Theseus", "other/theseus")
+    with pytest.raises(promotion.PromotionError, match="github.com artifact url must start with"):
+        promotion.validate_lock_policy(promotion.parse_lock(json.dumps(payload)), rules)
+
+
+def test_the_local_checkout_serves_its_own_repository_without_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(promotion.SOURCES_ENV, raising=False)
+    served: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        promotion, "_git_archive_tree", lambda root, commit, prefixes=None: served.append((root, commit)) or {}
+    )
+    loader = promotion.default_source_loader(local_git_root=tmp_path, local_consumer_repo="Joeharris76/Theseus")
+    assert loader("joeharris76/theseus", SHA_A, None) == {}
+    assert served == [(tmp_path, SHA_A)]
+
+
 def test_trusted_dependency_pin_still_requires_matching_downloaded_bytes() -> None:
     inputs = _preparation_inputs()
     original_loader = inputs["artifact_loader"]

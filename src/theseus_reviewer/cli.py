@@ -629,7 +629,7 @@ def _initial_scope_stop(
         plan["decision"] = SUCCESS
         plan["decision_reason"] = "only exempt paths changed"
         return None, True
-    if (pull["head"].get("repo") or {}).get("full_name") != repo:
+    if str((pull["head"].get("repo") or {}).get("full_name") or "").casefold() != repo.casefold():
         plan["decision"] = FORK
         plan["decision_reason"] = "fork: owner review"
         return None, True
@@ -1979,7 +1979,10 @@ def command_sweep(args: argparse.Namespace) -> int:
     for pull in github.get_paginated(f"repos/{repo}/pulls?state=open&base={policy.consumer.gated_base}&per_page=100"):
         if dispatched >= policy.retry.sweep_max_dispatches:
             break
-        if pull.get("draft") or (pull["head"].get("repo") or {}).get("full_name") != repo:
+        if (
+            pull.get("draft")
+            or str((pull["head"].get("repo") or {}).get("full_name") or "").casefold() != repo.casefold()
+        ):
             continue
         number = pull["number"]
         try:

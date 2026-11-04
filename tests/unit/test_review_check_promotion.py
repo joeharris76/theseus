@@ -526,6 +526,14 @@ def test_first_promotion_accepts_approved_bootstrap_baseline_and_forbids_later_b
     assert "only allowed on the first theseus promotion" in later_bypass_msg
 
 
+def test_the_fork_check_ignores_the_case_of_the_head_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, message = _evaluate_gate(monkeypatch, head_repo="benchbox-dev/benchbox", reviews=[_review(promo=_promo_dict())])
+    assert "fork pull requests cannot promote theseus" not in message
+    for other in ("BenchBox-dev/Other", "Other-dev/BenchBox"):
+        _, message = _evaluate_gate(monkeypatch, head_repo=other, reviews=[_review(promo=_promo_dict())])
+        assert "fork pull requests cannot promote theseus" in message
+
+
 def test_fork_promotion_and_vendored_matcher_drift_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     fork_status, fork_msg = _evaluate_gate(
         monkeypatch,
