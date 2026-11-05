@@ -333,6 +333,7 @@ class LocalEnvironment:
             return cli._finish_plan(out_dir, plan)
         matchers = load_matchers(policy.consumer, self.trusted)
         scope = soundness_scope(files, policy.classifier, matchers)
+        scope = cli._with_adoption_scope(scope, policy, files)
         plan["scope_paths"] = list(scope.paths)
         plan["gate_paths"] = list(scope.gate_paths)
         plan["scope_reasons"] = list(scope.reasons)

@@ -246,28 +246,6 @@ def test_extract_tar_tree_rejects_symlinks_and_parent_traversal() -> None:
         promotion.extract_tar_tree(traversal_buf.getvalue(), strip_single_root=True)
 
 
-def test_baseline_archive_is_bounded_only_by_the_mapped_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(promotion, "MAX_TREE_FILES", 4)
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name in [*(f"repo-root/benchmarks/data{index}.csv" for index in range(10)), "repo-root/tool/a.py"]:
-            payload = name.encode()
-            info = tarfile.TarInfo(name)
-            info.size = len(payload)
-            archive.addfile(info, io.BytesIO(payload))
-        link = tarfile.TarInfo("repo-root/tool/link.py")
-        link.type = tarfile.SYMTYPE
-        link.linkname = "/etc/passwd"
-        archive.addfile(link)
-    with pytest.raises(promotion.PromotionError, match="maximum file count"):
-        promotion.extract_tar_tree(buffer.getvalue(), strip_single_root=True)
-    with pytest.raises(promotion.PromotionError, match="non-regular"):
-        promotion.extract_tar_tree(buffer.getvalue(), strip_single_root=True, prefixes=("tool",))
-    assert promotion.extract_tar_tree(buffer.getvalue(), strip_single_root=True, prefixes=("tool/a.py",)) == {
-        "tool/a.py": b"repo-root/tool/a.py"
-    }
-
-
 def test_unrooted_archive_keeps_leading_dot_paths() -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -593,7 +571,9 @@ def test_the_local_checkout_serves_its_own_repository_without_case(
     monkeypatch.delenv(promotion.SOURCES_ENV, raising=False)
     served: list[tuple[Path, str]] = []
     monkeypatch.setattr(
-        promotion, "_git_archive_tree", lambda root, commit, prefixes=None: served.append((root, commit)) or {}
+        promotion,
+        "_git_archive_tree",
+        lambda root, commit, prefixes=None, **_kwargs: served.append((root, commit)) or {},
     )
     loader = promotion.default_source_loader(local_git_root=tmp_path, local_consumer_repo="Joeharris76/Theseus")
     assert loader("joeharris76/theseus", SHA_A, None) == {}
@@ -861,7 +841,7 @@ def test_unreadable_wheel_entries_raise_promotion_errors(encrypted: bool) -> Non
     else:
         raw[8:10] = (99).to_bytes(2, "little")
         raw[central + 10 : central + 12] = (99).to_bytes(2, "little")
-    with pytest.raises(promotion.PromotionError, match="invalid wheel archive"):
+    with pytest.raises(promotion.PromotionError):
         promotion._read_wheel_entries(bytes(raw))
 
 

@@ -37,6 +37,36 @@ def _gh_bytes(*args: str, accept: str | None = None) -> bytes:
     return result.stdout
 
 
+def _gh_bytes_capped(*args: str, limit: int) -> bytes:
+    argv = ["gh", "api", *args]
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=errors)
+        assert process.stdout is not None
+        chunks: list[bytes] = []
+        received = 0
+        try:
+            while True:
+                chunk = process.stdout.read(min(1 << 16, limit + 1 - received))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                received += len(chunk)
+                if received > limit:
+                    raise GitHubError(f"gh api {' '.join(args)} response exceeds {limit} bytes")
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+            raise
+        finally:
+            process.stdout.close()
+            returncode = process.wait()
+        if returncode != 0:
+            errors.seek(0)
+            detail = errors.read(500).decode("utf-8", errors="replace").strip()
+            raise GitHubError(f"gh api {' '.join(args)} failed: {detail}")
+    return b"".join(chunks)
+
+
 def _gh(*args: str, accept: str | None = None) -> str:
     return _gh_bytes(*args, accept=accept).decode("utf-8", errors="replace")
 

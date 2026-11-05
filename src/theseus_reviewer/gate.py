@@ -24,6 +24,7 @@ from .review_check import (
     annotate_receipt,
     changed_paths,
     decide,
+    fetch_adoption_refusals,
     fetch_base_change_date,
     fetch_bump_refusals,
     fetch_comments,
@@ -220,6 +221,18 @@ def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, i
             rules=promo_policy,
             comments=comments,
         )
+        adopting, adoption = fetch_adoption_refusals(
+            token,
+            repo,
+            pull,
+            files,
+            len(items),
+            reviews,
+            base_date,
+            statuses=statuses,
+            oracle_login=config.binding.bot_login,
+            rules=config.policy.sqlglot_adoption,
+        )
         status, message = decide(
             head_sha,
             files,
@@ -231,7 +244,8 @@ def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, i
             binding=config.binding,
             bump_refusals=bump,
             promotion_refusals=promo,
-            is_promotion=is_promotion,
+            adoption_refusals=adoption,
+            is_promotion=is_promotion or adopting,
         )
     except Exception as exc:
         raise EvaluationFailed(head_sha, exc) from exc

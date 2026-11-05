@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from .matchers import Matchers
-from .policy import Binding, PromotionRules
+from .policy import Binding, PromotionRules, SqlglotAdoptionRules
 
 ORACLE_CONTEXT = "oracle-verdict"
 _ORACLE_VERDICT = re.compile(rf"### {ORACLE_CONTEXT}: (?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`")
@@ -240,6 +240,7 @@ def decide(
     reviews: Iterable[dict[str, Any]] = (),
     bump_refusals: Iterable[str] = (),
     promotion_refusals: Iterable[str] = (),
+    adoption_refusals: Iterable[str] = (),
     is_promotion: bool = False,
 ) -> tuple[int, str]:
     refused = list(bump_refusals)
@@ -248,6 +249,9 @@ def decide(
     promo_refused = list(promotion_refusals)
     if promo_refused:
         return WAITING, f"oracle-review: theseus promotion refused: {'; '.join(promo_refused)}"
+    adoption_refused = list(adoption_refusals)
+    if adoption_refused:
+        return WAITING, f"oracle-review: sqlglot adoption refused: {'; '.join(adoption_refused)}"
     if not is_promotion and not paths(files):
         return PASS, "oracle-review: only exempt paths changed"
     base_time = _parse_time(base_date) if base_date else None
@@ -490,6 +494,42 @@ def fetch_optional_bytes(token: str, repo: str, path: str, ref: str) -> bytes | 
         raise CheckError(f"GitHub request to {url} failed: {exc}") from exc
 
 
+def _fetch_blob(token: str, repo: str, sha: str) -> bytes:
+    url = f"{API_ROOT}/repos/{repo}/git/blobs/{sha}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.raw",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "theseus-review-check",
+    }
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise CheckError(f"GitHub returned HTTP {exc.code} for {url}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise CheckError(f"GitHub request to {url} failed: {exc}") from exc
+
+
+def _tree_reader(token: str, repo: str) -> Any:
+    from . import git_blobs
+
+    return git_blobs.TreeReader(
+        repo,
+        lambda path: _request(token, f"{API_ROOT}/{path}"),
+        lambda sha: _fetch_blob(token, repo, sha),
+    )
+
+
+def _decode_pin(raw: bytes | None, path: str) -> str | None:
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CheckError(f"{path} is not UTF-8: {exc}") from exc
+
+
 def fetch_optional_text(token: str, repo: str, path: str, ref: str) -> str | None:
     raw = fetch_optional_bytes(token, repo, path, ref)
     if raw is None:
@@ -606,6 +646,61 @@ def fetch_promotion_refusals(
         is_ancestor=_token_ancestor_check(token, repo),
         base_sha=pull["base"].get("sha"),
         matcher_sha256_at_head=matcher_sha256,
+        expected_run_uuid=expected_uuid,
+    )
+
+
+def fetch_adoption_refusals(
+    token: str,
+    repo: str,
+    pull: dict[str, Any],
+    files: list[str],
+    listed_files: int,
+    reviews: list[dict[str, Any]],
+    base_date: str | None = None,
+    *,
+    statuses: Iterable[dict[str, Any]] = (),
+    oracle_login: str,
+    rules: SqlglotAdoptionRules | None,
+) -> tuple[bool, list[str]]:
+    from . import promotion, sqlglot_adoption
+
+    if rules is None:
+        return False, []
+    complete = listed_files >= pull["changed_files"]
+    if complete and not sqlglot_adoption.touched(rules, files):
+        return False, []
+    head_repo = ((pull["head"].get("repo") or {}).get("full_name")) or repo
+    if head_repo.casefold() != repo.casefold() and sqlglot_adoption.touched(rules, files):
+        return True, ["fork pull requests cannot adopt a sqlglot runtime; open the adoption from a repository branch"]
+    base_ref = pull["base"].get("sha") or pull["base"]["ref"]
+    head_sha = pull["head"]["sha"]
+    try:
+        base_text = _decode_pin(_tree_reader(token, repo)(base_ref, rules.pin_path), rules.pin_path)
+        head_reader = _tree_reader(token, head_repo)
+        head_text = _decode_pin(head_reader(head_sha, rules.pin_path), rules.pin_path)
+        head_wheel: bytes | None = None
+        if head_text is not None:
+            archive = sqlglot_adoption.archive_path(rules, sqlglot_adoption.parse_pin(head_text, rules))
+            head_wheel = head_reader(head_sha, archive)
+    except promotion.PromotionError as exc:
+        return True, [str(exc)]
+    base_time = _parse_time(base_date) if base_date else None
+    verdict_list = _verdict_statuses(statuses, base_time, oracle_login)
+    expected_uuid = (
+        _status_run_uuid(verdict_list[-1]) if verdict_list and verdict_list[-1].get("state") == "success" else None
+    )
+    return sqlglot_adoption.refusals(
+        files if complete else [*files, rules.pin_path],
+        base_text,
+        head_text,
+        head_wheel,
+        reviews,
+        head_sha,
+        rules=rules,
+        complete=complete,
+        base_time=base_time,
+        oracle_login=oracle_login,
         expected_run_uuid=expected_uuid,
     )
 

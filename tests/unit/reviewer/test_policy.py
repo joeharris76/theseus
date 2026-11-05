@@ -365,3 +365,55 @@ def test_a_consumer_fixture_prefix_is_normalised_to_one_trailing_slash() -> None
         raw = _raw()
         raw["consumer"]["omp_fixture_prefix"] = prefix
         assert parse_policy(raw).consumer.omp_fixture_prefix == "fixtures/omp/"
+
+
+SQLGLOT_ADOPTION = {
+    "pin_path": "benchbox/_vendor/sqlglot.json",
+    "fork_repository": "BenchBox-dev/benchbox-sqlglot",
+    "upstream_repository": "tobymao/sqlglot",
+    "distribution": "benchbox-sqlglot",
+    "namespace": "benchbox._vendor.sqlglot",
+}
+
+
+def test_a_policy_without_a_sqlglot_adoption_section_has_no_adoption_rules() -> None:
+    assert parse_policy(_raw()).sqlglot_adoption is None
+
+
+def test_a_sqlglot_adoption_section_parses_and_names_its_runtime_directory() -> None:
+    raw = _raw()
+    raw["sqlglot_adoption"] = dict(SQLGLOT_ADOPTION)
+    rules = parse_policy(raw).sqlglot_adoption
+    assert rules is not None
+    assert rules.runtime_dir == "benchbox/_vendor"
+    assert rules.fork_repository == "BenchBox-dev/benchbox-sqlglot"
+    assert rules.namespace == "benchbox._vendor.sqlglot"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda section: section.pop("namespace"), "needs exactly the keys"),
+        (lambda section: section.update(unknown="x"), "needs exactly the keys"),
+        (lambda section: section.update(pin_path="../sqlglot.json"), "pin_path must be a repository-relative path"),
+        (lambda section: section.update(pin_path="sqlglot.json"), "pin_path must be a .json file inside"),
+        (lambda section: section.update(pin_path="vendor/sqlglot.txt"), "pin_path must be a .json file inside"),
+        (lambda section: section.update(fork_repository="no-slash"), "fork_repository must be owner/name"),
+        (lambda section: section.update(upstream_repository=7), "upstream_repository must be owner/name"),
+        (lambda section: section.update(distribution="Bad_Name"), "distribution must be a normalized"),
+        (lambda section: section.update(namespace="single"), "namespace must be a dotted"),
+    ],
+)
+def test_an_invalid_sqlglot_adoption_section_is_rejected(mutate: Callable[[dict[str, Any]], Any], message: str) -> None:
+    raw = _raw()
+    raw["sqlglot_adoption"] = dict(SQLGLOT_ADOPTION)
+    mutate(raw["sqlglot_adoption"])
+    with pytest.raises(PolicyError, match=message):
+        parse_policy(raw)
+
+
+def test_a_non_mapping_sqlglot_adoption_section_is_rejected() -> None:
+    raw = _raw()
+    raw["sqlglot_adoption"] = ["pin"]
+    with pytest.raises(PolicyError, match="needs exactly the keys"):
+        parse_policy(raw)

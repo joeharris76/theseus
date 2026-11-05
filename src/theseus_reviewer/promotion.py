@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tarfile
 import urllib.error
@@ -39,8 +40,11 @@ BOOTSTRAP_ARTIFACT_SHA256 = "0" * 64
 RECORD_VERSION = 1
 MAX_TREE_FILES = 5000
 MAX_TREE_BYTES = 64 << 20
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_ARCHIVE_BYTES = 256 << 20
 DOWNLOAD_TIMEOUT_SECONDS = 30
 BOOTSTRAP_APPROVAL_PREFIX = "Theseus bootstrap approval:"
+SYMLINK_MARKER = b"symlink -> "
 FORBIDDEN_WHEEL_SUFFIXES = (".pth", ".so", ".pyd", ".dll", ".dylib")
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -211,6 +215,7 @@ class PromotionBundle:
     diff_text: str
     old_tree: Mapping[str, bytes]
     new_tree: Mapping[str, bytes]
+    kind: str = "theseus"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -512,26 +517,40 @@ def _within(path: str, prefixes: tuple[str, ...] | None) -> bool:
 
 
 def extract_tar_tree(
-    archive_bytes: bytes, *, strip_single_root: bool = False, prefixes: tuple[str, ...] | None = None
+    archive_bytes: bytes,
+    *,
+    strip_single_root: bool = False,
+    prefixes: tuple[str, ...] | None = None,
+    symlinks: bool = False,
 ) -> dict[str, bytes]:
     raw_entries: list[tuple[str, bytes]] = []
     total_bytes = 0
+    archive_bytes_total = 0
     try:
         with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as bundle:
-            for member in bundle.getmembers():
+            member_count = 0
+            for member in bundle:
+                member_count += 1
+                _require(member_count <= MAX_ARCHIVE_MEMBERS, "upstream archive exceeds maximum file count")
+                _require(member.size >= 0, f"upstream archive entry {member.name!r} has negative size")
+                archive_bytes_total += member.size
+                _require(archive_bytes_total <= MAX_ARCHIVE_BYTES, "upstream archive exceeds maximum uncompressed size")
                 if member.isdir() or member.name == "pax_global_header":
                     continue
                 cleaned = member.name.removeprefix("./")
                 relative = cleaned.split("/", 1)[1] if strip_single_root and "/" in cleaned else cleaned
                 if not _within(relative, prefixes):
                     continue
-                _require(member.isfile(), f"upstream archive contains non-regular entry {member.name!r}")
-                _require(member.size >= 0, f"upstream archive entry {member.name!r} has negative size")
+                linked = symlinks and member.issym()
+                _require(member.isfile() or linked, f"upstream archive contains non-regular entry {member.name!r}")
                 _require(len(raw_entries) < MAX_TREE_FILES, "upstream archive exceeds maximum file count")
                 _require(valid_path(cleaned), f"upstream archive entry {member.name!r} has invalid path")
-                extracted = bundle.extractfile(member)
-                _require(extracted is not None, f"cannot read upstream archive entry {member.name!r}")
-                data = extracted.read(MAX_TREE_BYTES - total_bytes + 1)
+                if linked:
+                    data = SYMLINK_MARKER + member.linkname.encode("utf-8", errors="surrogateescape") + b"\n"
+                else:
+                    extracted = bundle.extractfile(member)
+                    _require(extracted is not None, f"cannot read upstream archive entry {member.name!r}")
+                    data = extracted.read(MAX_TREE_BYTES - total_bytes + 1)
                 total_bytes += len(data)
                 _require(total_bytes <= MAX_TREE_BYTES, "upstream archive exceeds maximum uncompressed size")
                 raw_entries.append((cleaned, data))
@@ -556,32 +575,46 @@ def extract_tar_tree(
     return files
 
 
-def load_tree_from_dir(directory: Path, prefixes: tuple[str, ...] | None = None) -> dict[str, bytes]:
+def load_tree_from_dir(
+    directory: Path, prefixes: tuple[str, ...] | None = None, *, symlinks: bool = False
+) -> dict[str, bytes]:
     _require(directory.is_dir() and not directory.is_symlink(), f"source directory {directory} is not a directory")
     root = directory.resolve()
     files: dict[str, bytes] = {}
     total_bytes = 0
+
+    def record(target: Path, data: bytes) -> None:
+        nonlocal total_bytes
+        rel = target.relative_to(root).as_posix()
+        _require(valid_path(rel), f"invalid relative path {rel!r}")
+        if not _within(rel, prefixes):
+            return
+        total_bytes += len(data)
+        _require(total_bytes <= MAX_TREE_BYTES, "source directory exceeds maximum size")
+        _require(len(files) < MAX_TREE_FILES, "source directory exceeds maximum file count")
+        files[rel] = data
+
     for current, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = sorted(name for name in dirnames if name != ".git")
         current_path = Path(current)
-        for dirname in dirnames:
-            _require(not (current_path / dirname).is_symlink(), f"symlink directory {dirname!r} is not allowed")
+        linked_dirs = [name for name in dirnames if (current_path / name).is_symlink()]
+        for dirname in linked_dirs:
+            _require(symlinks, f"symlink directory {dirname!r} is not allowed")
+            record(current_path / dirname, SYMLINK_MARKER + os.readlink(current_path / dirname).encode() + b"\n")
+        dirnames[:] = [name for name in dirnames if name not in linked_dirs]
         for filename in sorted(filenames):
             target = current_path / filename
-            _require(not target.is_symlink() and target.is_file(), f"non-regular file {filename!r} is not allowed")
-            rel = target.relative_to(root).as_posix()
-            _require(valid_path(rel), f"invalid relative path {rel!r}")
-            if not _within(rel, prefixes):
+            if symlinks and target.is_symlink():
+                record(target, SYMLINK_MARKER + os.readlink(target).encode() + b"\n")
                 continue
-            data = target.read_bytes()
-            total_bytes += len(data)
-            _require(total_bytes <= MAX_TREE_BYTES, "source directory exceeds maximum size")
-            _require(len(files) < MAX_TREE_FILES, "source directory exceeds maximum file count")
-            files[rel] = data
+            _require(not target.is_symlink() and target.is_file(), f"non-regular file {filename!r} is not allowed")
+            record(target, target.read_bytes())
     return files
 
 
-def _git_archive_tree(git_root: Path, commit_sha: str, prefixes: tuple[str, ...] | None = None) -> dict[str, bytes]:
+def _git_archive_tree(
+    git_root: Path, commit_sha: str, prefixes: tuple[str, ...] | None = None, *, symlinks: bool = False
+) -> dict[str, bytes]:
     result = subprocess.run(
         ["git", "-C", str(git_root), "archive", "--format=tar", commit_sha],
         capture_output=True,
@@ -590,11 +623,11 @@ def _git_archive_tree(git_root: Path, commit_sha: str, prefixes: tuple[str, ...]
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
         raise PromotionError(f"git archive {commit_sha[:12]} failed: {detail}")
-    return extract_tar_tree(result.stdout, strip_single_root=False, prefixes=prefixes)
+    return extract_tar_tree(result.stdout, strip_single_root=False, prefixes=prefixes, symlinks=symlinks)
 
 
 def default_source_loader(
-    *, local_git_root: Path | None = None, local_consumer_repo: str | None = None
+    *, local_git_root: Path | None = None, local_consumer_repo: str | None = None, symlinks: bool = False
 ) -> SourceLoader:
     configured = os.environ.get(SOURCES_ENV, "").strip()
 
@@ -605,21 +638,25 @@ def default_source_loader(
             tar_file = base / f"{commit_sha}.tar"
             tgz_file = base / f"{commit_sha}.tar.gz"
             if folder.is_dir():
-                return load_tree_from_dir(folder, prefixes)
+                return load_tree_from_dir(folder, prefixes, symlinks=symlinks)
             if tar_file.is_file():
-                return extract_tar_tree(tar_file.read_bytes(), strip_single_root=False, prefixes=prefixes)
+                return extract_tar_tree(
+                    tar_file.read_bytes(), strip_single_root=False, prefixes=prefixes, symlinks=symlinks
+                )
             if tgz_file.is_file():
-                return extract_tar_tree(tgz_file.read_bytes(), strip_single_root=True, prefixes=prefixes)
+                return extract_tar_tree(
+                    tgz_file.read_bytes(), strip_single_root=True, prefixes=prefixes, symlinks=symlinks
+                )
             if (base / ".git").exists():
-                return _git_archive_tree(base, commit_sha, prefixes)
+                return _git_archive_tree(base, commit_sha, prefixes, symlinks=symlinks)
             raise PromotionError(f"promotion source {commit_sha} was not found under {SOURCES_ENV}")
         if local_git_root is not None and (local_consumer_repo or "").casefold() == repo_slug.casefold():
-            return _git_archive_tree(local_git_root, commit_sha, prefixes)
+            return _git_archive_tree(local_git_root, commit_sha, prefixes, symlinks=symlinks)
         try:
-            archive = github._gh_bytes(f"repos/{repo_slug}/tarball/{commit_sha}")
+            archive = github._gh_bytes_capped(f"repos/{repo_slug}/tarball/{commit_sha}", limit=MAX_TREE_BYTES)
         except github.GitHubError as exc:
             raise PromotionError(f"cannot fetch {repo_slug}@{commit_sha[:12]}: {exc}") from exc
-        return extract_tar_tree(archive, strip_single_root=True, prefixes=prefixes)
+        return extract_tar_tree(archive, strip_single_root=True, prefixes=prefixes, symlinks=symlinks)
 
     return load
 
@@ -717,13 +754,78 @@ def default_artifact_loader() -> ArtifactLoader:
     return fetch
 
 
+def _read_zip_entry_bounded(zf: zipfile.ZipFile, info: zipfile.ZipInfo, wheel_bytes: bytes, budget: int) -> bytes:
+    name = info.filename
+    _require(
+        info.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED),
+        f"wheel entry {name!r} uses unsupported compression",
+    )
+    _require(not info.flag_bits & 0x1 and not info.flag_bits & 0x40, f"wheel entry {name!r} is encrypted")
+    _require(info.file_size <= budget, "wheel exceeds maximum uncompressed size")
+    with zf.open(info, "r") as handle:
+        data = handle.read(budget + 1)
+    _require(len(data) <= budget, "wheel exceeds maximum uncompressed size")
+    _require(len(data) == info.file_size, f"wheel entry {name!r} is shorter than its declared size")
+    header = wheel_bytes[info.header_offset : info.header_offset + 30]
+    _require(len(header) == 30, f"wheel entry {name!r} has a truncated local header")
+    signature, _, _, _, _, _, _, _, _, name_length, extra_length = struct.unpack("<4s5H3L2H", header)
+    _require(signature == b"PK\x03\x04", f"wheel entry {name!r} has an invalid local header")
+    start = info.header_offset + 30 + name_length + extra_length
+    raw = wheel_bytes[start : start + info.compress_size]
+    _require(len(raw) == info.compress_size, f"wheel entry {name!r} payload is truncated")
+    if info.compress_type == zipfile.ZIP_STORED:
+        _require(info.compress_size == info.file_size, f"wheel entry {name!r} stored size differs from declared size")
+        _require(raw == data, f"wheel entry {name!r} raw payload differs from verified data")
+        return data
+    inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    try:
+        inflated = inflater.decompress(raw, len(data) + 1)
+    except zlib.error as exc:
+        raise PromotionError(f"wheel entry {name!r} has an invalid deflate stream: {exc}") from exc
+    _require(inflated == data, f"wheel entry {name!r} inflated payload differs from verified data")
+    _require(
+        inflater.eof and not inflater.unused_data and not inflater.unconsumed_tail,
+        f"wheel entry {name!r} has trailing or incomplete deflate data",
+    )
+    return data
+
+
 def _read_wheel_entries(wheel_bytes: bytes) -> dict[str, bytes]:
     entries: dict[str, bytes] = {}
     total_bytes = 0
+    _require(len(wheel_bytes) >= 22, "wheel has no complete end-of-directory record")
+    end_position = len(wheel_bytes) - 22
+    signature, disk, directory_disk, disk_count, count, directory_size, directory_offset, comment_size = struct.unpack(
+        "<4s4H2LH", wheel_bytes[-22:]
+    )
+    _require(signature == b"PK\x05\x06" and comment_size == 0, "wheel comments and trailing data are refused")
+    _require(disk == directory_disk == 0 and disk_count == count, "split wheel archives are refused")
+    _require(
+        count != 0xFFFF and directory_size != 0xFFFFFFFF and directory_offset != 0xFFFFFFFF,
+        "ZIP64 wheel directories are refused",
+    )
+    _require(
+        not (end_position >= 76 and wheel_bytes[end_position - 76 : end_position - 72] == b"PK\x06\x06")
+        and not (end_position >= 20 and wheel_bytes[end_position - 20 : end_position - 16] == b"PK\x06\x07"),
+        "ambiguous ZIP64 wheel directory is refused",
+    )
+    _require(count <= MAX_TREE_FILES, "wheel exceeds maximum file count")
+    _require(directory_offset + directory_size == end_position, "wheel directory boundaries are inconsistent")
     try:
         with zipfile.ZipFile(io.BytesIO(wheel_bytes), mode="r") as zf:
             infos = zf.infolist()
+            _require(len(infos) == count and zf.start_dir == directory_offset, "wheel directory layout is inconsistent")
+            listed_size = sum(
+                46
+                + len(info.orig_filename.encode("utf-8" if info.flag_bits & 0x800 else "cp437"))
+                + len(info.extra)
+                + len(info.comment)
+                for info in infos
+            )
+            _require(listed_size == directory_size, "wheel directory contains unlisted bytes")
             for info in infos:
+                _require(not info.comment, "wheel entry comments are refused")
+                _require(info.orig_filename == info.filename, "wheel entry name is not canonical")
                 if info.is_dir():
                     continue
                 mode_type = (info.external_attr >> 16) & 0o170000
@@ -732,12 +834,11 @@ def _read_wheel_entries(wheel_bytes: bytes) -> dict[str, bytes]:
                 _require(valid_path(name), f"wheel contains invalid path {name!r}")
                 _require(name not in entries, f"wheel contains duplicate entry {name!r}")
                 _require(len(entries) < MAX_TREE_FILES, "wheel exceeds maximum file count")
-                with zf.open(info, "r") as handle:
-                    data = handle.read(MAX_TREE_BYTES - total_bytes + 1)
+                data = _read_zip_entry_bounded(zf, info, wheel_bytes, MAX_TREE_BYTES - total_bytes)
                 total_bytes += len(data)
                 _require(total_bytes <= MAX_TREE_BYTES, "wheel exceeds maximum uncompressed size")
                 entries[name] = data
-    except (zipfile.BadZipFile, OSError, EOFError, RuntimeError, NotImplementedError, zlib.error) as exc:
+    except (zipfile.BadZipFile, OSError, EOFError, RuntimeError, NotImplementedError, zlib.error, UnicodeDecodeError) as exc:
         raise PromotionError(f"invalid wheel archive: {exc}") from exc
     _require(bool(entries), "wheel archive is empty")
     return entries

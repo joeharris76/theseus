@@ -125,6 +125,19 @@ class PromotionRules:
 
 
 @dataclass(frozen=True)
+class SqlglotAdoptionRules:
+    pin_path: str
+    fork_repository: str
+    upstream_repository: str
+    distribution: str
+    namespace: str
+
+    @property
+    def runtime_dir(self) -> str:
+        return self.pin_path.rpartition("/")[0]
+
+
+@dataclass(frozen=True)
 class Binding:
     bot_login: str
     attesters: frozenset[str]
@@ -149,6 +162,7 @@ class Policy:
     omp_sha256: Mapping[str, str] = field(default_factory=dict)
     evidence: EvidenceRules = EvidenceRules()
     promotion: PromotionRules = PromotionRules()
+    sqlglot_adoption: SqlglotAdoptionRules | None = None
 
     def binding(self) -> Binding:
         return Binding(self.bot_login, frozenset(self.consumer.attesters), self.consumer.gated_base)
@@ -252,6 +266,41 @@ def _consumer(data: Any) -> Consumer:
         omp_fixture_prefix=None
         if fixtures is None
         else _relative_path(fixtures.rstrip("/"), "consumer omp_fixture_prefix") + "/",
+    )
+
+
+def _sqlglot_adoption(data: Any) -> SqlglotAdoptionRules | None:
+    if data is None:
+        return None
+    keys = {"pin_path", "fork_repository", "upstream_repository", "distribution", "namespace"}
+    _require(isinstance(data, Mapping) and set(data) == keys, f"sqlglot_adoption needs exactly the keys {sorted(keys)}")
+    pin_path = _relative_path(data["pin_path"], "sqlglot_adoption pin_path")
+    _require(
+        "/" in pin_path and pin_path.endswith(".json"),
+        "sqlglot_adoption pin_path must be a .json file inside a runtime directory",
+    )
+    for key in ("fork_repository", "upstream_repository"):
+        value = data[key]
+        _require(
+            isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is not None,
+            f"sqlglot_adoption {key} must be owner/name",
+        )
+    distribution = data["distribution"]
+    _require(
+        isinstance(distribution, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", distribution) is not None,
+        "sqlglot_adoption distribution must be a normalized package name",
+    )
+    namespace = data["namespace"]
+    _require(
+        isinstance(namespace, str) and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+", namespace) is not None,
+        "sqlglot_adoption namespace must be a dotted Python module path",
+    )
+    return SqlglotAdoptionRules(
+        pin_path=pin_path,
+        fork_repository=data["fork_repository"],
+        upstream_repository=data["upstream_repository"],
+        distribution=distribution,
+        namespace=namespace,
     )
 
 
@@ -374,6 +423,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         evidence=EvidenceRules(
             exempt_paths=_str_tuple(evidence.get("exempt_paths") or [], "evidence exempt_paths"),
         ),
+        sqlglot_adoption=_sqlglot_adoption(data.get("sqlglot_adoption")),
         promotion=PromotionRules(
             package=promo_package,
             repository=promo_repository,

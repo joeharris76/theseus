@@ -26,6 +26,7 @@ from . import (
     disk_scan,
     edits,
     findings,
+    git_blobs,
     github,
     omp_pin,
     processes,
@@ -38,6 +39,7 @@ from . import (
     retry,
     runner,
     selection,
+    sqlglot_adoption,
     sweep,
 )
 from . import (
@@ -45,7 +47,7 @@ from . import (
 )
 from .absence import ERROR, Absence, published_detail
 from .brief import write_private
-from .classifier import ChangedFile, matching, soundness_scope
+from .classifier import ChangedFile, SoundnessScope, matching, soundness_scope
 from .classify import Classification, classify_diff
 from .diff import binary_files, binary_notice_count, commentable_lines, select_files
 from .evidence import glob_match, is_binary_candidate
@@ -607,6 +609,69 @@ def _load_ci_promotion(
         return None, f"theseus promotion hold: {exc}"
 
 
+def _ci_blob_reader(repo: str) -> sqlglot_adoption.BlobReader:
+    return git_blobs.TreeReader(
+        repo,
+        github.get_json,
+        lambda sha: github._gh_bytes(f"repos/{repo}/git/blobs/{sha}", accept="application/vnd.github.raw"),
+    )
+
+
+def _load_ci_adoption(
+    repo: str,
+    plan: Mapping[str, Any],
+    policy: Policy,
+    files: Sequence[ChangedFile],
+) -> tuple[promotion.PromotionBundle | None, str | None]:
+    rules = policy.sqlglot_adoption
+    pr_paths = [path for item in files for path in item.paths]
+    if rules is None or not sqlglot_adoption.touched(rules, pr_paths):
+        return None, None
+    try:
+        bundle = sqlglot_adoption.prepare_adoption(
+            rules=rules,
+            base_sha=plan["base_sha"],
+            head_sha=plan["head_sha"],
+            read_blob=_ci_blob_reader(repo),
+            source_loader=promotion.default_source_loader(symlinks=True),
+            is_ancestor=promotion.ci_ancestor_check(rules.fork_repository),
+            verify_identity=sqlglot_adoption.github_identity_validator(rules, github.get_json),
+            pr_paths=pr_paths,
+        )
+        return bundle, None
+    except (github.GitHubError, promotion.PromotionError) as exc:
+        return None, f"sqlglot adoption hold: {exc}"
+
+
+def _load_ci_bundle(
+    repo: str,
+    plan: Mapping[str, Any],
+    policy: Policy,
+    files: Sequence[ChangedFile],
+) -> tuple[promotion.PromotionBundle | None, str | None]:
+    theseus_bundle, theseus_hold = _load_ci_promotion(repo, plan, policy, files)
+    adoption_bundle, adoption_hold = _load_ci_adoption(repo, plan, policy, files)
+    if theseus_hold is not None or adoption_hold is not None:
+        return None, theseus_hold or adoption_hold
+    if theseus_bundle is not None and adoption_bundle is not None:
+        return None, "a pull request cannot both promote theseus and adopt a sqlglot runtime"
+    return theseus_bundle or adoption_bundle, None
+
+
+def _with_adoption_scope(scope: SoundnessScope, policy: Policy, files: Sequence[ChangedFile]) -> SoundnessScope:
+    adopted = sqlglot_adoption.touched_paths(policy.sqlglot_adoption, [path for item in files for path in item.paths])
+    if not adopted:
+        return scope
+    reason = "changes the sqlglot runtime pin or archive: " + ", ".join(adopted)
+    return SoundnessScope(
+        True,
+        (*(scope.reasons if scope.soundness else ()), reason),
+        tuple(sorted({*scope.paths, *adopted})),
+        scope.gate_paths,
+        scope.logic_paths,
+    )
+
+
 def _initial_scope_stop(
     plan: dict[str, Any],
     pull: Mapping[str, Any],
@@ -622,6 +687,7 @@ def _initial_scope_stop(
             f"the changed-file listing is incomplete ({len(files)} of {pull['changed_files']} files): owner review"
         )
         return None, True
+    scope = _with_adoption_scope(scope, policy, files)
     plan["scope_paths"] = list(scope.paths)
     plan["gate_paths"] = list(scope.gate_paths)
     plan["scope_reasons"] = list(scope.reasons)
@@ -726,7 +792,7 @@ def command_plan(args: argparse.Namespace) -> int:
     states = _file_states(plan, files) if complete else None
     base_changed_at, base_change_unreadable = _base_changed_at(repo, pr, event_name, event)
     owner_reset = retry.reset_applies(previous, plan["head_sha"], reset_at)
-    promotion_bundle, promotion_hold = _load_ci_promotion(repo, plan, policy, files)
+    promotion_bundle, promotion_hold = _load_ci_bundle(repo, plan, policy, files)
     if promotion_hold is not None:
         plan.update({"decision": HOLD, "decision_reason": promotion_hold})
         return _finish_plan(out_dir, plan)
@@ -777,11 +843,14 @@ class RoundInputs:
     promotion: promotion.PromotionBundle | None = None
 
 
-def _upstream_exempt(staged_path: str, exempt_paths: Sequence[str]) -> bool:
+def _upstream_exempt(staged_path: str, exempt_paths: Sequence[str], kind: str = "") -> bool:
     for sub in ("new", "old"):
         prefix = f"{promotion.STAGED_PROMOTION_DIR}/{sub}/"
         if staged_path.startswith(prefix):
-            return any(glob_match(staged_path.removeprefix(prefix), pattern) for pattern in exempt_paths)
+            relative = staged_path.removeprefix(prefix)
+            if kind == sqlglot_adoption.KIND and sqlglot_adoption.runtime_relevant(relative):
+                return False
+            return any(glob_match(relative, pattern) for pattern in exempt_paths)
     return False
 
 
@@ -824,10 +893,30 @@ def _resolve_promotion_bundle(
     local_root_raw = os.environ.get("ORACLE_LOCAL_ROOT", "").strip()
     pr_paths = [path for item in inputs.files for path in item.paths]
     lock_item = next((item for item in inputs.files if promotion.LOCK_PATH in item.paths), None)
-    if not local_root_raw or (lock_item is None and not promotion.has_planted_promotion_path(pr_paths)):
+    adopting = sqlglot_adoption.touched(policy.sqlglot_adoption, pr_paths)
+    unrelated = lock_item is None and not adopting and not promotion.has_planted_promotion_path(pr_paths)
+    if not local_root_raw or unrelated:
         return None, None
     local_root = Path(local_root_raw)
+    loader_args = {"local_git_root": local_root, "local_consumer_repo": plan["repo"]}
     try:
+        if adopting and policy.sqlglot_adoption is not None:
+            if lock_item is not None:
+                raise promotion.PromotionError("a pull request cannot both promote theseus and adopt a sqlglot runtime")
+            adoption_rules = policy.sqlglot_adoption
+            return (
+                sqlglot_adoption.prepare_adoption(
+                    rules=adoption_rules,
+                    base_sha=plan["base_sha"],
+                    head_sha=plan["head_sha"],
+                    read_blob=git_blobs.local_reader(local_root),
+                    source_loader=promotion.default_source_loader(symlinks=True, **loader_args),
+                    is_ancestor=promotion.ci_ancestor_check(adoption_rules.fork_repository),
+                    verify_identity=sqlglot_adoption.github_identity_validator(adoption_rules, github.get_json),
+                    pr_paths=pr_paths,
+                ),
+                None,
+            )
         base_lock_text = _git_lock_text(local_root, plan["base_sha"])
         head_lock_text = _git_lock_text(local_root, plan["head_sha"])
         bundle = promotion.prepare_promotion(
@@ -836,7 +925,7 @@ def _resolve_promotion_bundle(
             head_sha=plan["head_sha"],
             base_lock_text=base_lock_text,
             head_lock_text=head_lock_text,
-            source_loader=promotion.default_source_loader(local_git_root=local_root, local_consumer_repo=plan["repo"]),
+            source_loader=promotion.default_source_loader(**loader_args),
             is_ancestor=promotion.local_ancestor_check(local_root),
             pr_paths=pr_paths,
             rules=policy.promotion,
@@ -844,7 +933,8 @@ def _resolve_promotion_bundle(
         )
         return bundle, None
     except promotion.PromotionError as exc:
-        return None, f"theseus promotion hold: {exc}"
+        label = "sqlglot adoption" if adopting else "theseus promotion"
+        return None, f"{label} hold: {exc}"
 
 
 def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: RoundInputs, matchers: Matchers) -> int:
@@ -854,8 +944,11 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         return _finish_plan(out_dir, plan)
     is_promotion = active_promotion is not None
     upstream_files = list(active_promotion.changed_files) if active_promotion is not None else []
+    upstream_kind = active_promotion.kind if active_promotion is not None else ""
     upstream_in_scope = {
-        item.path for item in upstream_files if not _upstream_exempt(item.path, policy.evidence.exempt_paths)
+        item.path
+        for item in upstream_files
+        if not _upstream_exempt(item.path, policy.evidence.exempt_paths, upstream_kind)
     }
     all_files = [*inputs.files, *upstream_files]
     in_scope = set(inputs.in_scope) | upstream_in_scope
@@ -933,6 +1026,8 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         promotion_record=active_promotion.record.to_json() if active_promotion is not None else None,
         upstream_protected=upstream_in_scope,
     )
+    if active_promotion is not None:
+        plan["promotion_kind"] = active_promotion.kind
     plan["decision_reason"] = step.reason if reason is None else f"{step.reason}; {reason}"
     return _finish_plan(out_dir, plan)
 
@@ -1318,8 +1413,16 @@ def _assemble_prompt(
         else f"Changed files:\n{file_listing(reviewed)}\n"
     )
     if plan.get("promotion"):
+        subject = (
+            "SQLGlot runtime adoption review: the fork's old and new source trees are the review subject, not the"
+            " pin edit. The runtime wheel at the pull request head was verified against the new source tree by the"
+            " trusted relocation, so read the source delta rather than the wheel. Materialized fork source trees and"
+            " unified diff"
+            if plan.get("promotion_kind") == sqlglot_adoption.KIND
+            else "Theseus promotion review: materialized upstream source trees and unified diff"
+        )
         files_block = (
-            "Theseus promotion review: materialized upstream source trees and unified diff are staged in the working"
+            f"{subject} are staged in the working"
             f" directory under {promotion.STAGED_PROMOTION_DIR}/old/, {promotion.STAGED_PROMOTION_DIR}/new/, and"
             f" {promotion.STAGED_PROMOTION_DIR}/{promotion.UPSTREAM_DIFF_NAME}. Read every required staged file"
             f" ({promotion.STAGED_PROMOTION_DIR}/new/ for added/modified files and {promotion.STAGED_PROMOTION_DIR}/old/"
