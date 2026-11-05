@@ -12,6 +12,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 HIDDEN = ".github/workflows/oracle-verdict.yml"
 
 
+def _returned(*paths: str, span: tuple[int, int] = (1, 5)) -> dict[str, tuple[tuple[int, int], ...]]:
+    return {path: (span,) for path in paths}
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
@@ -33,25 +37,32 @@ def workspace(tmp_path: Path) -> Path:
     ],
 )
 def test_withdrawal_citations_parse_the_full_repository_path(workspace: Path, text: str, path: str) -> None:
-    assert evidence._withdrawal_verified(text, workspace, frozenset({path}))
+    assert evidence._withdrawal_verified(text, workspace, _returned(path))
 
 
 @pytest.mark.parametrize("text", ["../pkg/mod.py:1", "/etc/passwd:1", "github/workflows/oracle-verdict.yml:1"])
 def test_withdrawal_citations_outside_the_read_files_stay_unverified(workspace: Path, text: str) -> None:
-    assert not evidence._withdrawal_verified(text, workspace, frozenset({HIDDEN, "Makefile", "pkg/mod.py"}))
+    assert not evidence._withdrawal_verified(text, workspace, _returned(HIDDEN, "Makefile", "pkg/mod.py"))
 
 
 def test_a_withdrawal_citation_counts_only_for_a_path_in_the_read_set() -> None:
-    assert evidence.withdrawal_cited("pkg/mod.py:1 shows it", frozenset({"pkg/mod.py"}))
-    assert not evidence.withdrawal_cited("pkg/mod.py:1 shows it", frozenset({"Makefile"}))
-    assert not evidence.withdrawal_cited("no citation here", frozenset({"pkg/mod.py"}))
+    assert evidence.withdrawal_cited("pkg/mod.py:1 shows it", _returned("pkg/mod.py"))
+    assert not evidence.withdrawal_cited("pkg/mod.py:1 shows it", _returned("Makefile"))
+    assert not evidence.withdrawal_cited("no citation here", _returned("pkg/mod.py"))
     assert evidence.withdrawal_cited("pkg/mod.py:1 shows it")
 
 
+def test_a_withdrawal_citation_needs_its_line_inside_the_returned_range(workspace: Path) -> None:
+    returned = _returned("pkg/mod.py", span=(2, 4))
+    assert not evidence._withdrawal_verified("pkg/mod.py:1 shows it", workspace, returned)
+    assert not evidence.withdrawal_cited("pkg/mod.py:1 shows it", returned)
+    assert evidence.withdrawal_cited("pkg/mod.py:3 shows it", returned)
+
+
 def test_a_hidden_path_reproduction_is_verified(workspace: Path) -> None:
-    assert evidence._repro_verified(f"repro: {HIDDEN}", workspace, frozenset({HIDDEN}))
-    assert evidence._repro_verified("repro: Makefile.", workspace, frozenset({"Makefile"}))
-    assert not evidence._repro_verified("repro: ../Makefile", workspace, frozenset({"Makefile"}))
+    assert evidence._repro_verified(f"repro: {HIDDEN}", workspace, _returned(HIDDEN))
+    assert evidence._repro_verified("repro: Makefile.", workspace, _returned("Makefile"))
+    assert not evidence._repro_verified("repro: ../Makefile", workspace, _returned("Makefile"))
 
 
 def test_replaying_a_trusted_artifact_keeps_the_appended_note() -> None:

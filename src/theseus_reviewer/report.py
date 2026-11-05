@@ -38,7 +38,7 @@ BODY_CUT_NOTICE = "Size limit: the rest of this review was cut to stay under Git
 TRUNCATED = "… [truncated]"
 OVERSIZE_DESCRIPTION = "pending: too large for the oracle; split the pull request or ask the owner for a stand-in"
 OVERSIZE_NOTE = (
-    "This pull request is too large for the oracle: its brief exceeds the size cap even without the diff, "
+    "This pull request is too large for the oracle: the reading it needs is more than any reviewer can hold, "
     "so no reviewer can run and this head is not retried. Split it into smaller pull requests, or ask the "
     "owner for a stand-in review of this head."
 )
@@ -143,6 +143,7 @@ def _record(
     adjudicated: Sequence[Mapping[str, str]] = (),
     disputed: Sequence[str] = (),
     promotion_record: Mapping[str, Any] | None = None,
+    coverage: bool = False,
 ) -> str:
     rules = plan["protocol"]
     record = {
@@ -169,6 +170,8 @@ def _record(
         record["disputed"] = list(disputed)
     if adjudicated:
         record["adjudicated"] = [dict(item) for item in adjudicated]
+    if coverage and decision in (protocol.SHIP, protocol.SHIP_WITH_FIXES):
+        record["coverage"] = int(coverage)
     if promotion_record is not None and not carried and decision == protocol.SHIP and not open_defects:
         record["promotion"] = dict(promotion_record)
     if bound_run(plan):
@@ -271,7 +274,7 @@ def _settled(plan: Mapping[str, Any], step: Step) -> tuple[Step, str]:
         return Step(selection.PENDING, None, (*step.reasons, reason)), UNREPORTED
     if step.kind == selection.PENDING and step.stopped:
         return step, STOPPED
-    if step.kind == selection.PENDING and plan.get("brief_mode") == "oversize":
+    if step.kind == selection.PENDING and (step.oversize or plan.get("brief_mode") == "oversize"):
         return step, OVERSIZE
     return step, ALL_ABSENT
 
@@ -304,6 +307,7 @@ def _marked(
             promotion_record=plan.get("promotion")
             if isinstance(plan.get("promotion"), Mapping) and judgement.decision == protocol.SHIP and not open_defects
             else None,
+            coverage=bool(plan.get("coverage")),
         )
     except protocol.MarkerError:
         return None
@@ -560,6 +564,7 @@ def carried(plan: Mapping[str, Any]) -> Final:
             strikes_after=int(previous["strikes_after"]),
             summary=previous["summary"],
             carried=True,
+            coverage=bool(previous.get("coverage")),
             escalated=previous.get("escalated", ()),
             adjudicated=previous.get("adjudicated", ()),
         )
@@ -613,6 +618,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
             next_id=int(previous["next_id"]),
             strikes_after=int(previous["strikes_after"]),
             carried=True,
+            coverage=bool(previous.get("coverage")),
             escalated=escalated,
             adjudicated=settled,
         )

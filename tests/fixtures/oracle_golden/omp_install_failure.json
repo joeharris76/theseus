@@ -26,7 +26,6 @@
     "base_sha": "<sha1>",
     "binary_files": [],
     "bot_login": "benchbox-oracle",
-    "brief_max_bytes": 100000,
     "brief_mode": "inline",
     "buckets": {
       "huge": "huge",
@@ -122,6 +121,7 @@
         "timeout_minutes": 45
       }
     ],
+    "coverage": 1,
     "created_at": "<volatile>",
     "decision": "review",
     "decision_reason": "first review of this pull request; pull request event",
@@ -140,6 +140,7 @@
     "evidence_protected_files": [
       "benchbox/core/equivalence/checker.py"
     ],
+    "evidence_whole_files": [],
     "findings_delivery": "review",
     "follow_up_reviewer": null,
     "gate_path_list": "<policy gate paths>",
@@ -177,6 +178,7 @@
     },
     "repo": "BenchBox-dev/BenchBox",
     "restart_summary": null,
+    "review_load_tokens": 150163,
     "reviewed_files": [
       {
         "additions": 2,

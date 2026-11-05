@@ -11,7 +11,9 @@ from .harness import CHECKER, GATEWAY_TOKEN, HELD_SECRET, Harness
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
-LOOP_TIME_LINE = re.compile(r"\d+(\.\d+)*|disk scan of \d+ root\(s\) for \d+ secret value\(s\): 0 hit\(s\)")
+LOOP_TIME_LINE = re.compile(
+    r"\d+(\.\d+)*|reviewer capacity: \{.*\}|disk scan of \d+ root\(s\) for \d+ secret value\(s\): 0 hit\(s\)"
+)
 FIRST = "def checker(a, b):\n    return a is b\n"
 QUOTING_DEFECT = {
     "severity": "High",

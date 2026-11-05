@@ -18,6 +18,8 @@ theseus="$(python3 -I -S .github/theseus-bootstrap.py install --repo . --commit 
 
 The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. Without `--base-ref`, pass `--trusted-ref REF`: the base is `origin/<consumer.gated_base>` read from the policy at that commit, never from the working tree (a branch could otherwise pick the ref that supplies its own rules); with neither flag the review refuses. `--repo` falls back to `ORACLE_LOCAL_REPOSITORY`, then the origin remote.
 
+The diff under review is built by `git diff` with `--attr-source` pointing at the empty tree, so a `.gitattributes` in the reviewed branch (`-diff`, `binary`, `diff=<driver>`, `eol` and the like) can never hide or reshape hunks. That flag needs git 2.40 or newer. When `git --version` reports an older release, or output that cannot be parsed, the review is unavailable (exit 2) with a message naming the requirement; it never drops the flag and falls back.
+
 Each review phase runs as a child of the verified install: the same interpreter with `-I -B -S`, the running package's parent directory as the only added import path, and every `PYTHON*` variable removed from the phase environment. A `PYTHONPATH`, a user or system `theseus_reviewer`, or a checkout on the working directory is therefore never imported.
 
 ## Exit status

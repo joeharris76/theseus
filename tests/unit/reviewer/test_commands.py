@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from theseus_reviewer import omp_pin
-from theseus_reviewer.commands import build
+from theseus_reviewer._vendor import yaml
+from theseus_reviewer.commands import OMP_OVERLAY_TEXT, build
 from theseus_reviewer.policy import Policy
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -47,3 +48,8 @@ def test_build_rejects_unknown_harness(policy: Policy, tmp_path: Path) -> None:
     reviewer = replace(policy.reviewers["small"], harness="codex")
     with pytest.raises(ValueError, match="unknown harness"):
         build(reviewer, WS, PROMPT, tmp_path)
+
+
+def test_overlay_disables_compaction() -> None:
+    compaction = yaml.safe_load(OMP_OVERLAY_TEXT)["compaction"]
+    assert compaction == {"enabled": False, "midTurnEnabled": False}

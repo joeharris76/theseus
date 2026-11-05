@@ -33,6 +33,12 @@ CLAUDE_TOKEN = "CANARY_CLAUDE_CONTEXT_7732"
 NATIVE_TOKEN = "CANARY_NATIVE_CONTEXT_7733"
 CHECKER = "src/equivalence/checker.py"
 LONG_FILE = "long_module.py"
+CR_FILE = "carriage_returns.py"
+WIDE_FILE = "wide_line.py"
+CR_SOURCE = b"alpha\rbeta\rgamma\ndelta\r\nepsilon\n"
+WIDE_COLUMNS = 1000
+WIDE_LINE = 4
+WIDE_SOURCE = f"one\ntwo\nthree\n{'x' * WIDE_COLUMNS}\nfive\nsix\n"
 CHECKER_SOURCE = "def checker(a, b):\n    return a == b\n"
 LONG_SOURCE = "".join(
     f"class Holder{index}:\n    def total(self, a, b):\n        total = a + b\n        if total > {index}:\n"
@@ -115,8 +121,26 @@ def _auth_script(context: Context) -> list[UpstreamTurn]:
     return [error_turn(401, "authentication_error", AUTH_MESSAGE)]
 
 
+def _read_lines_script(context: Context) -> list[UpstreamTurn]:
+    long_file = f"{context.workspace}/{LONG_FILE}"
+    return [
+        tool_turn("read", {"path": f"{context.workspace}/{CHECKER}"}, "toolu_read_checker"),
+        tool_turn("read", {"path": long_file}, "toolu_read_long"),
+        tool_turn("read", {"path": f"{long_file}:5-9"}, "toolu_read_range"),
+        tool_turn("read", {"path": f"{long_file}:raw"}, "toolu_read_raw"),
+        tool_turn("read", {"path": f"{long_file}:raw:5-9"}, "toolu_read_raw_range"),
+        tool_turn("read", {"path": f"{context.workspace}/{CHECKER};{long_file}:1-3"}, "toolu_read_multi"),
+        tool_turn("read", {"path": f"{context.workspace}/{CR_FILE}"}, "toolu_read_carriage_returns"),
+        tool_turn("read", {"path": f"{context.workspace}/{WIDE_FILE}"}, "toolu_read_wide"),
+        tool_turn("read", {"path": f"{context.workspace}/{WIDE_FILE}:3-5"}, "toolu_read_wide_range"),
+        tool_turn("read", {"path": f"{context.workspace}/{WIDE_FILE}:raw"}, "toolu_read_wide_raw"),
+        text_turn(json.dumps(VERDICT)),
+    ]
+
+
 SCENARIOS = (
     Scenario("review", _review_script),
+    Scenario("read-lines", _read_lines_script),
     Scenario("control", _review_script, overlay=PERMISSIVE_OVERLAY),
     Scenario("roster-breach", _breach_script),
     Scenario("quota-walk", _quota_script),
@@ -254,6 +278,8 @@ class LoopbackChain:
         (self.workspace / CHECKER).parent.mkdir(parents=True)
         (self.workspace / CHECKER).write_text(CHECKER_SOURCE, encoding="utf-8")
         (self.workspace / LONG_FILE).write_text(LONG_SOURCE, encoding="utf-8")
+        (self.workspace / CR_FILE).write_bytes(CR_SOURCE)
+        (self.workspace / WIDE_FILE).write_text(WIDE_SOURCE, encoding="utf-8")
         self._stack.enter_context(self.stub)
         self._stack.enter_context(self.canary)
         broker_home, gateway_home = self.workdir / "broker", self.workdir / "gateway"
@@ -277,9 +303,17 @@ class LoopbackChain:
         token_file = self.workdir / "client-token"
         token_file.write_text(self.client_token, encoding="utf-8")
         clients = self.workdir / "gateway-clients.json"
+        config_file = self.workdir / "omp-config.yml"
+        config_file.write_text(self.config_text, encoding="utf-8")
         with contextlib.redirect_stdout(None):
             cli.command_gateway_clients(
-                argparse.Namespace(token_file=str(token_file), accounts=None, client=[], out=str(clients))
+                argparse.Namespace(
+                    token_file=str(token_file),
+                    accounts=None,
+                    client=[],
+                    out=str(clients),
+                    omp_config=str(config_file),
+                )
             )
         gateway_process = self._spawn(
             "gateway",

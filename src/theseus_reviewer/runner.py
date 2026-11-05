@@ -12,12 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import absence, credentials, evidence, omp_pin, processes, promotion, protocol, redaction_check
+from . import absence, coverage, credentials, evidence, omp_pin, processes, promotion, protocol, redaction_check
 from .commands import Invocation, build
+from .diff import STAGED_DIFF_NAME
 from .policy import Reviewer
 from .verdict import (
     INCOMPLETE,
     SHIP,
+    SHIP_WITH_FIXES,
     VerdictError,
     extract_omp_text,
     normalize_reviewer,
@@ -28,7 +30,8 @@ from .verdict import (
     validate,
 )
 
-CAPTURE_SCHEMA = 1
+CAPTURE_SCHEMA = 2
+COMPACTED_REASON = "the reviewer's context was compacted"
 
 
 @dataclass(frozen=True)
@@ -50,9 +53,6 @@ class ReviewOutcome:
 def _git(workspace: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(workspace), *args], capture_output=True, text=True, check=False)
     return result.stdout.strip() if result.returncode == 0 else ""
-
-
-STAGED_DIFF_NAME = ".oracle-pull-request.diff"
 
 
 def stage_pull_request_diff(source: Path, workspace: Path) -> Path | None:
@@ -208,16 +208,29 @@ def capture(reviewer: Reviewer, result: RunResult) -> dict[str, Any]:
             "terminal_error": _terminal(stdout, secrets),
             "stderr_excerpt": absence.excerpt("", result.stderr, secrets),
             "streaming_events_dropped": len(parsed) - len(events),
+            "reads": _ledger(evidence.trace(reviewer.harness, stdout)),
             "events": _scrubbed(redaction_check.redact(_withheld(events), secrets)),
         },
         secrets,
     )
 
 
+def _ledger(run: evidence.Trace) -> list[dict[str, Any]]:
+    return [
+        {"path": path, "lines": [list(span) for span in ranges], "truncated": truncated, "elided": elided}
+        for path, ranges, truncated, elided in run.ledger
+    ]
+
+
 def _with_trace(diagnostic: str, harness: str, stdout: str, plan: Mapping[str, Any], workspace: Path) -> str:
     if harness not in evidence.TRACED:
         return diagnostic
-    summary = evidence.describe(evidence.trace(harness, stdout), plan.get("evidence_files", ()), workspace)
+    run = evidence.trace(harness, stdout)
+    required = plan.get("evidence_files", ())
+    report = None
+    if plan.get("brief_mode") != evidence.INLINE:
+        report = evidence.evaluate(run, coverage.targets(plan, workspace), required, workspace)
+    summary = evidence.describe(run, required, workspace, report)
     return f"{diagnostic} | {summary}" if diagnostic else summary
 
 
@@ -298,6 +311,9 @@ def _judge(
         )
     if missing.absent:
         return ReviewOutcome(None, missing, diagnostic)
+    if evidence.compacted(reviewer.harness, result.stdout):
+        reason = absence.Absence(absence.INCOMPLETE, COMPACTED_REASON)
+        return ReviewOutcome(None, reason, _with_trace(diagnostic, reviewer.harness, result.stdout, plan, workspace))
     if reviewer.harness == "omp" and omp_stream_without_answer(output):
         missing = absence.Absence(absence.EMPTY, "the reviewer ended without a final answer")
         return ReviewOutcome(None, missing, _with_trace(diagnostic, reviewer.harness, result.stdout, plan, workspace))
@@ -327,7 +343,7 @@ def _judge(
         reason = verdict.incomplete_reason or "the reviewer reported its review incomplete"
         return ReviewOutcome(None, absence.Absence(absence.INCOMPLETE, reason), traced)
     run = evidence.trace(reviewer.harness, result.stdout)
-    read = evidence.credited(run, workspace)
+    read = evidence.returned(run, workspace)
     verdict = evidence.mark_citations(verdict, workspace, protocol.disputed_claims(plan), read)
     problem = protocol.contradiction(verdict, plan, workspace=workspace)
     if problem is not None:
@@ -336,12 +352,14 @@ def _judge(
     verdict = protocol.keep_disputes_open(verdict, plan)
     gap = evidence.check(
         verdict,
-        ships=protocol.judge_planned(verdict, plan, workspace=workspace, read=read).decision == SHIP,
+        clears=protocol.judge_planned(verdict, plan, workspace=workspace, read=read).decision
+        in (SHIP, SHIP_WITH_FIXES),
         harness=reviewer.harness,
         brief_mode=plan["brief_mode"],
         workspace=workspace,
         required=tuple(plan.get("evidence_files", ())),
         run=run,
+        targets=coverage.targets(plan, workspace),
         exempt_paths=tuple(plan.get("evidence_exempt_paths", ())),
         binary_files=tuple(plan.get("binary_files", ())),
         is_protected=_plan_protected(plan),

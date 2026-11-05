@@ -8,8 +8,8 @@ FULL_DIFF_LINE = (
     f"The whole pull request diff is at {FULL_DIFF_PLACEHOLDER}; read it for context outside the changed files below.\n"
 )
 FILE_LIST_DIFF_LINE = (
-    f"The whole pull request diff is at {FULL_DIFF_PLACEHOLDER}; read it for context, but it does not replace"
-    " the direct reads required above. "
+    f"The whole pull request diff is at {FULL_DIFF_PLACEHOLDER}; reading the hunk blocks of the required files there"
+    " is the cheapest way to meet the required reads above. "
 )
 
 

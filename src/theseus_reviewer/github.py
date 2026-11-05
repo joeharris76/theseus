@@ -50,13 +50,6 @@ def get_paginated(path: str) -> list[Any]:
     return [item for page in pages for item in page]
 
 
-def get_diff(repo: str, pr: int) -> bytes | None:
-    try:
-        return _gh_bytes(f"repos/{repo}/pulls/{pr}", accept="application/vnd.github.v3.diff")
-    except GitHubError:
-        return None
-
-
 def merge_base(repo: str, base: str, head: str) -> str | None:
     try:
         sha = (get_json(f"repos/{repo}/compare/{base}...{head}?per_page=1").get("merge_base_commit") or {}).get("sha")

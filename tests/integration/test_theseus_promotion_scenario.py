@@ -221,6 +221,8 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
         ".oracle-promotion/new/src/theseus_reviewer/gate.py",
         ".oracle-promotion/new/src/theseus_reviewer/verifier.py",
     ]
+    request_diff = ".oracle-pull-request.diff:1-100000"
+    upstream_diff = f"{promotion.STAGED_PROMOTION_DIR}/upstream.diff:1-100000"
     omitted = required_reads[:-1]
     harness.script_omp(
         [
@@ -228,14 +230,14 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
                 "decision": "SHIP",
                 "summary": "Omitted verifier.py read.",
                 "files_examined": omitted,
-                "reads": omitted,
+                "reads": [request_diff],
                 "defects": [],
             },
             {
                 "decision": "SHIP",
                 "summary": "Still omitted verifier.py read.",
                 "files_examined": omitted,
-                "reads": omitted,
+                "reads": [request_diff],
                 "defects": [],
             },
         ]
@@ -291,7 +293,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
                 "decision": "SHIP",
                 "summary": "All staged upstream files examined.",
                 "files_examined": required_reads,
-                "reads": required_reads,
+                "reads": [request_diff, upstream_diff],
                 "defects": [],
             }
         ]
@@ -332,7 +334,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
                 "decision": "SHIP",
                 "summary": "Fresh review on rebased promotion head.",
                 "files_examined": required_reads,
-                "reads": required_reads,
+                "reads": [request_diff, upstream_diff],
                 "defects": [],
             }
         ]
@@ -344,7 +346,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     assert harness.gate(1, rebased_head).code == 0
 
 
-def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_removed_upstream_reads(
+def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_upstream_reads(
     harness: Harness,
 ) -> None:
     baseline_sha = harness.write(
@@ -454,16 +456,16 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_removed_u
         [
             {
                 "decision": "SHIP",
-                "summary": "Omitted removed obsolete_guard.py.",
+                "summary": "Read the lock bump but no upstream hunk.",
                 "files_examined": reads_without_removed,
-                "reads": reads_without_removed,
+                "reads": [".oracle-pull-request.diff:1-100000"],
                 "defects": [],
             },
             {
                 "decision": "SHIP",
-                "summary": "Read all added, modified, and removed upstream files.",
+                "summary": "Read every executed upstream hunk.",
                 "files_examined": full_reads,
-                "reads": full_reads,
+                "reads": [".oracle-pull-request.diff:1-100000", ".oracle-promotion/upstream.diff:1-100000"],
                 "defects": [],
             },
         ]
@@ -471,7 +473,7 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_removed_u
     first_run = harness.review(3)
     attempts = first_run.attempts()
     assert attempts[0]["outcome"] == "absent"
-    assert ".oracle-promotion/old/src/theseus_reviewer/obsolete_guard.py" in attempts[0]["absence"]["unread"]
+    assert set(attempts[0]["absence"]["unread"]) == set(full_reads[1:])
     assert attempts[1]["outcome"] == "verdict"
     assert first_run.steps["finalize"].outputs["state"] == "success"
     assert harness.gate(3, head).code == 0

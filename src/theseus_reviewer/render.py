@@ -243,10 +243,15 @@ def file_listing(files: Sequence[ChangedFile]) -> str:
 
 
 REQUIRED_READS_HEADER = (
-    "Required reads: each file listed here needs its own direct read in the working directory, a plain,"
-    " line-ranged or raw read of that file or a grep of that single file. Reading the staged pull request diff does"
-    " not count as reading a file. One-line and low-priority files are included. A shipping verdict without a"
-    " direct read of every one of them is rejected as incomplete.\n"
+    "Required reads: every changed hunk of each file listed here must be seen. A hunk is seen when you read its"
+    " whole block in the staged pull request diff, which is the cheapest way: read that diff in full; a read with"
+    " no line range returns only its first 300 lines, so use ranges such as :1-400. A hunk that only adds lines"
+    " is also seen when you read those lines of the file itself. Only the lines a read actually returns count; a"
+    " grep, a read of several"
+    " paths in one call and a summarized read count for nothing. Lines over 768 columns are cut by a plain read"
+    " and do not count; read a hunk that holds one with :raw, as its hint says. One-line and low-priority files are included."
+    " A shipping verdict, with or without fixes, that has not seen every changed hunk of every one of them is"
+    " rejected as incomplete.\n"
 )
 OTHER_FILES_HEADER = (
     "Not required reads (inert, exempt or deleted files): the verdict check does not require a direct read of"
@@ -254,12 +259,13 @@ OTHER_FILES_HEADER = (
 )
 NO_REQUIRED_READS = "Required reads: none.\n"
 RETRY_NONE = "none"
-UNREAD_MARK = "[unread in your previous attempt]"
-_RETRY_PREFIX = "your previous attempt at this review did not read "
+UNREAD_MARK = "[hunks not fully seen in your previous attempt]"
+_RETRY_PREFIX = "your previous attempt at this review did not see every changed hunk in "
 _RETRY_SUFFIX = (
-    f" of the required files directly, so it was rejected as incomplete and its decision was discarded. Those files"
-    f" carry the mark {UNREAD_MARK} in the required reads list of the change data. Read each of them directly and"
-    " reach your decision from the change itself; reading the staged pull request diff does not count."
+    f" of the required files, so it was rejected as incomplete and its decision was discarded. Those files carry"
+    f" the mark {UNREAD_MARK} in the required reads list of the change data. Read every changed hunk of each of"
+    " them in the staged pull request diff or, for added lines only, in the file itself, and reach your decision"
+    " from the change; searches and lines a read did not return do not count."
 )
 _RETRY_NOTE = re.compile(re.escape(_RETRY_PREFIX) + r"[1-9][0-9]{0,5}" + re.escape(_RETRY_SUFFIX))
 
@@ -269,12 +275,19 @@ def unread_required(unread: Sequence[str], required: Sequence[str]) -> list[str]
     return [path for path in dict.fromkeys(required) if path in wanted]
 
 
-def file_list_block(files: Sequence[ChangedFile], required: Sequence[str], unread: Sequence[str] = ()) -> str:
+def file_list_block(
+    files: Sequence[ChangedFile],
+    required: Sequence[str],
+    unread: Sequence[str] = (),
+    hints: Mapping[str, str] | None = None,
+) -> str:
     wanted = list(dict.fromkeys(required))
     marked = set(unread)
     by_path = {item.path: item for item in files}
+    held = hints or {}
     rows = [
-        (file_listing([by_path[path]]) if path in by_path else path) + (f" {UNREAD_MARK}" if path in marked else "")
+        (file_listing([by_path[path]]) if path in by_path else path)
+        + (f" {UNREAD_MARK}{f' {held[path]}' if path in held else ''}" if path in marked else "")
         for path in wanted
     ]
     required_set = set(wanted)

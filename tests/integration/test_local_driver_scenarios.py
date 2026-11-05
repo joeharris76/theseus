@@ -240,7 +240,16 @@ def _planned_and_judged(harness: Harness, branch: str, monkeypatch: pytest.Monke
     return saved["plan"], saved["final"]
 
 
-ADAPTER_FIELDS = {"run_id", "run_uuid", "created_at", "pr", "head_sha", "decision_reason", "previous_state", "history"}
+ADAPTER_FIELDS = {
+    "run_id",
+    "run_uuid",
+    "created_at",
+    "pr",
+    "head_sha",
+    "decision_reason",
+    "previous_state",
+    "history",
+}
 PARITY_CASES = {
     "clean": ([_reply("SHIP")], False),
     "medium-only": ([_reply("SHIP_WITH_FIXES", _defect("Medium"))], False),

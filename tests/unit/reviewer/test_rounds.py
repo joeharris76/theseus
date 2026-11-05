@@ -575,6 +575,7 @@ def _decided(head_sha: str, decision: str = protocol.SHIP_WITH_FIXES, digest: st
         "patch_digest": digest,
         "carried": False,
         "summary": "",
+        "coverage": 1,
     }
 
 
@@ -773,6 +774,7 @@ def test_replaying_the_real_pr_2769_history_reviews_each_patch_once_and_scopes_f
                 "carried": False,
                 "summary": "",
                 "patch_map": current,
+                "coverage": 1,
             }
         )
     reopen = [kind for kind, entry in zip(kinds, history["rounds"], strict=True) if entry["event"] == "reopened"]
@@ -827,6 +829,7 @@ def test_a_docs_only_rebuttal_push_is_rejudged_not_carried() -> None:
             "carried": False,
             "summary": "",
             "patch_map": protocol.patch_map(first["patches"], paths),
+            "coverage": 1,
         }
     )
     rerun = protocol.plan_round(
@@ -1232,3 +1235,91 @@ def test_the_post_guard_lets_a_planned_hold_post_its_pending_status_despite_an_e
     monkeypatch.setattr(github, "oracle_reviews", lambda repo, pr: [_guard_review(HEAD)])
     monkeypatch.setattr(github, "review_edit_states", lambda ids: dict.fromkeys(ids, (None, True)))
     assert _run_cli(monkeypatch, tmp_path, "guard", "--plan", str(plan_path)) == {"skip": "false"}
+
+
+def _covered(policy: Policy, **over: Any) -> dict[str, Any]:
+    return {**_protocol_plan(policy, **over), "coverage": 1}
+
+
+@pytest.mark.parametrize(
+    ("verdict", "decision"),
+    [(_v("fine"), "SHIP"), (_v("bad", [_finding("High", 2)]), "SHIP_WITH_FIXES")],
+    ids=["ship", "ship-with-fixes"],
+)
+def test_a_clearing_record_carries_the_coverage_stamp_when_the_plan_asks_for_it(
+    policy: Policy, tmp_path: Path, verdict: dict[str, Any], decision: str
+) -> None:
+    record = _record(_final(policy, tmp_path, _covered(policy), verdict))
+    assert record["decision"] == decision and record["coverage"] == 1
+
+
+@pytest.mark.parametrize("verdict", [_v("fine"), _v("bad", [_finding("High", 2)])], ids=["ship", "ship-with-fixes"])
+def test_a_clearing_record_has_no_coverage_stamp_when_the_plan_does_not_ask_for_it(
+    policy: Policy, tmp_path: Path, verdict: dict[str, Any]
+) -> None:
+    assert "coverage" not in _record(_final(policy, tmp_path, _protocol_plan(policy), verdict))
+
+
+def test_a_do_not_ship_record_never_carries_the_coverage_stamp(policy: Policy, tmp_path: Path) -> None:
+    verdict = _v("Rework it.", [_finding("High", 2)], decision="DO_NOT_SHIP")
+    record = _record(_final(policy, tmp_path, _covered(policy), verdict))
+    assert record["decision"] == "DO_NOT_SHIP" and "coverage" not in record
+
+
+def test_a_refusal_record_never_carries_the_coverage_stamp(policy: Policy) -> None:
+    plan = {**_covered(policy, kind="refused", strikes=3, round=0), "decision": "refused"}
+    record = _record(report.refused(plan))
+    assert record["decision"] == "REFUSED" and "coverage" not in record
+
+
+def _previous(decision: str = "SHIP_WITH_FIXES", **over: Any) -> dict[str, Any]:
+    return {
+        "v": 1,
+        "cycle": 2,
+        "round": 3,
+        "kind": "follow-up",
+        "decision": decision,
+        "head_sha": "c" * 40,
+        "base_ref": "develop",
+        "reviewer": "small",
+        "tier": "small",
+        "strikes_after": 0,
+        "open_defects": [_prior("D4")],
+        "next_id": 5,
+        "patch_digest": DIGEST,
+        "carried": False,
+        "summary": "",
+        **over,
+    }
+
+
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES"])
+def test_a_carry_copies_the_coverage_stamp_of_the_decision_it_carries(policy: Policy, decision: str) -> None:
+    previous = _previous(decision, coverage=1)
+    plan = {**_protocol_plan(policy, kind="carry", previous=previous), "decision": "carry", "reviewed_head": "c" * 40}
+    assert _record(report.carried(plan))["coverage"] == 1
+
+
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES"])
+def test_a_carry_of_a_decision_without_coverage_does_not_acquire_it(policy: Policy, decision: str) -> None:
+    previous = _previous(decision)
+    plan = {**_covered(policy, kind="carry", previous=previous), "decision": "carry", "reviewed_head": "c" * 40}
+    assert "coverage" not in _record(report.carried(plan))
+
+
+def _ruling(policy: Policy, previous: dict[str, Any], action: str) -> dict[str, Any]:
+    return {
+        **_covered(policy, kind="carry", previous=previous),
+        "adjudication": {"action": action, "id": "D4", "reason": "the helper keeps the row"},
+    }
+
+
+@pytest.mark.parametrize("action", ["WITHDRAW", "MAINTAIN"])
+def test_an_adjudication_copies_the_coverage_stamp_of_the_decision_it_rules_on(policy: Policy, action: str) -> None:
+    record = _record(report.adjudicated(_ruling(policy, _previous(coverage=1), action)))
+    assert record["kind"] == "carry" and record["coverage"] == 1
+
+
+@pytest.mark.parametrize("action", ["WITHDRAW", "MAINTAIN"])
+def test_an_adjudication_of_a_decision_without_coverage_does_not_acquire_it(policy: Policy, action: str) -> None:
+    assert "coverage" not in _record(report.adjudicated(_ruling(policy, _previous(), action)))

@@ -3,7 +3,6 @@ mode: enforce
 status_context: oracle-verdict
 findings_delivery: review
 bot_login: beta-oracle
-brief_max_bytes: 100000
 max_attempts: 5
 protocol:
   max_defects: 10

@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,11 +21,14 @@ from urllib.parse import urlparse
 from . import (
     adjudication,
     base_change,
+    capacity,
+    coverage,
     credentials,
     dedup,
     disk_scan,
     edits,
     findings,
+    gitdiff,
     github,
     omp_pin,
     processes,
@@ -47,11 +50,11 @@ from .absence import ERROR, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
 from .classify import Classification, classify_diff
-from .diff import binary_files, binary_notice_count, commentable_lines, select_files
-from .evidence import glob_match, is_binary_candidate
+from .diff import binary_files, binary_notice_count, commentable_lines, hunk_index, select_files
+from .evidence import is_binary_candidate
 from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
-from .policy import SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
+from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
 from .render import (
     UNOPENED_PR,
     OversizeError,
@@ -172,7 +175,6 @@ def _base_plan(policy: Policy, repo: str, pr: int | None, run_id: str) -> dict[s
         "decision": SKIP,
         "decision_reason": "",
         "max_defects": policy.protocol.max_defects,
-        "brief_max_bytes": policy.brief_max_bytes,
         "evidence_files": [],
         "evidence_exempt_paths": list(policy.evidence.exempt_paths),
         "evidence_protected_files": [],
@@ -598,6 +600,7 @@ def _load_ci_promotion(
             head_lock_text=head_lock_text,
             source_loader=promotion.default_source_loader(),
             is_ancestor=promotion.ci_ancestor_check(repo),
+            workflow_loader=promotion.ci_workflow_loader(repo),
             pr_paths=pr_paths,
             rules=policy.promotion,
             approval_comments=approval_comments,
@@ -717,13 +720,27 @@ def command_plan(args: argparse.Namespace) -> int:
     if found.error is not None:
         plan.update({"decision": HOLD, "decision_reason": found.error})
         return _finish_plan(out_dir, plan)
-    raw_diff = github.get_diff(repo, pr)
+    merge_base = github.merge_base(repo, plan["base_sha"], plan["head_sha"])
+    built: gitdiff.BuiltDiff | None = None
+    unbuildable: gitdiff.GitVersionError | None = None
+    if merge_base is not None:
+        try:
+            built = gitdiff.build(repo, merge_base, plan["head_sha"])
+            gitdiff.verify_paths(built, (path for item in files for path in item.paths))
+        except gitdiff.GitDiffError as exc:
+            print(f"oracle-verdict: diff: {exc}", file=sys.stderr)
+            built = None
+            unbuildable = exc if isinstance(exc, gitdiff.GitVersionError) else None
     if github.get_json(f"repos/{repo}/pulls/{pr}")["head"]["sha"] != plan["head_sha"]:
         plan["decision_reason"] = "the head moved while the plan read it; its own run reviews it"
         return _finish_plan(out_dir, plan)
-    full_diff = None if raw_diff is None else raw_diff.decode("utf-8", errors="replace")
-    complete = full_diff is not None and len(files) >= int(pull.get("changed_files") or 0)
-    states = _file_states(plan, files) if complete else None
+    if built is None or merge_base is None:
+        reason = gitdiff.UNBUILT_REASON if unbuildable is None else f"{gitdiff.UNBUILT_REASON}: {unbuildable}"
+        plan.update({"decision": HOLD, "decision_reason": reason})
+        return _finish_plan(out_dir, plan)
+    full_diff = built.text
+    complete = len(files) >= int(pull.get("changed_files") or 0)
+    states = _file_states(plan, files, merge_base) if complete else None
     base_changed_at, base_change_unreadable = _base_changed_at(repo, pr, event_name, event)
     owner_reset = retry.reset_applies(previous, plan["head_sha"], reset_at)
     promotion_bundle, promotion_hold = _load_ci_promotion(repo, plan, policy, files)
@@ -775,14 +792,6 @@ class RoundInputs:
     body: str = ""
     disputes: Sequence[Mapping[str, Any]] | None = None
     promotion: promotion.PromotionBundle | None = None
-
-
-def _upstream_exempt(staged_path: str, exempt_paths: Sequence[str]) -> bool:
-    for sub in ("new", "old"):
-        prefix = f"{promotion.STAGED_PROMOTION_DIR}/{sub}/"
-        if staged_path.startswith(prefix):
-            return any(glob_match(staged_path.removeprefix(prefix), pattern) for pattern in exempt_paths)
-    return False
 
 
 def _git_show_text(root: Path, ref: str, path: str) -> str:
@@ -838,6 +847,7 @@ def _resolve_promotion_bundle(
             head_lock_text=head_lock_text,
             source_loader=promotion.default_source_loader(local_git_root=local_root, local_consumer_repo=plan["repo"]),
             is_ancestor=promotion.local_ancestor_check(local_root),
+            workflow_loader=promotion.local_workflow_loader(local_root),
             pr_paths=pr_paths,
             rules=policy.promotion,
             approval_comments=None,
@@ -854,9 +864,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         return _finish_plan(out_dir, plan)
     is_promotion = active_promotion is not None
     upstream_files = list(active_promotion.changed_files) if active_promotion is not None else []
-    upstream_in_scope = {
-        item.path for item in upstream_files if not _upstream_exempt(item.path, policy.evidence.exempt_paths)
-    }
+    upstream_in_scope = set(active_promotion.required_paths) if active_promotion is not None else set()
     all_files = [*inputs.files, *upstream_files]
     in_scope = set(inputs.in_scope) | upstream_in_scope
     scoped = [
@@ -932,6 +940,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         matchers,
         promotion_record=active_promotion.record.to_json() if active_promotion is not None else None,
         upstream_protected=upstream_in_scope,
+        whole_files=set(active_promotion.whole_paths) if active_promotion is not None else set(),
     )
     plan["decision_reason"] = step.reason if reason is None else f"{step.reason}; {reason}"
     return _finish_plan(out_dir, plan)
@@ -1006,11 +1015,8 @@ def _carried_blocks(
     return selection.active_blocks(previous.pool_blocked_until, now, same_head=previous.head_sha == head_sha)
 
 
-def _file_states(plan: dict[str, Any], files: list[ChangedFile]) -> list[protocol.FileState] | None:
+def _file_states(plan: dict[str, Any], files: list[ChangedFile], merge_base: str) -> list[protocol.FileState] | None:
     repo = plan["repo"]
-    merge_base = github.merge_base(repo, plan["base_sha"], plan["head_sha"])
-    if merge_base is None:
-        return None
     before = github.tree_blobs(repo, merge_base)
     after = github.tree_blobs(repo, plan["head_sha"])
     if before is None or after is None:
@@ -1092,6 +1098,20 @@ def _opaque_in_diff(diff_text: str, is_protected: Callable[[str], bool]) -> bool
     )
 
 
+def _inline_complete(diff_text: str, evidence_files: Sequence[str]) -> bool:
+    index = hunk_index(diff_text)
+    return all(path in index for path in evidence_files)
+
+
+def _block_hints(
+    evidence_files: Sequence[str], request_text: str, plan_dir: Path, whole: Collection[str] = ()
+) -> dict[str, str]:
+    upstream = plan_dir / promotion.PROMOTION_PLAN_DIR / promotion.UPSTREAM_DIFF_NAME
+    upstream_text = upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else ""
+    staged = plan_dir / promotion.PROMOTION_PLAN_DIR
+    return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files, whole, staged)
+
+
 def _plan_review(
     plan: dict[str, Any],
     out_dir: Path,
@@ -1106,6 +1126,7 @@ def _plan_review(
     *,
     promotion_record: Mapping[str, Any] | None = None,
     upstream_protected: frozenset[str] | set[str] = frozenset(),
+    whole_files: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     latest = step.previous or {}
     follow_up = step.kind == protocol.FOLLOW_UP
@@ -1132,9 +1153,18 @@ def _plan_review(
     follow_up_reviewer = latest.get("reviewer") if follow_up and latest.get("reviewer") in names else None
     old_staged_prefix = f"{promotion.STAGED_PROMOTION_DIR}/old/"
     evidence_files = sorted(
-        item.path
-        for item in reviewed_now
-        if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
+        {
+            *(
+                item.path
+                for item in reviewed_now
+                if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
+            ),
+            *(
+                item.previous_path
+                for item in reviewed_now
+                if item.previous_path in whole_files and item.previous_path in in_scope
+            ),
+        }
     )
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
 
@@ -1143,28 +1173,51 @@ def _plan_review(
 
     listing_bytes = len(file_listing(changed).encode("utf-8"))
     diff_bytes = len((diff_text or "").encode("utf-8"))
-    if listing_bytes > policy.brief_max_bytes:
+    file_list_bytes = len(
+        file_list_block(
+            changed,
+            evidence_files,
+            evidence_files,
+            _block_hints(evidence_files, full_diff or "", out_dir, whole_files),
+        ).encode("utf-8")
+    )
+    if listing_bytes > BRIEF_MAX_BYTES:
         brief_mode = "oversize"
     elif (
         promotion_record is None
         and diff_text is not None
-        and diff_bytes <= policy.brief_max_bytes - DIFF_HEADROOM_BYTES
+        and diff_bytes <= BRIEF_MAX_BYTES - DIFF_HEADROOM_BYTES
+        and _inline_complete(diff_text, evidence_files)
         and not _opaque_in_diff(diff_text, _protected)
     ):
         brief_mode = "inline"
-    elif len(file_list_block(changed, evidence_files, evidence_files).encode("utf-8")) > policy.brief_max_bytes:
+    elif file_list_bytes > BRIEF_MAX_BYTES:
         brief_mode = "oversize"
     else:
         brief_mode = "file-list"
+    if brief_mode == "inline":
+        required, brief_bytes = 0, listing_bytes + diff_bytes
+    else:
+        required, brief_bytes = (
+            capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files),
+            file_list_bytes,
+        )
+    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes)
     evidence_set = set(evidence_files)
     plan.update(
         {
             "decision": REVIEW,
             "evidence_files": evidence_files,
+            "evidence_whole_files": sorted(set(whole_files) & evidence_set),
             "evidence_protected_files": sorted(
-                item.path
-                for item in reviewed_now
-                if item.path in evidence_set and any(_protected(path) for path in item.paths)
+                {
+                    *(
+                        item.path
+                        for item in reviewed_now
+                        if item.path in evidence_set and any(_protected(path) for path in item.paths)
+                    ),
+                    *(path for path in whole_files if path in evidence_set),
+                }
             ),
             "evidence_exempt_paths": list(policy.evidence.exempt_paths),
             "binary_files": sorted(binary_files(full_diff or "")),
@@ -1187,6 +1240,7 @@ def _plan_review(
             "diff_inline": diff_text if brief_mode == "inline" else None,
             "brief_mode": brief_mode,
             "scope": "changed" if partial else "full",
+            "coverage": coverage.VERSION,
             "reviewed_head": latest["head_sha"] if partial else None,
             "gate_path_list": list(policy.classifier.gate_paths),
             "pool_blocked_until": {pool: block.to_json() for pool, block in pool_blocks.items()},
@@ -1311,9 +1365,21 @@ def _assemble_prompt(
         for item in plan.get("reviewed_files", [])
     ]
     file_list = plan["brief_mode"] == "file-list"
-    marked = unread_required(unread, plan.get("evidence_files", [])) if file_list else []
+    evidence_files = plan.get("evidence_files", [])
+    marked = unread_required(unread, evidence_files) if file_list else []
+    diff_file = plan_dir / DIFF_FILE
+    hints = (
+        _block_hints(
+            evidence_files,
+            diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else "",
+            plan_dir,
+            plan.get("evidence_whole_files", ()),
+        )
+        if marked
+        else {}
+    )
     files_block = (
-        f"Changed files:\n{file_list_block(reviewed, plan.get('evidence_files', []), marked)}"
+        f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints)}"
         if file_list
         else f"Changed files:\n{file_listing(reviewed)}\n"
     )
@@ -1321,9 +1387,11 @@ def _assemble_prompt(
         files_block = (
             "Theseus promotion review: materialized upstream source trees and unified diff are staged in the working"
             f" directory under {promotion.STAGED_PROMOTION_DIR}/old/, {promotion.STAGED_PROMOTION_DIR}/new/, and"
-            f" {promotion.STAGED_PROMOTION_DIR}/{promotion.UPSTREAM_DIFF_NAME}. Read every required staged file"
-            f" ({promotion.STAGED_PROMOTION_DIR}/new/ for added/modified files and {promotion.STAGED_PROMOTION_DIR}/old/"
-            f" for removed files) directly.\n\n{files_block}"
+            f" {promotion.STAGED_PROMOTION_DIR}/{promotion.UPSTREAM_DIFF_NAME}. Only the files this promotion"
+            " executes are required reads: see every changed hunk of each required staged file in the upstream diff,"
+            " or, for lines a file only adds, in the staged file itself"
+            f" ({promotion.STAGED_PROMOTION_DIR}/new/ for added/modified files, {promotion.STAGED_PROMOTION_DIR}/old/"
+            f" for removed files, which are also seen by reading them whole).\n\n{files_block}"
         )
     if plan.get("scope") == "changed":
         unchanged = "\n".join(plan.get("unchanged_files", []))
@@ -1386,7 +1454,7 @@ def _assemble_prompt(
         files_block=files_block,
         diff_text=diff_text,
         diff_path=staged,
-        max_bytes=int(plan["brief_max_bytes"]),
+        max_bytes=BRIEF_MAX_BYTES,
     )
 
 
@@ -2437,9 +2505,11 @@ def _parser() -> argparse.ArgumentParser:
     install_omp = commands.add_parser("install-omp")
     install_omp.add_argument("--policy", required=True)
     install_omp.set_defaults(handler=omp_pin.command_install)
-    from . import driver
+    from . import audit, driver, preflight
 
+    audit.register(commands)
     driver.register(commands)
+    preflight.register(commands)
     _register_passthrough(commands)
     return parser
 

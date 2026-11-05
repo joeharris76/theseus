@@ -27,6 +27,7 @@ from . import (
     driver,
     edits,
     findings,
+    gitdiff,
     github,
     isolation,
     protocol,
@@ -139,13 +140,6 @@ class Reporter:
 def state_dir() -> Path:
     configured = os.environ.get(LOCAL_STATE_OVERRIDE_ENV, "").strip()
     return Path(configured) if configured else Path.home() / ".cache" / "theseus" / "local-oracle"
-
-
-def _git_bytes(root: Path, *args: str) -> bytes:
-    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
-    if result.returncode != 0:
-        raise Unavailable(f"git {args[0]} failed: {result.stderr.decode('utf-8', errors='replace').strip()[:300]}")
-    return result.stdout
 
 
 def _git(root: Path, *args: str) -> str:
@@ -379,9 +373,10 @@ class LocalEnvironment:
                 return cli.adjudicate_round(out_dir, plan, policy, found, ruling, None)
         except findings.RecordError as exc:
             raise Unavailable(str(exc)) from exc
-        full_diff = _git_bytes(
-            self.root, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base, self.head
-        ).decode("utf-8", errors="replace")
+        try:
+            full_diff = gitdiff.local_diff(self.root, base, self.head)
+        except gitdiff.GitDiffError as exc:
+            raise Unavailable(str(exc)) from exc
         blocks = selection.active_blocks(
             _load_pool_blocks(self.state / POOL_BLOCKS_FILE), datetime.now(UTC), same_head=False
         )
@@ -989,6 +984,7 @@ def _fresh_review(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | 
     _stage_workspace(run.root, run.head, layout.workspace)
     _scan_clean(run, "before the reviewer runs")
     _install_harness(run)
+    plan = _read(layout.plan_file)
     run.phase("isolation")
     _attempt_loop(run, plan)
     _scan_clean(run, "after the reviewer exits")

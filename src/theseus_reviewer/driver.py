@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import cli, github, isolation, omp_pin
+from . import capacity, cli, github, isolation, omp_pin
 from .policy import PolicyError, load_policy
 
 STATE_FILE = Path("state") / github.STATE_FILE
@@ -191,6 +191,10 @@ def _scan(env: Environment) -> int:
     )
 
 
+def plan_only(env: Environment, args: argparse.Namespace) -> int:
+    return env.plan()
+
+
 def prepare(env: Environment, args: argparse.Namespace) -> int:
     layout = env.layout
     code = env.plan()
@@ -222,6 +226,21 @@ def _reported_version(binary: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _record_capacity(
+    env: Environment, binary: Path, reader: Callable[[Path, str], Mapping[str, int]] = capacity.read_catalog
+) -> None:
+    plan_file = env.layout.plan_file
+    try:
+        plan = _read(plan_file)
+        config_text = Path(plan["omp_config"]).read_text(encoding="utf-8")
+        held = capacity.measure(plan, config_text, lambda: reader(binary, config_text))
+    except (OSError, ValueError, KeyError, TypeError, capacity.CatalogError) as exc:
+        print(f"oracle-verdict: reviewer capacity is unknown ({exc}); assuming {capacity.UNKNOWN_CAPACITY_TOKENS}")
+        return
+    cli._write_json(plan_file, {**plan, capacity.CAPACITY_KEY: held})
+    cli._summary(f"reviewer capacity: {json.dumps(held, sort_keys=True)}")
+
+
 def harness(env: Environment, args: argparse.Namespace) -> int:
     try:
         binary = omp_pin.install(omp_pin.pin_from_text(env.policy.read_text(encoding="utf-8")))
@@ -239,6 +258,7 @@ def harness(env: Environment, args: argparse.Namespace) -> int:
         with open(target, "a", encoding="utf-8") as handle:
             handle.write(f"{omp_pin.BINARY_ENV}={binary}\n")
     cli._output({"state": cli.OMP_INSTALLED})
+    _record_capacity(env, binary)
     return 0
 
 
@@ -369,6 +389,7 @@ def sweep(env: Environment, args: argparse.Namespace) -> int:
 
 Phase = Callable[[Environment, argparse.Namespace], int]
 PHASES: dict[str, Phase] = {
+    "plan": plan_only,
     "prepare": prepare,
     "harness": harness,
     "scan": scan,

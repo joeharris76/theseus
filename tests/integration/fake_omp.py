@@ -175,6 +175,39 @@ def _answer_message(message: dict[str, Any], text: str) -> dict[str, Any]:
     return {**message, "content": [*content, {"type": "text", "text": text}]}
 
 
+RANGED = re.compile(r"(?P<file>.+):(?P<start>\d+)-(?P<end>\d+)")
+READ_CAP = 300
+
+
+def _read_result(target: str, text: str) -> tuple[str, dict[str, Any]]:
+    ranged = RANGED.fullmatch(target)
+    file = ranged["file"] if ranged else target
+    lines = text.splitlines()
+    total = len(lines)
+    details: dict[str, Any] = {"totalLines": total, "rowPrefixes": False, "fileSize": len(text.encode("utf-8"))}
+    details["meta"] = {"source": {"type": "path", "value": file}, "pagedSource": True}
+    if ranged:
+        first = max(1, int(ranged["start"]))
+        last = min(total, int(ranged["end"]))
+    else:
+        first, last = 1, min(total, READ_CAP)
+    shown = lines[first - 1 : last]
+    body = "\n".join(shown)
+    details["displayContent"] = {"text": body, "startLine": first, "lineNumbers": list(range(first, last + 1))}
+    if not ranged and total > READ_CAP:
+        details["truncation"] = {
+            "truncated": True,
+            "truncatedBy": "lines",
+            "totalLines": total,
+            "outputLines": len(shown),
+            "lastLinePartial": False,
+            "firstLineExceedsLimit": False,
+        }
+        details["meta"]["truncation"] = {"shownRange": {"start": first, "end": last}}
+        body += f"\n\n[Showing lines {first}-{last} of {total}. Use :{last + 1} to continue]"
+    return body, details
+
+
 def _extra_reads(events: list[dict[str, Any]], workspace: str, paths: list[str]) -> list[dict[str, Any]]:
     first = next(
         index
@@ -195,14 +228,17 @@ def _extra_reads(events: list[dict[str, Any]], workspace: str, paths: list[str])
     out: list[dict[str, Any]] = []
     for number, path in enumerate(paths):
         target = f"{workspace}/{path}"
-        text = Path(target).read_text(encoding="utf-8", errors="replace")
+        ranged = RANGED.fullmatch(target)
+        text = Path(ranged["file"] if ranged else target).read_text(encoding="utf-8", errors="replace")
+        body, details = _read_result(target, text)
         clone = json.loads(json.dumps(turn).replace(old_id, f"toolu_extra_{number}").replace(old_path, target))
         for event in clone:
             if event["type"] == "tool_execution_end":
-                event["result"]["content"] = [{"type": "text", "text": text}]
-                event["result"]["details"]["meta"]["source"]["value"] = target
+                event["result"]["content"] = [{"type": "text", "text": body}]
+                event["result"]["details"] = details
             elif event["type"] in ("message_start", "message_end") and event["message"].get("role") == "toolResult":
-                event["message"]["content"] = [{"type": "text", "text": text}]
+                event["message"]["content"] = [{"type": "text", "text": body}]
+                event["message"]["details"] = details
         out.extend(clone)
     return out
 
@@ -245,8 +281,29 @@ def replay(
     return out
 
 
+CATALOG = (
+    ("openai-codex/gpt-6-luna", 400_000, 64_000),
+    ("anthropic/claude-sonnet-5-5", 1_000_000, 64_000),
+    ("anthropic/claude-opus-5-5", 1_000_000, 64_000),
+    ("anthropic/claude-fable-5", 1_000_000, 64_000),
+    ("muse-code/muse-spark-1.3-contributor", 400_000, 32_000),
+    ("google-antigravity/gemini-3.8-flash", 1_000_000, 64_000),
+)
+
+
+def _catalog() -> str:
+    listed = [
+        {"selector": selector, "provider": selector.split("/")[0], "contextWindow": window, "maxTokens": limit}
+        for selector, window, limit in CATALOG
+    ]
+    return json.dumps({"models": listed})
+
+
 def main(argv: list[str]) -> int:
     home = Path(__file__).resolve().parent
+    if argv[:1] == ["models"]:
+        print(_catalog())
+        return 0
     script = _script(home)
     if argv[:1] == ["--version"]:
         print(script["version"])

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import adjudication, promotion
+from .coverage import Returned
 from .edits import EDITED_REASON, EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .policy import SEVERITIES
@@ -82,7 +83,7 @@ RECORD_KEYS = frozenset(
     }
 )
 OPTIONAL_RECORD_KEYS = frozenset(
-    {"patch_map", "forced", "run_uuid", "escalated", "adjudicated", "disputed", "promotion"}
+    {"patch_map", "forced", "run_uuid", "escalated", "adjudicated", "disputed", "promotion", "coverage"}
 )
 DEFECT_KEYS = ("id", "severity", "file", "line", "end_line", "title")
 
@@ -295,6 +296,7 @@ def _valid_record(record: Any) -> bool:
         and all(_valid_defect(item) for item in record["open_defects"])
         and (record.get("patch_map") is None or _valid_patches(record["patch_map"]))
         and ("promotion" not in record or promotion.valid_promotion_record(record["promotion"]))
+        and ("coverage" not in record or (type(record["coverage"]) is int and record["coverage"] >= 1))
     )
 
 
@@ -483,6 +485,10 @@ def _decided_again(latest: Mapping[str, Any], head_sha: str, manual: bool, *, al
     )
 
 
+def _legacy_clearance(record: Mapping[str, Any]) -> bool:
+    return record["decision"] in (SHIP, SHIP_WITH_FIXES) and not record.get("coverage")
+
+
 def plan_round(
     found: History,
     *,
@@ -526,7 +532,12 @@ def plan_round(
         promotion_bound = is_promotion or latest.get("promotion") is not None
         if not stale:
             return _decided_again(latest, head_sha, manual, allow_carry=not promotion_bound)
-        if latest["patch_digest"] == digest and not digest.startswith(UNREAD_DIGEST) and not promotion_bound:
+        if (
+            latest["patch_digest"] == digest
+            and not digest.startswith(UNREAD_DIGEST)
+            and not promotion_bound
+            and not _legacy_clearance(latest)
+        ):
             return Round(
                 CARRY,
                 f"the base changed after the {LABELS[latest['decision']]} decision on head {head_sha}",
@@ -561,6 +572,14 @@ def plan_round(
                 ),
             )
         if not promotion_bound:
+            if _legacy_clearance(latest):
+                return Round(
+                    FIRST,
+                    f"the {LABELS[latest['decision']]} decision on head {latest['head_sha']} has no hunk coverage",
+                    restart,
+                    1,
+                    latest,
+                )
             return Round(
                 CARRY,
                 f"the patch is unchanged since head {latest['head_sha']}",
@@ -586,7 +605,11 @@ def plan_round(
         )
     if latest["decision"] == DO_NOT_SHIP:
         return Round(FIRST, "the patch changed after DO NOT SHIP", restart, 1, latest)
-    changed = changed_paths(latest.get("patch_map"), patches, paths) or frozenset(paths)
+    changed = (
+        (changed_paths(latest.get("patch_map"), patches, paths) or frozenset(paths))
+        if latest.get("coverage")
+        else frozenset(paths)
+    )
     return Round(
         FOLLOW_UP,
         f"the patch changed after {LABELS[latest['decision']]}",
@@ -645,7 +668,7 @@ def judge(
     changed: Iterable[str] | None = None,
     rejudge_fixed: bool = False,
     workspace: Path | str | None = None,
-    read: frozenset[str] | None = None,
+    read: Returned | None = None,
     claimed: frozenset[str] = frozenset(),
 ) -> Judgement:
     if verdict.status != COMPLETE:
@@ -724,7 +747,7 @@ def judge_planned(
     verdict: Verdict,
     plan: Mapping[str, Any],
     workspace: Path | str | None = None,
-    read: frozenset[str] | None = None,
+    read: Returned | None = None,
 ) -> Judgement:
     rules = plan.get("protocol") or {}
     changed = rules.get("changed") if rules.get("kind") == FOLLOW_UP else None
