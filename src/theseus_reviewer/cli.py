@@ -722,6 +722,7 @@ def command_plan(args: argparse.Namespace) -> int:
         return _finish_plan(out_dir, plan)
     merge_base = github.merge_base(repo, plan["base_sha"], plan["head_sha"])
     built: gitdiff.BuiltDiff | None = None
+    unbuildable: gitdiff.GitVersionError | None = None
     if merge_base is not None:
         try:
             built = gitdiff.build(repo, merge_base, plan["head_sha"])
@@ -729,11 +730,13 @@ def command_plan(args: argparse.Namespace) -> int:
         except gitdiff.GitDiffError as exc:
             print(f"oracle-verdict: diff: {exc}", file=sys.stderr)
             built = None
+            unbuildable = exc if isinstance(exc, gitdiff.GitVersionError) else None
     if github.get_json(f"repos/{repo}/pulls/{pr}")["head"]["sha"] != plan["head_sha"]:
         plan["decision_reason"] = "the head moved while the plan read it; its own run reviews it"
         return _finish_plan(out_dir, plan)
     if built is None or merge_base is None:
-        plan.update({"decision": HOLD, "decision_reason": gitdiff.UNBUILT_REASON})
+        reason = gitdiff.UNBUILT_REASON if unbuildable is None else f"{gitdiff.UNBUILT_REASON}: {unbuildable}"
+        plan.update({"decision": HOLD, "decision_reason": reason})
         return _finish_plan(out_dir, plan)
     full_diff = built.text
     complete = len(files) >= int(pull.get("changed_files") or 0)

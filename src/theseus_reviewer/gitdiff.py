@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import functools
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,9 +18,15 @@ FETCH_FLAGS = ("--no-tags", "--depth=1", "--filter=blob:none")
 DEFAULT_SERVER = "https://github.com"
 TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN")
 UNBUILT_REASON = "the pull request diff could not be built"
+MIN_GIT_VERSION = (2, 40)
+MIN_GIT_VERSION_TEXT = "2.40"
 
 
 class GitDiffError(RuntimeError):
+    pass
+
+
+class GitVersionError(GitDiffError):
     pass
 
 
@@ -28,11 +36,36 @@ class BuiltDiff:
     paths: frozenset[str]
 
 
+def _version_text() -> str:
+    try:
+        result = subprocess.run(["git", "--version"], capture_output=True, check=False)
+    except OSError as exc:
+        raise GitVersionError(f"git could not run: {exc}") from exc
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+@functools.cache
+def _probed_version() -> str:
+    return _version_text()
+
+
+def require_attr_source() -> None:
+    match = re.match(r"git version (\d+)\.(\d+)", _probed_version())
+    if match is None:
+        raise GitVersionError(
+            f"the git version could not be determined; git {MIN_GIT_VERSION_TEXT} or newer is required"
+        )
+    if (int(match.group(1)), int(match.group(2))) < MIN_GIT_VERSION:
+        raise GitVersionError(f"git {MIN_GIT_VERSION_TEXT} or newer is required ({_probed_version()})")
+
+
 def diff_arguments(base: str, head: str) -> list[str]:
+    require_attr_source()
     return [*GLOBAL_FLAGS, "diff", *DIFF_FLAGS, base, head]
 
 
 def name_status_arguments(base: str, head: str) -> list[str]:
+    require_attr_source()
     return [*GLOBAL_FLAGS, "diff", "--name-status", "-z", "-M", base, head]
 
 
@@ -78,6 +111,7 @@ def _git_environment(server: str, token: str) -> dict[str, str]:
 
 
 def build(repo: str, merge_base: str, head: str, *, remote: str | None = None, token: str | None = None) -> BuiltDiff:
+    require_attr_source()
     server = os.environ.get("GITHUB_SERVER_URL", DEFAULT_SERVER)
     url = remote if remote is not None else f"{server.rstrip('/')}/{repo}.git"
     secret = token if token is not None else next((os.environ[name] for name in TOKEN_ENV if os.environ.get(name)), "")

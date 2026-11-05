@@ -1460,3 +1460,28 @@ def test_lone_carriage_returns_do_not_add_lines_to_a_read(tmp_path: Path) -> Non
     run = trace("omp", _events("read", "cr.py", _read_details(1, 3, total=3)))
     assert returned(run, tmp_path) == {"cr.py": ((1, 3),)}
     assert coverage._line_count(tmp_path, "cr.py") == 3
+
+
+def test_a_raw_read_of_the_hinted_span_covers_a_hunk_with_a_cut_line(tmp_path: Path) -> None:
+    wide = "x" * 900
+    diff = f"diff --git a/w.py b/w.py\n--- a/w.py\n+++ b/w.py\n@@ -1 +1 @@\n-a\n+{wide}\n"
+    _staged(tmp_path, diff)
+    (hunk,) = hunk_index(diff)["w.py"]
+    hint = coverage.block_hints(["w.py"], diff, "", ["w.py"])["w.py"]
+    pasted = f"{STAGED_DIFF_NAME}:raw:{hunk.block_start}-{hunk.block_end}"
+    assert hint == f"(read with :raw as {pasted})"
+    cut = _read_details(1, hunk.block_end, total=hunk.block_end)
+    cut["meta"] = {
+        "limits": {
+            "columnTruncated": {
+                "maxColumn": 768,
+                "unit": "chars",
+                "lines": {"first": hunk.block_end, "last": hunk.block_end},
+            }
+        }
+    }
+    plain = trace("omp", _events("read", STAGED_DIFF_NAME, cut))
+    assert not _report(tmp_path, ["w.py"], plain).complete
+    raw = trace("omp", _events("read", pasted, _read_details(hunk.block_start, hunk.block_end)))
+    report = _report(tmp_path, ["w.py"], raw)
+    assert report.complete and (report.total, report.covered) == (1, 1)

@@ -21,6 +21,7 @@ _SHOWN_FILES = 4
 _REASON_LIMIT = 600
 _BINARY_PROBE = 8000
 _HINT_SPANS = 6
+_MAX_COLUMNS = 768
 
 
 @dataclass(frozen=True)
@@ -146,10 +147,17 @@ def targets(plan: Mapping[str, Any], workspace: Path) -> dict[str, Target]:
     )
 
 
+def cut_lines(text: str) -> tuple[int, ...]:
+    return tuple(
+        number for number, line in enumerate(text.split("\n"), 1) if len(line.encode("utf-16-le")) > _MAX_COLUMNS * 2
+    )
+
+
 def block_hints(
     evidence_files: Iterable[str], request_text: str, upstream_text: str, paths: Iterable[str]
 ) -> dict[str, str]:
     found = build_targets(evidence_files, request_text, STAGED_DIFF_NAME, upstream_text)
+    cut = {STAGED_DIFF_NAME: cut_lines(request_text), UPSTREAM_DIFF: cut_lines(upstream_text)}
     hints: dict[str, str] = {}
     for path in paths:
         target = found.get(path)
@@ -158,9 +166,22 @@ def block_hints(
         if target.opaque:
             hints[path] = "(read the whole file)"
         elif target.hunks and target.diff is not None:
-            shown = ", ".join(_span_text(item.block_start, item.block_end) for item in target.hunks[:_HINT_SPANS])
+            marks = cut[target.diff]
+            plain: list[str] = []
+            raw: list[str] = []
+            for hunk in target.hunks[:_HINT_SPANS]:
+                span = _span_text(hunk.block_start, hunk.block_end)
+                if marks and marks[0] <= hunk.block_end and marks[-1] >= hunk.block_start:
+                    raw.append(f"{target.diff}:raw:{hunk.block_start}-{hunk.block_end}")
+                else:
+                    plain.append(span)
+            parts = []
+            if plain:
+                parts.append(f"{target.diff} lines {', '.join(plain)}")
+            if raw:
+                parts.append(f"read with :raw as {', '.join(raw)}")
             more = f" and {len(target.hunks) - _HINT_SPANS} more" if len(target.hunks) > _HINT_SPANS else ""
-            hints[path] = f"({target.diff} lines {shown}{more})"
+            hints[path] = f"({'; '.join(parts)}{more})"
     return hints
 
 

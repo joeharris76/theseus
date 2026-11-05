@@ -46,6 +46,8 @@ A branch or tag would let the workflow change under the consumer, so every refer
 
 The organisation Actions allow-list must permit `joeharris76/theseus/.github/workflows/*@<sha>` and the four pinned actions the callees use (`actions/checkout`, `actions/create-github-app-token`, `actions/upload-artifact`, `tailscale/github-action`).
 
+The `prepare` step builds the pull request diff with git and needs git 2.40 or newer on the runner. On an older or unparsable git the plan holds with "the pull request diff could not be built" followed by the required version.
+
 ## Trust chain: two pins, two processes
 
 Neither workflow installs `latest` or reads a lock from a pull request head.

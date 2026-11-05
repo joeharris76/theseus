@@ -248,7 +248,8 @@ REQUIRED_READS_HEADER = (
     " no line range returns only its first 300 lines, so use ranges such as :1-400. A hunk that only adds lines"
     " is also seen when you read those lines of the file itself. Only the lines a read actually returns count; a"
     " grep, a read of several"
-    " paths in one call and a summarized read count for nothing. One-line and low-priority files are included."
+    " paths in one call and a summarized read count for nothing. Lines over 768 columns are cut by a plain read"
+    " and do not count; read a hunk that holds one with :raw, as its hint says. One-line and low-priority files are included."
     " A shipping verdict, with or without fixes, that has not seen every changed hunk of every one of them is"
     " rejected as incomplete.\n"
 )

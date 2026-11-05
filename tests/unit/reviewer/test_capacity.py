@@ -87,6 +87,16 @@ def test_required_bytes_counts_whole_removed_promotion_files_and_staged_upstream
     assert total == 500 + len("@@ -1 +1 @@\n-x\n+y\n")
 
 
+def test_required_bytes_frames_staged_upstream_hunks_on_newlines_only(tmp_path: Path) -> None:
+    root = tmp_path / promotion.PROMOTION_PLAN_DIR
+    root.mkdir(parents=True)
+    hunk = "@@ -1 +1 @@\n-a\rb\n+c\n"
+    upstream = f"diff --git a/kept.py b/kept.py\n--- a/kept.py\n+++ b/kept.py\n{hunk}"
+    (root / promotion.UPSTREAM_DIFF_NAME).write_bytes(upstream.encode("utf-8"))
+    staged = promotion.STAGED_PROMOTION_DIR
+    assert capacity.required_bytes([f"{staged}/new/kept.py"], "", tmp_path) == len(hunk.encode("utf-8"))
+
+
 def test_capacity_uses_fallback_chain_minimum() -> None:
     assert capacity.reviewer_capacity("@review", CONFIG, CATALOG) == 372_000
     assert capacity.reviewer_capacity("@smol", CONFIG, CATALOG) == 144_000

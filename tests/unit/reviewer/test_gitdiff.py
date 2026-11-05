@@ -134,3 +134,56 @@ def test_head_tree_attributes_never_change_the_built_diff(tmp_path: Path, attrib
     hosted = gitdiff.build("owner/name", base, head, remote=hostile.as_uri(), token="")
     assert _section(local_text, "mod.py") == expected
     assert _section(hosted.text, "mod.py") == expected
+
+
+@pytest.mark.parametrize(
+    ("banner", "accepted"),
+    [
+        ("git version 2.39.3 (Apple Git-146)", False),
+        ("git version 2.39.9", False),
+        ("git version 2.40.0", True),
+        ("git version 2.54.0 (Apple Git-157)", True),
+        ("git version 3.0.1", True),
+        ("git version 1.9.5", False),
+        ("not git output", False),
+        ("", False),
+    ],
+)
+def test_diff_arguments_require_attr_source_support_and_never_drop_the_flag(
+    monkeypatch: pytest.MonkeyPatch, banner: str, accepted: bool
+) -> None:
+    monkeypatch.setattr(gitdiff, "_probed_version", lambda: banner)
+    if accepted:
+        for arguments in (gitdiff.diff_arguments("a", "b"), gitdiff.name_status_arguments("a", "b")):
+            assert arguments[0] == f"--attr-source={gitdiff.EMPTY_TREE}"
+        return
+    for call in (gitdiff.diff_arguments, gitdiff.name_status_arguments):
+        with pytest.raises(gitdiff.GitVersionError, match="2.40"):
+            call("a", "b")
+
+
+def test_an_old_git_stops_both_builders_before_any_command_runs(
+    monkeypatch: pytest.MonkeyPatch, remote: tuple[Path, str, str]
+) -> None:
+    repo, base, head = remote
+    monkeypatch.setattr(gitdiff, "_probed_version", lambda: "git version 2.39.3 (Apple Git-146)")
+    ran: list[list[str]] = []
+    monkeypatch.setattr(gitdiff.subprocess, "run", lambda argv, **kwargs: ran.append(argv))
+    with pytest.raises(gitdiff.GitVersionError):
+        gitdiff.local_diff(repo, base, head)
+    with pytest.raises(gitdiff.GitVersionError):
+        gitdiff.build("owner/name", base, head, remote=repo.as_uri(), token="")
+    assert ran == []
+
+
+def test_the_git_version_is_probed_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(gitdiff, "_version_text", lambda: (calls.append(1), "git version 2.54.0")[1])
+    gitdiff._probed_version.cache_clear()
+    try:
+        for _ in range(3):
+            gitdiff.diff_arguments("a", "b")
+            gitdiff.name_status_arguments("a", "b")
+        assert calls == [1]
+    finally:
+        gitdiff._probed_version.cache_clear()

@@ -2040,6 +2040,22 @@ def test_plan_holds_when_diff_cannot_be_built(monkeypatch: pytest.MonkeyPatch, t
     assert plan["chain"] == [] and not (tmp_path / "plan" / "diff.patch").exists()
 
 
+def test_plan_hold_names_the_required_git_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeGitHub(_pull(), SOUNDNESS)
+    fake.install(monkeypatch)
+
+    def old_git(repo: str, merge_base: str, head: str) -> gitdiff.BuiltDiff:
+        raise gitdiff.GitVersionError("git 2.40 or newer is required (git version 2.39.3)")
+
+    monkeypatch.setattr(gitdiff, "build", old_git)
+    output = _env(monkeypatch, tmp_path, "pull_request_target", {"action": "synchronize"}, "refs/heads/develop")
+    out_dir = tmp_path / "plan"
+    assert cli.main(["plan", "--policy", str(POLICY_PATH), "--pr", "7", "--out", str(out_dir)]) == 0
+    plan = json.loads((out_dir / "plan.json").read_text(encoding="utf-8"))
+    assert "decision=hold" in output.read_text(encoding="utf-8")
+    assert plan["decision_reason"].startswith("the pull request diff could not be built: git 2.40 or newer")
+
+
 def test_plan_holds_when_the_merge_base_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = FakeGitHub(_pull(), SOUNDNESS)
     fake.merge_base = None
