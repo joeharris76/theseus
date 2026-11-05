@@ -567,7 +567,12 @@ def test_a_secret_bearing_job_fails_loudly_first_when_the_app_secrets_are_empty(
     )
     assert result.returncode == 1
     assert result.stdout.startswith("::error::")
-    assert "environment oracle" in result.stdout and "secrets: inherit" in result.stdout
+    assert "environment oracle" in result.stdout
+    declared = document["on"]["workflow_call"]["secrets"]
+    assert all(secret in result.stdout for secret in declared)
+    assert "inherit" not in result.stdout
+    assert "map each secret by name" in result.stdout
+    assert "non-empty values" in result.stdout
 
 
 def test_the_gate_no_longer_has_a_quiet_path_without_the_app() -> None:
