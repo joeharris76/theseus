@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import cli, coverage, promotion, protocol
+from theseus_reviewer import cli, coverage, evidence, promotion, protocol, runner
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.matchers import load_matchers
 from theseus_reviewer.policy import load_policy
@@ -143,3 +143,26 @@ def test_plan_lists_the_staged_old_file_of_a_move_out_and_marks_whole_files(
     assert plan["decision"] == "review"
     assert staged in plan["evidence_files"]
     assert plan["evidence_whole_files"] == [staged]
+    assert staged in plan["evidence_protected_files"]
+    required = evidence.required_files(
+        plan["evidence_files"], tmp_path, [], ["**/*.py", "**/helper.py"], runner._plan_protected(plan)
+    )
+    assert staged in required
+
+
+def test_whole_file_hint_names_a_raw_read_when_lines_are_cut(tmp_path: Path) -> None:
+    long_body = b"short\n" + b"x" * 900 + b"\nlast\n"
+    old = {INIT: b"x\n", "tests/helper.py": long_body}
+    new = {INIT: b"x\n", f"{PACKAGE}/helper.py": long_body}
+    plain_old = {INIT: b"x\n", "tests/helper.py": BODY}
+    plain_new = {INIT: b"x\n", f"{PACKAGE}/helper.py": BODY}
+    for before, after, expected in ((old, new, True), (plain_old, plain_new, False)):
+        root = tmp_path / str(expected)
+        (_, diff_text), required, whole = _requirements(before, after)
+        _workspace(root, before, after, diff_text)
+        staged_dir = root / promotion.STAGED_PROMOTION_DIR
+        hints = coverage.block_hints(sorted(required), "", diff_text, sorted(required), whole, staged_dir)
+        if expected:
+            assert hints[NEW_HELPER].endswith(f"read with :raw as {NEW_HELPER}:raw:1-3)")
+        else:
+            assert hints[NEW_HELPER] == "(read the whole file)"

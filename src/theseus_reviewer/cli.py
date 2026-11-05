@@ -1108,7 +1108,8 @@ def _block_hints(
 ) -> dict[str, str]:
     upstream = plan_dir / promotion.PROMOTION_PLAN_DIR / promotion.UPSTREAM_DIFF_NAME
     upstream_text = upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else ""
-    return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files, whole)
+    staged = plan_dir / promotion.PROMOTION_PLAN_DIR
+    return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files, whole, staged)
 
 
 def _plan_review(
@@ -1209,9 +1210,14 @@ def _plan_review(
             "evidence_files": evidence_files,
             "evidence_whole_files": sorted(set(whole_files) & evidence_set),
             "evidence_protected_files": sorted(
-                item.path
-                for item in reviewed_now
-                if item.path in evidence_set and any(_protected(path) for path in item.paths)
+                {
+                    *(
+                        item.path
+                        for item in reviewed_now
+                        if item.path in evidence_set and any(_protected(path) for path in item.paths)
+                    ),
+                    *(path for path in whole_files if path in evidence_set),
+                }
             ),
             "evidence_exempt_paths": list(policy.evidence.exempt_paths),
             "binary_files": sorted(binary_files(full_diff or "")),

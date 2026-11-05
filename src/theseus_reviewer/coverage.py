@@ -164,12 +164,22 @@ def cut_lines(text: str) -> tuple[int, ...]:
     )
 
 
+def _whole_hint(path: str, whole: Collection[str], staged: Path | None) -> str:
+    if staged is not None and path in whole and path.startswith((_NEW_PREFIX, _OLD_PREFIX)):
+        text = _text(staged, path[len(STAGED_PROMOTION_DIR) + 1 :])
+        if text is not None and cut_lines(text):
+            count = _line_count(staged, path[len(STAGED_PROMOTION_DIR) + 1 :]) or 1
+            return f"(read the whole file; lines past {_MAX_COLUMNS} columns are cut, so read with :raw as {path}:raw:1-{count})"
+    return "(read the whole file)"
+
+
 def block_hints(
     evidence_files: Iterable[str],
     request_text: str,
     upstream_text: str,
     paths: Iterable[str],
     whole: Collection[str] = (),
+    staged: Path | None = None,
 ) -> dict[str, str]:
     found = build_targets(evidence_files, request_text, STAGED_DIFF_NAME, upstream_text, whole)
     cut = {STAGED_DIFF_NAME: cut_lines(request_text), UPSTREAM_DIFF: cut_lines(upstream_text)}
@@ -179,7 +189,7 @@ def block_hints(
         if target is None or not target.listed:
             continue
         if target.opaque:
-            hints[path] = "(read the whole file)"
+            hints[path] = _whole_hint(path, whole, staged)
         elif target.hunks and target.diff is not None:
             marks = cut[target.diff]
             plain: list[str] = []
