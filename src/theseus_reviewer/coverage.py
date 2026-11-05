@@ -99,7 +99,7 @@ def _text(workspace: Path, name: str) -> str | None:
     if not target.is_file() or target.is_symlink():
         return None
     try:
-        return target.read_text(encoding="utf-8", errors="replace")
+        return target.read_bytes().decode("utf-8", "replace")
     except OSError:
         return None
 

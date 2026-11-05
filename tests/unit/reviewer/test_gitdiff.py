@@ -91,3 +91,46 @@ def test_token_travels_only_in_the_environment(monkeypatch: pytest.MonkeyPatch, 
 def test_name_status_paths_include_both_sides_of_a_rename() -> None:
     listing = "M\0a.py\0R090\0old.py\0new.py\0D\0gone.py\0A\0added.py\0"
     assert gitdiff.name_status_paths(listing) == {"a.py", "old.py", "new.py", "gone.py", "added.py"}
+
+
+HOSTILE_ATTRIBUTES = [
+    "* -diff\n",
+    "*.py diff=evil\n[diff]\n",
+    "* binary\n",
+    "* diff=nonexistent-driver\n",
+    "*.py -text\n*.py eol=crlf\n",
+]
+
+
+def _attribute_repo(tmp_path: Path, attributes: str | None) -> tuple[Path, str, str]:
+    repo = tmp_path / "attrs"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "uploadpack.allowFilter", "true")
+    _git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+    (repo / "mod.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    base = _commit(repo, "base")
+    (repo / "mod.py").write_text("a = 1\nb = 3\n", encoding="utf-8")
+    if attributes is not None:
+        (repo / ".gitattributes").write_text(attributes, encoding="utf-8")
+    return repo, base, _commit(repo, "head")
+
+
+def _section(diff: str, path: str) -> str:
+    return next(part for part in diff.split("diff --git ") if part.startswith(f"a/{path} "))
+
+
+@pytest.mark.parametrize("attributes", HOSTILE_ATTRIBUTES)
+def test_head_tree_attributes_never_change_the_built_diff(tmp_path: Path, attributes: str) -> None:
+    plain_root = tmp_path / "plain"
+    plain_root.mkdir()
+    plain, plain_base, plain_head = _attribute_repo(plain_root, None)
+    hostile_root = tmp_path / "hostile"
+    hostile_root.mkdir()
+    hostile, base, head = _attribute_repo(hostile_root, attributes)
+    expected = _section(gitdiff.local_diff(plain, plain_base, plain_head), "mod.py")
+    assert "+b = 3" in expected
+    local_text = gitdiff.local_diff(hostile, base, head)
+    hosted = gitdiff.build("owner/name", base, head, remote=hostile.as_uri(), token="")
+    assert _section(local_text, "mod.py") == expected
+    assert _section(hosted.text, "mod.py") == expected

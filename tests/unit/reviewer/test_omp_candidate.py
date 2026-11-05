@@ -134,7 +134,7 @@ def _probe_runs() -> dict[str, ClientRun]:
 def _good_runs() -> dict[str, ClientRun]:
     return {
         "review": _run("review", _read("chain_review.jsonl"), upstream=tuple(_request() for _ in range(5))),
-        "read-lines": _run("read-lines", _read("read_lines.jsonl"), upstream=tuple(_request() for _ in range(7))),
+        "read-lines": _run("read-lines", _read("read_lines.jsonl"), upstream=tuple(_request() for _ in range(11))),
         "control": _run(
             "control",
             _read("elided_read.jsonl"),
@@ -940,6 +940,23 @@ def test_a_multi_path_read_that_reports_lines_is_red() -> None:
     assert any(
         "the multi-path read reports lines" in item and "none for a read of several paths" in item for item in failures
     )
+
+
+def test_a_wide_line_read_that_credits_the_cut_line_is_red() -> None:
+    def drop(details: dict[str, Any]) -> None:
+        del details["meta"]["limits"]
+
+    failures = candidate_checks.read_line_failures(_retouch_read("wide", drop))
+    assert any("the wide line read credits the cut line 4" in item for item in failures)
+
+
+def test_a_carriage_return_read_that_counts_more_lines_is_red() -> None:
+    def split(details: dict[str, Any]) -> None:
+        details["displayContent"]["lineNumbers"] = [1, 2, 3, 4, 5]
+        details["totalLines"] = 5
+
+    failures = candidate_checks.read_line_failures(_retouch_read("carriage_returns", split))
+    assert any("the carriage return read reports lines" in item for item in failures)
 
 
 def test_a_stream_without_the_raw_read_is_red() -> None:

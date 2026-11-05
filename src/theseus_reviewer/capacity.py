@@ -46,7 +46,7 @@ def required_bytes(evidence_files: Iterable[str], diff_text: str | None, plan_di
     root = None if plan_dir is None else plan_dir / promotion.PROMOTION_PLAN_DIR
     upstream: dict[str, list[Hunk]] = {}
     if root is not None and (root / promotion.UPSTREAM_DIFF_NAME).is_file():
-        text = (root / promotion.UPSTREAM_DIFF_NAME).read_text(encoding="utf-8", errors="replace")
+        text = (root / promotion.UPSTREAM_DIFF_NAME).read_bytes().decode("utf-8", "replace")
         upstream = hunk_index(text)
     total = 0
     for path in evidence_files:

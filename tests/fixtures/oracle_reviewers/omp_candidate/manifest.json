@@ -81,7 +81,7 @@
       "rows": [
         7
       ],
-      "source": "captured: client and auth-gateway of the pinned omp 18.13.3 build against the loopback replay chain; the upstream provider turns are hand-built stubs that read a file bare, with a line range, raw, raw with a range and as part of a multi-path read, every event after them is build output"
+      "source": "captured: client and auth-gateway of the pinned omp 18.13.3 build against the loopback replay chain; the upstream provider turns are hand-built stubs that read a file bare, with a line range, raw, raw with a range, as part of a multi-path read, a file with lone carriage returns and a file with a line over 768 columns (bare, ranged and raw), every event after them is build output"
     }
   }
 }

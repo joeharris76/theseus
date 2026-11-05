@@ -669,7 +669,9 @@ def test_ci_bootstrap_reads_authenticated_comments_and_holds_on_fetch_failure(
         f"repos/BenchBox-dev/BenchBox/contents/{promotion.LOCK_PATH}?ref={SHA_A}",
     ]
     if not fetch_fails:
-        expected_requests.append(f"repos/BenchBox-dev/BenchBox/contents/{promotion.WORKFLOW_DIR}?ref={SHA_A}")
+        expected_requests.extend(
+            f"repos/BenchBox-dev/BenchBox/contents/{promotion.WORKFLOW_DIR}?ref={ref}" for ref in (SHA_C, SHA_A)
+        )
     assert lock_requests == expected_requests
     if fetch_fails:
         assert bundle is None
@@ -924,12 +926,20 @@ SURFACE_NEW = {
 }
 
 
-def _surface(tree: dict[str, bytes], workflows: dict[str, str] | None = None) -> frozenset[str]:
+def _surface(tree: dict[str, bytes], workflows: dict[str, str] | None = None, *, strict: bool = True) -> frozenset[str]:
     return promotion.executed_surface(
         tree,
         package="theseus-reviewer",
         repository=THESEUS,
         consumer_workflows=CONSUMER_WORKFLOWS if workflows is None else workflows,
+        strict=strict,
+    )
+
+
+def _required(old: dict[str, bytes], new: dict[str, bytes], workflows: dict[str, str] | None = None) -> frozenset[str]:
+    changed, _, _ = promotion.compute_upstream_delta(old, new)
+    return promotion.required_read_paths(
+        changed, old, new, _surface(new, workflows), _surface(old, workflows, strict=False)
     )
 
 
@@ -971,16 +981,15 @@ def test_removed_files_keep_a_whole_old_content_hunk() -> None:
 
 def test_identical_move_needs_no_read() -> None:
     changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
-    surface = _surface(SURFACE_NEW)
-    assert "src/theseus_reviewer/moved_to.py" in surface
-    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, surface)
+    assert "src/theseus_reviewer/moved_to.py" in _surface(SURFACE_NEW)
+    required = _required(SURFACE_OLD, SURFACE_NEW)
     assert f"{STAGED_NEW}src/theseus_reviewer/moved_to.py" not in required
     assert f"{STAGED_NEW}src/theseus_reviewer/edited_to.py" in required
 
 
 def test_required_reads_are_the_executed_surface() -> None:
     changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
-    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, _surface(SURFACE_NEW))
+    required = _required(SURFACE_OLD, SURFACE_NEW)
     assert required == {
         f"{STAGED_NEW}src/theseus_reviewer/cli.py",
         f"{STAGED_NEW}src/theseus_reviewer/edited_to.py",
@@ -1001,9 +1010,8 @@ def test_flat_layout_package_files_are_executed() -> None:
 
 def test_unreferenced_workflow_change_is_not_required() -> None:
     changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
-    surface = _surface(SURFACE_NEW)
-    assert ".github/workflows/ci.yml" not in surface
-    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, surface)
+    assert ".github/workflows/ci.yml" not in _surface(SURFACE_NEW)
+    required = _required(SURFACE_OLD, SURFACE_NEW)
     assert f"{STAGED_NEW}.github/workflows/ci.yml" not in required
     assert f"{STAGED_NEW}.github/workflows/review.yml" in required
 
@@ -1037,6 +1045,62 @@ def test_preparation_records_the_required_paths_of_the_executed_surface() -> Non
     bundle = promotion.prepare_promotion(**inputs)
     assert bundle is not None
     assert bundle.required_paths == {f"{STAGED_NEW}src/theseus_reviewer/__init__.py"}
+
+
+def test_identical_move_into_the_executed_surface_is_required() -> None:
+    old = {"src/theseus_reviewer/__init__.py": b"x\n", "tests/helper.py": b"payload\ncontent\nhere\n"}
+    new = {"src/theseus_reviewer/__init__.py": b"x\n", "src/theseus_reviewer/helper.py": b"payload\ncontent\nhere\n"}
+    assert _required(old, new, {}) == {f"{STAGED_NEW}src/theseus_reviewer/helper.py"}
+
+
+def test_identical_move_within_the_executed_surface_is_skipped() -> None:
+    old = {"src/theseus_reviewer/a.py": b"payload\ncontent\nhere\n"}
+    new = {"src/theseus_reviewer/b.py": b"payload\ncontent\nhere\n"}
+    assert _required(old, new, {}) == frozenset()
+
+
+def test_removed_executed_file_is_required_and_removed_other_file_is_not() -> None:
+    old = {
+        "src/theseus_reviewer/__init__.py": b"x\n",
+        "src/theseus_reviewer/guard.py": b"def guard():\n    return True\n",
+        "docs/guide.md": b"guide\n",
+    }
+    new = {"src/theseus_reviewer/__init__.py": b"x\n"}
+    assert _required(old, new, {}) == {f"{STAGED_OLD}src/theseus_reviewer/guard.py"}
+
+
+def test_flow_style_workflow_reference_is_found() -> None:
+    workflows = {"w.yml": f"jobs: {{gate: {{uses: '{THESEUS}/.github/workflows/gate.yml@abc'}}}}\n"}
+    assert ".github/workflows/gate.yml" in _surface(SURFACE_NEW, workflows)
+    assert ".github/workflows/review.yml" not in _surface(SURFACE_NEW, workflows)
+
+
+def test_anchored_and_aliased_workflow_reference_is_found() -> None:
+    workflows = {
+        "w.yml": (
+            "x-shared: &shared\n"
+            f"  uses: {THESEUS}/.github/workflows/review.yml@abc\n"
+            "jobs:\n"
+            "  first: *shared\n"
+            "  second:\n"
+            "    <<: *shared\n"
+        )
+    }
+    assert ".github/workflows/review.yml" in _surface(SURFACE_NEW, workflows)
+
+
+def test_unparseable_workflow_holds() -> None:
+    with pytest.raises(promotion.PromotionError, match="cannot be parsed"):
+        _surface(SURFACE_NEW, {"w.yml": "jobs: [unclosed\n  - : :\n"})
+
+
+def test_workflow_references_from_the_base_widen_the_surface() -> None:
+    inputs = _preparation_inputs()
+    inputs["workflow_loader"] = lambda ref: (
+        {"w.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@abc\n"} if ref == SHA_C else {}
+    )
+    with pytest.raises(promotion.PromotionError, match="gate.yml"):
+        promotion.prepare_promotion(**inputs)
 
 
 def test_delta_digest_unchanged_by_rename_detection() -> None:

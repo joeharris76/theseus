@@ -1424,3 +1424,39 @@ def test_repro_citation_accepts_a_path_with_spaces(tmp_path: Path) -> None:
         replace(_verdict(), prior_defects=(prior,)), workspace, disputed=("D1",), read=_returned_lines("with space.py")
     )
     assert marked.prior_defects[0].status == "fixed"
+
+
+def _wide_details(first: Any = 4, last: Any = 4) -> dict[str, Any]:
+    details = _read_details(1, 6, total=6)
+    details["meta"] = {
+        "limits": {"columnTruncated": {"maxColumn": 768, "unit": "chars", "lines": {"first": first, "last": last}}}
+    }
+    return details
+
+
+def test_a_line_cut_at_the_column_limit_is_not_credited(tmp_path: Path) -> None:
+    _put(tmp_path, "wide.py", "x\n" * 6)
+    run = trace("omp", _events("read", "wide.py", _wide_details()))
+    assert returned(run, tmp_path) == {"wide.py": ((1, 3), (5, 6))}
+    spread = trace("omp", _events("read", "wide.py", _wide_details(2, 5)))
+    assert returned(spread, tmp_path) == {"wide.py": ((1, 1), (6, 6))}
+
+
+@pytest.mark.parametrize("span", [(None, 4), ("4", "4"), (4, None)])
+def test_a_column_cut_without_its_lines_credits_nothing(tmp_path: Path, span: tuple[Any, Any]) -> None:
+    _put(tmp_path, "wide.py", "x\n" * 6)
+    run = trace("omp", _events("read", "wide.py", _wide_details(*span)))
+    assert returned(run, tmp_path) == {}
+
+
+def test_a_raw_read_of_a_wide_line_credits_every_line(tmp_path: Path) -> None:
+    _put(tmp_path, "wide.py", "x\n" * 6)
+    run = trace("omp", _events("read", "wide.py:raw", _read_details(1, 6, total=6)))
+    assert returned(run, tmp_path) == {"wide.py": ((1, 6),)}
+
+
+def test_lone_carriage_returns_do_not_add_lines_to_a_read(tmp_path: Path) -> None:
+    _put(tmp_path, "cr.py", "alpha\rbeta\rgamma\ndelta\r\nepsilon\n")
+    run = trace("omp", _events("read", "cr.py", _read_details(1, 3, total=3)))
+    assert returned(run, tmp_path) == {"cr.py": ((1, 3),)}
+    assert coverage._line_count(tmp_path, "cr.py") == 3

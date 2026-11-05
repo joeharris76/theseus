@@ -1101,7 +1101,7 @@ def _inline_complete(diff_text: str, evidence_files: Sequence[str]) -> bool:
 
 def _block_hints(evidence_files: Sequence[str], request_text: str, plan_dir: Path) -> dict[str, str]:
     upstream = plan_dir / promotion.PROMOTION_PLAN_DIR / promotion.UPSTREAM_DIFF_NAME
-    upstream_text = upstream.read_text(encoding="utf-8", errors="replace") if upstream.is_file() else ""
+    upstream_text = upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else ""
     return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files)
 
 
@@ -1340,7 +1340,7 @@ def _assemble_prompt(
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
     hints = (
-        _block_hints(evidence_files, diff_file.read_text(encoding="utf-8") if diff_file.is_file() else "", plan_dir)
+        _block_hints(evidence_files, diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else "", plan_dir)
         if marked
         else {}
     )

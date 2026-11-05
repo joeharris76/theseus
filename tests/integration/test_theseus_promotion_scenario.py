@@ -473,7 +473,7 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_
     first_run = harness.review(3)
     attempts = first_run.attempts()
     assert attempts[0]["outcome"] == "absent"
-    assert set(attempts[0]["absence"]["unread"]) == set(reads_without_removed[1:])
+    assert set(attempts[0]["absence"]["unread"]) == set(full_reads[1:])
     assert attempts[1]["outcome"] == "verdict"
     assert first_run.steps["finalize"].outputs["state"] == "success"
     assert harness.gate(3, head).code == 0

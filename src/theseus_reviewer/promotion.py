@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import github, omp_pin
+from ._vendor import yaml
 from .policy import PromotionRules
 from .verdict import valid_path
 
@@ -51,7 +52,6 @@ _WORKFLOW_PATH = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
 _REMOTE_WORKFLOW = re.compile(
     r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?P<path>\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)"
 )
-_WORKFLOW_USES = re.compile(r"(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?(?P<target>[^\s'\"#]+)")
 
 LOCK_REQUIRED_KEYS = frozenset(
     {
@@ -617,40 +617,52 @@ def _package_source_files(source_tree: Mapping[str, bytes], pkg_prefix: str) -> 
 
 
 def executed_surface(
-    new_tree: Mapping[str, bytes],
+    tree: Mapping[str, bytes],
     *,
     package: str,
     repository: str,
     consumer_workflows: Mapping[str, str],
+    strict: bool = True,
 ) -> frozenset[str]:
-    surface = set(_package_source_files(new_tree, f"{_normalized_dist_name(package)}/"))
-    if "pyproject.toml" in new_tree:
+    surface = set(_package_source_files(tree, f"{_normalized_dist_name(package)}/"))
+    if "pyproject.toml" in tree:
         surface.add("pyproject.toml")
     pending: list[str] = []
-    for text in consumer_workflows.values():
-        pending.extend(sorted(_workflow_references(text, repository, nested=False)))
+    for name, text in sorted(consumer_workflows.items()):
+        pending.extend(sorted(_workflow_references(text, repository, nested=False, label=name)))
     visited: set[str] = set()
     while pending:
         path = pending.pop()
         if path in visited:
             continue
         visited.add(path)
-        raw = new_tree.get(path)
-        _require(raw is not None, f"workflow {path} referenced by the consumer is missing from the promoted source")
-        assert raw is not None
+        raw = tree.get(path)
+        if raw is None:
+            _require(not strict, f"workflow {path} referenced by the consumer is missing from the promoted source")
+            continue
         surface.add(path)
-        pending.extend(sorted(_workflow_references(raw.decode("utf-8", errors="replace"), repository, nested=True)))
+        text = raw.decode("utf-8", errors="replace")
+        pending.extend(sorted(_workflow_references(text, repository, nested=True, label=path)))
     return frozenset(surface)
 
 
-def _workflow_references(text: str, repository: str, *, nested: bool) -> set[str]:
+def _workflow_references(text: str, repository: str, *, nested: bool, label: str) -> set[str]:
+    try:
+        document = yaml.safe_load(text)
+    except (yaml.YAMLError, ValueError, RecursionError) as exc:
+        raise PromotionError(f"workflow {label} cannot be parsed: {exc}") from exc
+    jobs = document.get("jobs") if isinstance(document, Mapping) else None
     found: set[str] = set()
-    for match in _WORKFLOW_USES.finditer(text):
-        target = match.group("target").split("@", 1)[0]
+    if not isinstance(jobs, Mapping):
+        return found
+    for job in jobs.values():
+        target = job.get("uses") if isinstance(job, Mapping) else None
+        if not isinstance(target, str):
+            continue
+        target = target.strip().split("@", 1)[0]
         if nested and target.startswith("./"):
-            candidate = target[2:]
-            if _WORKFLOW_PATH.fullmatch(candidate):
-                found.add(candidate)
+            if _WORKFLOW_PATH.fullmatch(target[2:]):
+                found.add(target[2:])
             continue
         remote = _REMOTE_WORKFLOW.fullmatch(target)
         if remote is not None and remote.group("repo").casefold() == repository.casefold():
@@ -663,19 +675,26 @@ def required_read_paths(
     old_tree: Mapping[str, bytes],
     new_tree: Mapping[str, bytes],
     surface: Iterable[str],
+    old_surface: Iterable[str],
 ) -> frozenset[str]:
     executed = set(surface)
+    previously_executed = set(old_surface)
     old_prefix = f"{STAGED_PROMOTION_DIR}/old/"
     new_prefix = f"{STAGED_PROMOTION_DIR}/new/"
     required: set[str] = set()
     for item in changed_files:
-        if item.removed or not item.path.startswith(new_prefix):
+        if item.removed:
+            if item.path.startswith(old_prefix) and item.path.removeprefix(old_prefix) in previously_executed:
+                required.add(item.path)
+            continue
+        if not item.path.startswith(new_prefix):
             continue
         tree_path = item.path.removeprefix(new_prefix)
         if tree_path not in executed:
             continue
         if item.status == "renamed" and item.previous_path is not None:
-            if old_tree.get(item.previous_path.removeprefix(old_prefix)) == new_tree.get(tree_path):
+            old_path = item.previous_path.removeprefix(old_prefix)
+            if old_path in previously_executed and old_tree.get(old_path) == new_tree.get(tree_path):
                 continue
         required.add(item.path)
     return frozenset(required)
@@ -1235,12 +1254,22 @@ def prepare_promotion(
         lock_sha256=lock_digest(head_lock),
         bootstrap=is_bootstrap,
     )
-    workflows = workflow_loader(head_sha) if workflow_loader is not None else {}
+    workflows: dict[str, str] = {}
+    if workflow_loader is not None:
+        for ref in (base_sha, head_sha):
+            workflows.update({f"{ref}:{name}": text for name, text in workflow_loader(ref).items()})
     surface = executed_surface(
         new_tree,
         package=head_lock.package,
         repository=head_lock.repository,
         consumer_workflows=workflows,
+    )
+    old_surface = executed_surface(
+        old_tree,
+        package=head_lock.package,
+        repository=head_lock.repository,
+        consumer_workflows=workflows,
+        strict=False,
     )
     return PromotionBundle(
         record=record,
@@ -1248,7 +1277,7 @@ def prepare_promotion(
         diff_text=diff_text,
         old_tree=old_tree,
         new_tree=new_tree,
-        required_paths=required_read_paths(changed_files, old_tree, new_tree, surface),
+        required_paths=required_read_paths(changed_files, old_tree, new_tree, surface, old_surface),
     )
 
 

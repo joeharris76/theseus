@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv", "-M")
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+GLOBAL_FLAGS = (f"--attr-source={EMPTY_TREE}",)
 FETCH_FLAGS = ("--no-tags", "--depth=1", "--filter=blob:none")
 DEFAULT_SERVER = "https://github.com"
 TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN")
@@ -27,11 +29,11 @@ class BuiltDiff:
 
 
 def diff_arguments(base: str, head: str) -> list[str]:
-    return ["diff", *DIFF_FLAGS, base, head]
+    return [*GLOBAL_FLAGS, "diff", *DIFF_FLAGS, base, head]
 
 
 def name_status_arguments(base: str, head: str) -> list[str]:
-    return ["diff", "--name-status", "-z", "-M", base, head]
+    return [*GLOBAL_FLAGS, "diff", "--name-status", "-z", "-M", base, head]
 
 
 def name_status_paths(output: str) -> frozenset[str]:
@@ -54,7 +56,8 @@ def _run(args: list[str], cwd: Path, env: Mapping[str, str] | None = None) -> by
         raise GitDiffError(f"git could not run: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
-        raise GitDiffError(f"git {args[0]} failed: {detail}")
+        command = next(arg for arg in args if not arg.startswith("-"))
+        raise GitDiffError(f"git {command} failed: {detail}")
     return result.stdout
 
 

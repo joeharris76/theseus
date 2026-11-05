@@ -114,6 +114,19 @@ def _shown_bounds(details: dict, display: dict) -> tuple[int | None, int | None]
     return low, high
 
 
+def _cut_columns(details: dict) -> tuple[int, int] | None:
+    meta = details.get("meta")
+    limits = meta.get("limits") if isinstance(meta, dict) else None
+    cut = limits.get("columnTruncated") if isinstance(limits, dict) else None
+    if cut is None:
+        return (0, -1)
+    span = cut.get("lines") if isinstance(cut, dict) else None
+    first, last = (_int(span.get("first")), _int(span.get("last"))) if isinstance(span, dict) else (None, None)
+    if first is None or last is None:
+        return None
+    return (first, last)
+
+
 def _returned_ranges(details: object) -> Ranges:
     if not isinstance(details, dict) or isinstance(details.get("summary"), dict):
         return ()
@@ -130,6 +143,10 @@ def _returned_ranges(details: object) -> Ranges:
     lines = [
         n for n in lines if (low is None or n >= low) and (high is None or n <= high) and (total is None or n <= total)
     ]
+    cut = _cut_columns(details)
+    if cut is None:
+        return ()
+    lines = [n for n in lines if not cut[0] <= n <= cut[1]]
     truncation = details.get("truncation")
     if lines and isinstance(truncation, dict) and truncation.get("lastLinePartial") is True:
         lines.pop()

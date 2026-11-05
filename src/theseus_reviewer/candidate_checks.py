@@ -13,7 +13,17 @@ from typing import Any
 from . import absence, commands, coverage, evidence, omp_pin
 from ._vendor import yaml
 from .candidate_canaries import CANARIES, GROUPS, PROVIDERS, WHERES, Canary, control_name, group_canaries, overlay_name
-from .candidate_chain import AGENTS_TOKEN, BREACH_TOOLS, CLAUDE_TOKEN, LONG_SOURCE, NATIVE_TOKEN, ClientRun
+from .candidate_chain import (
+    AGENTS_TOKEN,
+    BREACH_TOOLS,
+    CLAUDE_TOKEN,
+    CR_SOURCE,
+    LONG_SOURCE,
+    NATIVE_TOKEN,
+    WIDE_LINE,
+    WIDE_SOURCE,
+    ClientRun,
+)
 from .candidate_env import quiet_env
 from .policy import OMP_THINKING_LEVELS
 from .verdict import omp_terminal_error, parse_output
@@ -345,26 +355,34 @@ def _ledger_entry(traced: evidence.Trace, suffix: str, *, multi: bool = False) -
 
 def read_line_failures(stdout: str) -> list[str]:
     traced = evidence.trace("omp", stdout)
-    total = len(LONG_SOURCE.splitlines())
     failures = []
 
     def expect(
-        suffix: str, label: str, start: int, end: int, *, exact: bool = False, truncated: bool | None = None
-    ) -> None:
+        suffix: str,
+        label: str,
+        start: int,
+        end: int,
+        *,
+        exact: bool = False,
+        truncated: bool | None = None,
+        total: int | None = None,
+    ) -> tuple[Any, ...] | None:
         entry = _ledger_entry(traced, suffix)
         if entry is None:
             failures.append(f"the {label} read is missing from the stream")
-            return
+            return None
         _, ranges, cut, _ = entry
         if not coverage.contains(ranges, start, end):
             failures.append(f"the {label} read reports lines {list(ranges)}, expected lines {start}-{end} among them")
         if exact and ranges != ((start, end),):
             failures.append(f"the {label} read reports lines {list(ranges)}, expected exactly {start}-{end}")
-        if any(high > total for _, high in ranges):
-            failures.append(f"the {label} read reports lines beyond the {total} the file has")
+        if any(high > (total or long_total) for _, high in ranges):
+            failures.append(f"the {label} read reports lines beyond the {total or long_total} the file has")
         if truncated is not None and cut is not truncated:
             failures.append(f"the {label} read truncation flag is {cut}, expected {truncated}")
+        return entry
 
+    long_total = len(LONG_SOURCE.splitlines())
     expect("equivalence/checker.py", "bare", 1, 2, exact=True, truncated=False)
     expect("long_module.py", "bare long", 1, READ_DEFAULT_LINES, exact=True, truncated=True)
     expect("long_module.py:5-9", "ranged", 5, 9)
@@ -377,6 +395,17 @@ def read_line_failures(stdout: str) -> list[str]:
         failures.append(
             f"the multi-path read reports lines {list(multi[1])}, expected none for a read of several paths"
         )
+    carriage_total = CR_SOURCE.count(b"\n")
+    expect("carriage_returns.py", "carriage return", 1, carriage_total, exact=True, total=carriage_total)
+    wide_total = WIDE_SOURCE.count("\n")
+    expect("wide_line.py", "wide line", 1, WIDE_LINE - 1, total=wide_total)
+    wide = expect("wide_line.py", "wide line", WIDE_LINE + 1, wide_total, total=wide_total)
+    if wide is not None and coverage.contains(wide[1], WIDE_LINE, WIDE_LINE):
+        failures.append(f"the wide line read credits the cut line {WIDE_LINE}")
+    window = expect("wide_line.py:3-5", "wide line ranged", 5, 5, total=wide_total)
+    if window is not None and coverage.contains(window[1], WIDE_LINE, WIDE_LINE):
+        failures.append(f"the wide line ranged read credits the cut line {WIDE_LINE}")
+    expect("wide_line.py:raw", "wide line raw", 1, wide_total, total=wide_total)
     return failures
 
 
