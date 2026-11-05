@@ -610,6 +610,8 @@ def _load_artifact(
             return cached
     raw = fetch_verified(label, urls, sha256, fetch, verify_all=verify_all)
     with _file_lock(retained.parent / f".lock-{sha256}"):
+        if retained.is_file() and sha256_hex(retained.read_bytes()) == sha256:
+            return raw
         staged = retained.with_name(f".{retained.name}.{os.getpid()}.{secrets.token_hex(4)}")
         try:
             staged.write_bytes(raw)
