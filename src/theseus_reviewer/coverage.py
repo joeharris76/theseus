@@ -115,7 +115,11 @@ def _line_count(workspace: Path, path: str) -> int | None:
 
 
 def build_targets(
-    evidence_files: Iterable[str], request_text: str, request_diff: str | None, upstream_text: str
+    evidence_files: Iterable[str],
+    request_text: str,
+    request_diff: str | None,
+    upstream_text: str,
+    whole: Collection[str] = (),
 ) -> dict[str, Target]:
     request_index = hunk_index(request_text)
     request_opaque = binary_files(request_text)
@@ -123,6 +127,9 @@ def build_targets(
     upstream_opaque = binary_files(upstream_text)
     found: dict[str, Target] = {}
     for path in evidence_files:
+        if path in whole and path.startswith((_NEW_PREFIX, _OLD_PREFIX)):
+            found[path] = Target(path, UPSTREAM_DIFF, (), True, path.startswith(_OLD_PREFIX), True)
+            continue
         if path.startswith(_NEW_PREFIX):
             key, index, source, removed = path[len(_NEW_PREFIX) :], upstream_index, UPSTREAM_DIFF, False
             opaque = key in upstream_opaque
@@ -143,7 +150,11 @@ def targets(plan: Mapping[str, Any], workspace: Path) -> dict[str, Target]:
     else:
         request_text, request_diff = _text(workspace, STAGED_DIFF_NAME) or "", STAGED_DIFF_NAME
     return build_targets(
-        plan.get("evidence_files", ()), request_text, request_diff, _text(workspace, UPSTREAM_DIFF) or ""
+        plan.get("evidence_files", ()),
+        request_text,
+        request_diff,
+        _text(workspace, UPSTREAM_DIFF) or "",
+        plan.get("evidence_whole_files", ()),
     )
 
 
@@ -154,9 +165,13 @@ def cut_lines(text: str) -> tuple[int, ...]:
 
 
 def block_hints(
-    evidence_files: Iterable[str], request_text: str, upstream_text: str, paths: Iterable[str]
+    evidence_files: Iterable[str],
+    request_text: str,
+    upstream_text: str,
+    paths: Iterable[str],
+    whole: Collection[str] = (),
 ) -> dict[str, str]:
-    found = build_targets(evidence_files, request_text, STAGED_DIFF_NAME, upstream_text)
+    found = build_targets(evidence_files, request_text, STAGED_DIFF_NAME, upstream_text, whole)
     cut = {STAGED_DIFF_NAME: cut_lines(request_text), UPSTREAM_DIFF: cut_lines(upstream_text)}
     hints: dict[str, str] = {}
     for path in paths:

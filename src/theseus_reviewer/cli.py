@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -940,6 +940,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         matchers,
         promotion_record=active_promotion.record.to_json() if active_promotion is not None else None,
         upstream_protected=upstream_in_scope,
+        whole_files=set(active_promotion.whole_paths) if active_promotion is not None else set(),
     )
     plan["decision_reason"] = step.reason if reason is None else f"{step.reason}; {reason}"
     return _finish_plan(out_dir, plan)
@@ -1102,10 +1103,12 @@ def _inline_complete(diff_text: str, evidence_files: Sequence[str]) -> bool:
     return all(path in index for path in evidence_files)
 
 
-def _block_hints(evidence_files: Sequence[str], request_text: str, plan_dir: Path) -> dict[str, str]:
+def _block_hints(
+    evidence_files: Sequence[str], request_text: str, plan_dir: Path, whole: Collection[str] = ()
+) -> dict[str, str]:
     upstream = plan_dir / promotion.PROMOTION_PLAN_DIR / promotion.UPSTREAM_DIFF_NAME
     upstream_text = upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else ""
-    return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files)
+    return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files, whole)
 
 
 def _plan_review(
@@ -1122,6 +1125,7 @@ def _plan_review(
     *,
     promotion_record: Mapping[str, Any] | None = None,
     upstream_protected: frozenset[str] | set[str] = frozenset(),
+    whole_files: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     latest = step.previous or {}
     follow_up = step.kind == protocol.FOLLOW_UP
@@ -1148,9 +1152,18 @@ def _plan_review(
     follow_up_reviewer = latest.get("reviewer") if follow_up and latest.get("reviewer") in names else None
     old_staged_prefix = f"{promotion.STAGED_PROMOTION_DIR}/old/"
     evidence_files = sorted(
-        item.path
-        for item in reviewed_now
-        if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
+        {
+            *(
+                item.path
+                for item in reviewed_now
+                if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
+            ),
+            *(
+                item.previous_path
+                for item in reviewed_now
+                if item.previous_path in whole_files and item.previous_path in in_scope
+            ),
+        }
     )
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
 
@@ -1161,7 +1174,10 @@ def _plan_review(
     diff_bytes = len((diff_text or "").encode("utf-8"))
     file_list_bytes = len(
         file_list_block(
-            changed, evidence_files, evidence_files, _block_hints(evidence_files, full_diff or "", out_dir)
+            changed,
+            evidence_files,
+            evidence_files,
+            _block_hints(evidence_files, full_diff or "", out_dir, whole_files),
         ).encode("utf-8")
     )
     if listing_bytes > BRIEF_MAX_BYTES:
@@ -1181,13 +1197,17 @@ def _plan_review(
     if brief_mode == "inline":
         required, brief_bytes = 0, listing_bytes + diff_bytes
     else:
-        required, brief_bytes = capacity.required_bytes(evidence_files, full_diff, out_dir), file_list_bytes
+        required, brief_bytes = (
+            capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files),
+            file_list_bytes,
+        )
     plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes)
     evidence_set = set(evidence_files)
     plan.update(
         {
             "decision": REVIEW,
             "evidence_files": evidence_files,
+            "evidence_whole_files": sorted(set(whole_files) & evidence_set),
             "evidence_protected_files": sorted(
                 item.path
                 for item in reviewed_now
@@ -1343,7 +1363,12 @@ def _assemble_prompt(
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
     hints = (
-        _block_hints(evidence_files, diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else "", plan_dir)
+        _block_hints(
+            evidence_files,
+            diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else "",
+            plan_dir,
+            plan.get("evidence_whole_files", ()),
+        )
         if marked
         else {}
     )

@@ -266,6 +266,7 @@
       "benchbox/core/equivalence/cells.py",
       "benchbox/core/equivalence/checker.py"
     ],
+    "evidence_whole_files": [],
     "findings_delivery": "review",
     "follow_up_reviewer": null,
     "gate_path_list": "<policy gate paths>",

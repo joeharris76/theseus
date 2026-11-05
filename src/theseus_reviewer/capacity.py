@@ -4,7 +4,7 @@ import json
 import math
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,12 @@ def _block_bytes(blocks: Iterable[Hunk]) -> int:
     return sum(block.size for block in blocks)
 
 
-def required_bytes(evidence_files: Iterable[str], diff_text: str | None, plan_dir: Path | None = None) -> int:
+def required_bytes(
+    evidence_files: Iterable[str],
+    diff_text: str | None,
+    plan_dir: Path | None = None,
+    whole: Collection[str] = (),
+) -> int:
     index = hunk_index(diff_text or "")
     staged = promotion.STAGED_PROMOTION_DIR
     root = None if plan_dir is None else plan_dir / promotion.PROMOTION_PLAN_DIR
@@ -58,7 +63,12 @@ def required_bytes(evidence_files: Iterable[str], diff_text: str | None, plan_di
             else:
                 total += _block_bytes(upstream.get(relative, ()))
         elif path.startswith(f"{staged}/new/"):
-            total += _block_bytes(upstream.get(path.removeprefix(f"{staged}/new/"), ()))
+            relative = path.removeprefix(f"{staged}/new/")
+            held = None if root is None or path not in whole else root / "new" / relative
+            if held is not None and held.is_file():
+                total += held.stat().st_size
+            else:
+                total += _block_bytes(upstream.get(relative, ()))
         else:
             total += _block_bytes(index.get(path, ()))
     return total

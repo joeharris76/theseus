@@ -203,6 +203,7 @@
     "evidence_protected_files": [
       "README.md"
     ],
+    "evidence_whole_files": [],
     "findings_delivery": "review",
     "follow_up_reviewer": "medium",
     "gate_path_list": "<policy gate paths>",

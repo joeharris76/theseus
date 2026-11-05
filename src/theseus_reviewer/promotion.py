@@ -219,6 +219,7 @@ class PromotionBundle:
     old_tree: Mapping[str, bytes]
     new_tree: Mapping[str, bytes]
     required_paths: frozenset[str] = frozenset()
+    whole_paths: frozenset[str] = frozenset()
 
 
 def _require(condition: bool, message: str) -> None:
@@ -670,18 +671,19 @@ def _workflow_references(text: str, repository: str, *, nested: bool, label: str
     return found
 
 
-def required_read_paths(
+def read_requirements(
     changed_files: Iterable[ChangedFile],
     old_tree: Mapping[str, bytes],
     new_tree: Mapping[str, bytes],
     surface: Iterable[str],
     old_surface: Iterable[str],
-) -> frozenset[str]:
+) -> tuple[frozenset[str], frozenset[str]]:
     executed = set(surface)
     previously_executed = set(old_surface)
     old_prefix = f"{STAGED_PROMOTION_DIR}/old/"
     new_prefix = f"{STAGED_PROMOTION_DIR}/new/"
     required: set[str] = set()
+    whole: set[str] = set()
     for item in changed_files:
         if item.removed:
             if item.path.startswith(old_prefix) and item.path.removeprefix(old_prefix) in previously_executed:
@@ -690,14 +692,32 @@ def required_read_paths(
         if not item.path.startswith(new_prefix):
             continue
         tree_path = item.path.removeprefix(new_prefix)
+        renamed = item.status == "renamed" and item.previous_path is not None
+        old_path = item.previous_path.removeprefix(old_prefix) if renamed and item.previous_path else None
         if tree_path not in executed:
+            if old_path is not None and old_path in previously_executed:
+                required.add(f"{old_prefix}{old_path}")
+                whole.add(f"{old_prefix}{old_path}")
             continue
-        if item.status == "renamed" and item.previous_path is not None:
-            old_path = item.previous_path.removeprefix(old_prefix)
-            if old_path in previously_executed and old_tree.get(old_path) == new_tree.get(tree_path):
+        if old_path is not None:
+            if old_path not in previously_executed:
+                required.add(item.path)
+                whole.add(item.path)
+                continue
+            if old_tree.get(old_path) == new_tree.get(tree_path):
                 continue
         required.add(item.path)
-    return frozenset(required)
+    return frozenset(required), frozenset(whole)
+
+
+def required_read_paths(
+    changed_files: Iterable[ChangedFile],
+    old_tree: Mapping[str, bytes],
+    new_tree: Mapping[str, bytes],
+    surface: Iterable[str],
+    old_surface: Iterable[str],
+) -> frozenset[str]:
+    return read_requirements(changed_files, old_tree, new_tree, surface, old_surface)[0]
 
 
 def _within(path: str, prefixes: tuple[str, ...] | None) -> bool:
@@ -1271,13 +1291,15 @@ def prepare_promotion(
         consumer_workflows=workflows,
         strict=False,
     )
+    required_paths, whole_paths = read_requirements(changed_files, old_tree, new_tree, surface, old_surface)
     return PromotionBundle(
         record=record,
         changed_files=changed_files,
         diff_text=diff_text,
         old_tree=old_tree,
         new_tree=new_tree,
-        required_paths=required_read_paths(changed_files, old_tree, new_tree, surface, old_surface),
+        required_paths=required_paths,
+        whole_paths=whole_paths,
     )
 
 
