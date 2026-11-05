@@ -984,6 +984,7 @@ def _fresh_review(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | 
     _stage_workspace(run.root, run.head, layout.workspace)
     _scan_clean(run, "before the reviewer runs")
     _install_harness(run)
+    plan = _read(layout.plan_file)
     run.phase("isolation")
     _attempt_loop(run, plan)
     _scan_clean(run, "after the reviewer exits")

@@ -241,7 +241,6 @@ def _planned_and_judged(harness: Harness, branch: str, monkeypatch: pytest.Monke
 
 
 ADAPTER_FIELDS = {
-    "capacity",
     "run_id",
     "run_uuid",
     "created_at",
