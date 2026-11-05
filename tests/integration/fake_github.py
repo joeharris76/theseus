@@ -194,10 +194,6 @@ class FakeGitHub:
             items.append(item)
         return items
 
-    def diff(self, number: int) -> bytes:
-        pull = self.pulls[number]
-        return self.git_bytes("diff", "-M", f"{pull['base']['ref']}...{pull['head']['ref']}")
-
     def add_run(
         self,
         workflow: str,
@@ -452,8 +448,19 @@ class FakeGitHub:
         ]
 
     def _contents(self, request: Request, match: re.Match[str]) -> Response:
+        ref, path = request.query["ref"], match[1].rstrip("/")
         try:
-            data = self.git_bytes("show", f"{request.query['ref']}:{match[1]}")
+            kind = self.git("cat-file", "-t", f"{ref}:{path}").strip()
+            if kind == "tree":
+                entries = self.git("ls-tree", "-z", ref, f"{path}/").split("\0")
+                listing = []
+                for entry in filter(None, entries):
+                    meta, name = entry.split("\t", 1)
+                    listing.append(
+                        {"name": name.rsplit("/", 1)[-1], "path": name, "type": "dir" if "tree" in meta else "file"}
+                    )
+                return 200, listing, {}
+            data = self.git_bytes("show", f"{ref}:{path}")
         except subprocess.CalledProcessError:
             return 404, {"message": "Not Found"}, {}
         return 200, data, {"Content-Type": "text/plain; charset=utf-8"}
@@ -486,8 +493,6 @@ class FakeGitHub:
         number = int(match[1])
         if number not in self.pulls:
             return 404, {"message": "Not Found"}, {}
-        if "diff" in request.accept:
-            return 200, self.diff(number), {"Content-Type": "text/plain; charset=utf-8"}
         self.refresh(number)
         return 200, self.pulls[number], {}
 

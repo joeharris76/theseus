@@ -115,8 +115,22 @@ def _auth_script(context: Context) -> list[UpstreamTurn]:
     return [error_turn(401, "authentication_error", AUTH_MESSAGE)]
 
 
+def _read_lines_script(context: Context) -> list[UpstreamTurn]:
+    long_file = f"{context.workspace}/{LONG_FILE}"
+    return [
+        tool_turn("read", {"path": f"{context.workspace}/{CHECKER}"}, "toolu_read_checker"),
+        tool_turn("read", {"path": long_file}, "toolu_read_long"),
+        tool_turn("read", {"path": f"{long_file}:5-9"}, "toolu_read_range"),
+        tool_turn("read", {"path": f"{long_file}:raw"}, "toolu_read_raw"),
+        tool_turn("read", {"path": f"{long_file}:raw:5-9"}, "toolu_read_raw_range"),
+        tool_turn("read", {"path": f"{context.workspace}/{CHECKER};{long_file}:1-3"}, "toolu_read_multi"),
+        text_turn(json.dumps(VERDICT)),
+    ]
+
+
 SCENARIOS = (
     Scenario("review", _review_script),
+    Scenario("read-lines", _read_lines_script),
     Scenario("control", _review_script, overlay=PERMISSIVE_OVERLAY),
     Scenario("roster-breach", _breach_script),
     Scenario("quota-walk", _quota_script),
@@ -277,9 +291,17 @@ class LoopbackChain:
         token_file = self.workdir / "client-token"
         token_file.write_text(self.client_token, encoding="utf-8")
         clients = self.workdir / "gateway-clients.json"
+        config_file = self.workdir / "omp-config.yml"
+        config_file.write_text(self.config_text, encoding="utf-8")
         with contextlib.redirect_stdout(None):
             cli.command_gateway_clients(
-                argparse.Namespace(token_file=str(token_file), accounts=None, client=[], out=str(clients))
+                argparse.Namespace(
+                    token_file=str(token_file),
+                    accounts=None,
+                    client=[],
+                    out=str(clients),
+                    omp_config=str(config_file),
+                )
             )
         gateway_process = self._spawn(
             "gateway",

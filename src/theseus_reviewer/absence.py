@@ -17,9 +17,11 @@ INVALID = "invalid"
 EMPTY = "empty"
 ERROR = "error"
 INCOMPLETE = "incomplete"
-KINDS = (OK, QUOTA, AUTH, TIMEOUT, INVALID, EMPTY, ERROR, INCOMPLETE)
+CONTEXT_OVERFLOW = "context-overflow"
+KINDS = (OK, QUOTA, AUTH, TIMEOUT, INVALID, EMPTY, ERROR, INCOMPLETE, CONTEXT_OVERFLOW)
 QUOTA_STATUS = 429
 AUTH_STATUS = 401
+OVERFLOW_STATUS = 413
 
 CALIBRATED_QUOTA_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "omp": (
@@ -41,6 +43,16 @@ CALIBRATED_AUTH_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
 }
 CALIBRATED_EMPTY_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "omp": (),
+}
+CALIBRATED_CONTEXT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "omp": (
+        re.compile(r"prompt is too long[^\n]{0,80}"),
+        re.compile(r"context_length_exceeded"),
+        re.compile(r"exceeds? the context window[^\n]{0,80}"),
+        re.compile(r"context (?:length|window) (?:exceeded|overflow)[^\n]{0,80}"),
+        re.compile(r"maximum context length[^\n]{0,80}"),
+        re.compile(r"input is too long[^\n]{0,80}"),
+    ),
 }
 
 _RESET = re.compile(r"Resets in\s+(?P<duration>(?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
@@ -166,6 +178,11 @@ def classify(
     auth = _first(CALIBRATED_AUTH_PATTERNS.get(harness, ()), stderr) if failed else None
     if auth is not None:
         return Absence(AUTH, redact_detail(auth.group(0)))
+    if failed and terminal is not None and terminal.status == OVERFLOW_STATUS:
+        return Absence(CONTEXT_OVERFLOW, redact_detail(f"{terminal.status} {' '.join(terminal.message.split())}"))
+    overflow = _first(CALIBRATED_CONTEXT_PATTERNS.get(harness, ()), f"{terminal.message if terminal else ''}\n{stderr}")
+    if failed and overflow is not None:
+        return Absence(CONTEXT_OVERFLOW, redact_detail(overflow.group(0)))
     if exit_code is None:
         return Absence(ERROR, "the reviewer could not be started")
     if exit_code != 0:

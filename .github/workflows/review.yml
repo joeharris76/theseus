@@ -517,7 +517,7 @@ jobs:
           name: oracle-verdict-attempt-1
           path: ${{ runner.temp }}/oracle-attempts/attempt-1.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload attempt 2
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 2 }}
@@ -526,7 +526,7 @@ jobs:
           name: oracle-verdict-attempt-2
           path: ${{ runner.temp }}/oracle-attempts/attempt-2.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload attempt 3
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 3 }}
@@ -535,7 +535,7 @@ jobs:
           name: oracle-verdict-attempt-3
           path: ${{ runner.temp }}/oracle-attempts/attempt-3.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload attempt 4
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 4 }}
@@ -544,7 +544,7 @@ jobs:
           name: oracle-verdict-attempt-4
           path: ${{ runner.temp }}/oracle-attempts/attempt-4.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload attempt 5
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 5 }}
@@ -553,7 +553,7 @@ jobs:
           name: oracle-verdict-attempt-5
           path: ${{ runner.temp }}/oracle-attempts/attempt-5.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload the captured reviewer event streams
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 1 }}

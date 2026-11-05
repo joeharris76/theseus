@@ -12,7 +12,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from theseus_reviewer import cli, github, protocol, sweep
+from theseus_reviewer import cli, coverage, gitdiff, github, protocol, sweep
+from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint
 from theseus_reviewer.render import dispute_listing
@@ -27,7 +28,8 @@ REPO = "BenchBox-dev/BenchBox"
 HEAD = "a" * 40
 OTHER_HEAD = "9" * 40
 BASE = "b" * 40
-DIFF = "diff --git a/x b/x\n"
+CHECKER = "benchbox/core/equivalence/checker.py"
+DIFF = f"diff --git a/{CHECKER} b/{CHECKER}\n--- a/{CHECKER}\n+++ b/{CHECKER}\n@@ -1,1 +1,2 @@\n a\n+checker change\n"
 MODE = "100644"
 BUCKETS = ["trivial", "small", "medium", "large", "huge", "max"]
 
@@ -120,12 +122,15 @@ class FakeGitHub:
         self.timeout_lookups: list[int] = []
         self.busy_fallback: set[int] = set()
         self.fallback_error: Exception | None = None
+        self.built: list[tuple[str, str, str]] = []
+        self.git_paths: frozenset[str] | None = None
+        self.api_diff_error = ""
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._real_verdict_runs = github.verdict_runs
         monkeypatch.setattr(github, "get_json", self._json)
         monkeypatch.setattr(github, "get_paginated", self._route)
-        monkeypatch.setattr(github, "get_diff", self._diff)
+        monkeypatch.setattr(gitdiff, "build", self._build)
         monkeypatch.setattr(github, "review_threads", self._threads)
         monkeypatch.setattr(github, "latest_state", self._latest_state)
         monkeypatch.setattr(github, "dispatch", self._dispatch)
@@ -219,6 +224,8 @@ class FakeGitHub:
         return self.pull
 
     def _gh(self, *args: str, accept: str | None = None) -> str:
+        if accept == "application/vnd.github.v3.diff":
+            raise github.GitHubError(self.api_diff_error)
         listing = f"repos/{REPO}/actions/workflows/{cli.WORKFLOW_FILE}/runs?"
         assert args[:2] == ("--paginate", "--slurp") and args[2].startswith(listing), args
         query = parse_qs(urlsplit(args[2]).query)
@@ -234,8 +241,12 @@ class FakeGitHub:
             raise github.GitHubError("threads unavailable")
         return self.threads
 
-    def _diff(self, repo: str, pr: int) -> bytes | None:
-        return None if self.diff is None else self.diff.encode("utf-8")
+    def _build(self, repo: str, merge_base: str, head: str) -> gitdiff.BuiltDiff:
+        self.built.append((repo, merge_base, head))
+        if self.diff is None:
+            raise gitdiff.GitDiffError("git fetch failed")
+        paths = self.git_paths or frozenset(path for item in self.files for path in ChangedFile.from_api(item).paths)
+        return gitdiff.BuiltDiff(self.diff, paths)
 
     def _tree(self, repo: str, sha: str) -> dict[str, tuple[str, str]] | None:
         paths = [(item.get("previous_filename") or item["filename"], item["filename"]) for item in self.files]
@@ -295,8 +306,7 @@ def _plan(
     return code, values, plan
 
 
-SOUNDNESS = [{"filename": "benchbox/core/equivalence/checker.py", "additions": 4, "deletions": 1}]
-CHECKER = "benchbox/core/equivalence/checker.py"
+SOUNDNESS = [{"filename": CHECKER, "additions": 4, "deletions": 1}]
 CAPTURE = "benchbox/core/expected_results/registry.py"
 
 
@@ -321,7 +331,7 @@ def test_soundness_pr_plans_a_review_over_the_bucket_chain(monkeypatch: pytest.M
         {"path": CHECKER, "previous_path": None, "additions": 4, "deletions": 1, "status": ""}
     ]
     assert plan["unchanged_files"] == [] and plan["untracked_files"] == []
-    assert plan["max_defects"] == 10 and plan["brief_max_bytes"] == 100000
+    assert plan["max_defects"] == 10 and "brief_max_bytes" not in plan
     assert plan["evidence_files"] == [CHECKER]
     assert plan["protocol"]["kind"] == "first" and plan["protocol"]["prior"] == []
     assert plan["protocol"]["strikes"] == 0 and plan["open_findings"] == {}
@@ -468,7 +478,7 @@ def test_base_edit_event_with_lagging_timeline_plans_a_review_not_skip(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     record = _record(DIFF, "SHIP", head_sha=HEAD)
-    fake = FakeGitHub(_pull(), SOUNDNESS, diff=TWO_FILE_DIFF)
+    fake = FakeGitHub(_pull(), SOUNDNESS, diff=TWO_FILE_DIFF.replace("checker change", "checker moved"))
     fake.reviews = [_review(record)]
     event = {"action": "edited", "changes": {"base": {"ref": {"from": "main"}}}}
     _, values, plan = _plan(monkeypatch, tmp_path, fake, event=event)
@@ -1267,6 +1277,7 @@ OLD_HEAD = "c" * 40
 
 def _record(diff: str, decision: str, **over: Any) -> dict[str, Any]:
     paths = over.pop("paths", None)
+    coverage = over.pop("coverage", 1)
     prints = protocol.fingerprints(_states(diff, over.pop("tag", "")))
     chosen = paths if paths is not None else sorted(prints)
     current = protocol.patch_map(prints, chosen)
@@ -1286,6 +1297,7 @@ def _record(diff: str, decision: str, **over: Any) -> dict[str, Any]:
         "patch_digest": protocol.patch_digest(prints) if prints else f"unread-{OLD_HEAD}",
         "carried": False,
         "summary": "",
+        **({"coverage": coverage} if coverage else {}),
         **over,
     }
     return {**record, "patch_map": current}
@@ -1361,7 +1373,7 @@ def test_a_byte_identical_diff_carries_the_decision_without_a_reviewer(
 
 @pytest.mark.parametrize(
     "change",
-    ["relocated", "prose", "mode", "base-blob", "merge-base-missing"],
+    ["relocated", "prose", "mode", "base-blob"],
 )
 def test_any_difference_in_the_merge_base_diff_is_reviewed_again(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: str
@@ -1376,12 +1388,8 @@ def test_any_difference_in_the_merge_base_diff_is_reviewed_again(
     fake = _fake(_review(record), files=[*TWO_FILES, NOTES_FILE], diff=current)
     if change == "base-blob":
         fake.base_tag = "moved"
-    if change == "merge-base-missing":
-        fake.merge_base = None
     _, values, plan = _plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review" and plan["protocol"]["kind"] == "follow-up"
-    if change == "merge-base-missing":
-        assert plan["protocol"]["patch_digest"] == f"unread-{HEAD}"
 
 
 def test_a_file_without_an_api_blob_id_takes_its_head_blob_from_the_head_tree(
@@ -1465,12 +1473,12 @@ def test_a_file_leaving_the_pull_request_gets_a_full_follow_up_not_a_carry(
     assert plan["protocol"]["kind"] == "follow-up" and plan["protocol"]["changed"] == sorted([CHECKER, CAPTURE])
 
 
-def test_two_unreadable_diffs_in_a_row_never_carry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_two_unreadable_trees_in_a_row_never_carry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     unread = _record("", "SHIP", paths=[CHECKER, CAPTURE])
     assert unread["patch_digest"] == f"unread-{OLD_HEAD}"
     assert set(unread["patch_map"].values()) == {"missing"}
     fake = _fake(_review(unread))
-    fake.diff = None
+    fake._tree = lambda repo, sha: None
     _, values, plan = _plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review" and plan["protocol"]["kind"] == "follow-up"
     assert plan["protocol"]["patch_digest"] == f"unread-{HEAD}"
@@ -1664,10 +1672,10 @@ def test_more_than_a_hundred_reviews_are_all_read(monkeypatch: pytest.MonkeyPatc
     assert values["decision"] == "skip"
 
 
-def test_an_unreadable_diff_never_carries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_an_unreadable_tree_never_carries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     record = _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", open_defects=[DEFECT], next_id=2)
     fake = _fake(_review(record))
-    fake.diff = None
+    fake._tree = lambda repo, sha: None
     _, values, plan = _plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review" and plan["protocol"]["kind"] == "follow-up"
     assert plan["protocol"]["patch_digest"] == f"unread-{HEAD}"
@@ -2025,11 +2033,94 @@ def test_a_rebase_onto_changed_files_is_a_new_digest_with_its_own_strike_and_for
     assert allowed.kind == protocol.FOLLOW_UP and allowed.forced is True
 
 
-def test_an_unavailable_diff_never_plans_an_inline_brief(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_plan_holds_when_diff_cannot_be_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=None))
+    assert values["decision"] == "hold" and values["post"] == "true"
+    assert plan["decision_reason"] == "the pull request diff could not be built"
+    assert plan["chain"] == [] and not (tmp_path / "plan" / "diff.patch").exists()
+
+
+def test_plan_holds_when_the_merge_base_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeGitHub(_pull(), SOUNDNESS)
+    fake.merge_base = None
+    _, values, plan = _plan(monkeypatch, tmp_path, fake)
+    assert values["decision"] == "hold" and plan["decision_reason"] == "the pull request diff could not be built"
+    assert fake.built == []
+
+
+def test_plan_holds_when_the_files_api_is_capped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeGitHub(_pull(changed_files=3001), SOUNDNESS)
+    _, values, plan = _plan(monkeypatch, tmp_path, fake)
+    assert values["decision"] == "hold" and "listing is incomplete" in plan["decision_reason"]
+    assert fake.built == []
+
+
+def test_git_diff_paths_must_match_api_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeGitHub(_pull(), SOUNDNESS)
+    fake.git_paths = frozenset({CHECKER, "extra/other.py"})
+    _, values, plan = _plan(monkeypatch, tmp_path, fake)
+    assert values["decision"] == "hold" and plan["decision_reason"] == "the pull request diff could not be built"
+    with pytest.raises(gitdiff.GitDiffError):
+        gitdiff.verify_paths(gitdiff.BuiltDiff("", frozenset({"a.py"})), ["a.py", "b.py"])
+    gitdiff.verify_paths(gitdiff.BuiltDiff("", frozenset({"a.py", "old.py"})), ["a.py", "old.py"])
+
+
+@pytest.mark.parametrize(
+    "limit",
+    ["diff exceeded the maximum number of lines (20000)", "diff exceeded the maximum number of files (300)"],
+    ids=["406-lines", "406-files"],
+)
+def test_plan_stages_git_diff_when_github_returns_406(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, limit: str
+) -> None:
+    fake = FakeGitHub(_pull(), SOUNDNESS)
+    fake.api_diff_error = limit
+    _, values, plan = _plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review"
-    assert plan["brief_mode"] == "file-list"
-    assert plan["diff_inline"] is None
+    assert plan["brief_mode"] == "inline" and plan["diff_inline"] is not None
+    assert (tmp_path / "plan" / "diff.patch").read_text(encoding="utf-8") == DIFF
+    assert fake.built == [(REPO, MERGE_BASE, HEAD)]
+
+
+def test_a_review_plan_carries_the_coverage_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS))
+    assert values["decision"] == "review" and plan["coverage"] == coverage.VERSION >= 1
+
+
+def test_a_diff_with_no_section_for_an_evidence_file_is_planned_as_a_file_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    other = "docs/other.py"
+    unrelated = f"diff --git a/{other} b/{other}\n--- a/{other}\n+++ b/{other}\n@@ -1,1 +1,2 @@\n a\n+other change\n"
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=unrelated))
+    assert values["decision"] == "review" and plan["evidence_files"] == [CHECKER]
+    assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
+
+
+def test_a_header_only_section_for_an_evidence_file_still_plans_an_inline_brief(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    renamed = f"diff --git a/{CHECKER} b/{CHECKER}\nold mode 100644\nnew mode 100755\n"
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=renamed))
+    assert values["decision"] == "review"
+    assert plan["brief_mode"] == "inline" and plan["diff_inline"] is not None
+
+
+@pytest.mark.parametrize(
+    ("diff", "files", "expected"),
+    [
+        (DIFF, [CHECKER], True),
+        (DIFF, [], True),
+        (DIFF, [CHECKER, "other.py"], False),
+        ("", [CHECKER], False),
+        (f"diff --git a/{CHECKER} b/{CHECKER}\nold mode 100644\nnew mode 100755\n", [CHECKER], True),
+    ],
+    ids=["covered", "no-evidence", "missing-section", "empty-diff", "mode-only-section"],
+)
+def test_inline_is_complete_only_when_every_evidence_file_has_a_diff_section(
+    diff: str, files: list[str], expected: bool
+) -> None:
+    assert cli._inline_complete(diff, files) is expected
 
 
 @pytest.mark.parametrize(

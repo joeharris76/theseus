@@ -12,7 +12,6 @@
     "base_sha": "<sha0>",
     "binary_files": [],
     "bot_login": "benchbox-oracle",
-    "brief_max_bytes": 100000,
     "brief_mode": "oversize",
     "chain": [],
     "created_at": "<volatile>",

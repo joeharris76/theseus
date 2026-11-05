@@ -74,6 +74,14 @@
         2
       ],
       "source": "captured: client and auth-gateway of the pinned omp 18.12.1 build against the loopback replay chain; the upstream provider turns are hand-built stubs that ask for bash, write and edit, every event after them is build output (each call is refused as an unknown tool)"
+    },
+    "read-lines": {
+      "file": "read_lines.jsonl",
+      "kind": "read-lines",
+      "rows": [
+        7
+      ],
+      "source": "captured: client and auth-gateway of the pinned omp 18.13.3 build against the loopback replay chain; the upstream provider turns are hand-built stubs that read a file bare, with a line range, raw, raw with a range and as part of a multi-path read, every event after them is build output"
     }
   }
 }

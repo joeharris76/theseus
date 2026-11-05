@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import base64
+import os
+import shutil
+import subprocess
+import tempfile
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv", "-M")
+FETCH_FLAGS = ("--no-tags", "--depth=1", "--filter=blob:none")
+DEFAULT_SERVER = "https://github.com"
+TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN")
+UNBUILT_REASON = "the pull request diff could not be built"
+
+
+class GitDiffError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class BuiltDiff:
+    text: str
+    paths: frozenset[str]
+
+
+def diff_arguments(base: str, head: str) -> list[str]:
+    return ["diff", *DIFF_FLAGS, base, head]
+
+
+def name_status_arguments(base: str, head: str) -> list[str]:
+    return ["diff", "--name-status", "-z", "-M", base, head]
+
+
+def name_status_paths(output: str) -> frozenset[str]:
+    tokens = output.split("\0")
+    paths: set[str] = set()
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        width = 3 if tokens[index][0] in "RC" else 2
+        paths.update(token for token in tokens[index + 1 : index + width] if token)
+        index += width
+    return frozenset(paths)
+
+
+def _run(args: list[str], cwd: Path, env: Mapping[str, str] | None = None) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, check=False, env=None if env is None else dict(env)
+        )
+    except OSError as exc:
+        raise GitDiffError(f"git could not run: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()[:300]
+        raise GitDiffError(f"git {args[0]} failed: {detail}")
+    return result.stdout
+
+
+def local_diff(root: Path, base: str, head: str) -> str:
+    return _run(diff_arguments(base, head), root).decode("utf-8", errors="replace")
+
+
+def _git_environment(server: str, token: str) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if key not in ("GIT_DIR", "GIT_WORK_TREE", *TOKEN_ENV)}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if token:
+        credential = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+        count = int(env.get("GIT_CONFIG_COUNT") or 0)
+        env["GIT_CONFIG_COUNT"] = str(count + 1)
+        env[f"GIT_CONFIG_KEY_{count}"] = f"http.{server.rstrip('/')}/.extraheader"
+        env[f"GIT_CONFIG_VALUE_{count}"] = f"AUTHORIZATION: basic {credential}"
+    return env
+
+
+def build(repo: str, merge_base: str, head: str, *, remote: str | None = None, token: str | None = None) -> BuiltDiff:
+    server = os.environ.get("GITHUB_SERVER_URL", DEFAULT_SERVER)
+    url = remote if remote is not None else f"{server.rstrip('/')}/{repo}.git"
+    secret = token if token is not None else next((os.environ[name] for name in TOKEN_ENV if os.environ.get(name)), "")
+    env = _git_environment(server, secret)
+    parent = os.environ.get("RUNNER_TEMP") or None
+    workdir = Path(tempfile.mkdtemp(prefix="oracle-git-diff-", dir=parent))
+    try:
+        _run(["init", "--bare", "--quiet"], workdir, env)
+        _run(["remote", "add", "origin", url], workdir, env)
+        _run(["fetch", *FETCH_FLAGS, "origin", merge_base, head], workdir, env)
+        text = _run(diff_arguments(merge_base, head), workdir, env).decode("utf-8", errors="replace")
+        listing = _run(name_status_arguments(merge_base, head), workdir, env).decode("utf-8", errors="replace")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    return BuiltDiff(text, name_status_paths(listing))
+
+
+def verify_paths(built: BuiltDiff, api_paths: Iterable[str]) -> None:
+    expected = frozenset(api_paths)
+    if built.paths != expected:
+        raise GitDiffError("the git diff lists different paths than the pull request files")

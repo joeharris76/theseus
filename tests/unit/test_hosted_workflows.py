@@ -50,6 +50,19 @@ def callee(request: pytest.FixtureRequest) -> tuple[str, dict[str, Any]]:
     return request.param, load(WORKFLOWS / request.param)
 
 
+def test_the_attempt_and_capture_artifacts_are_retained_for_thirty_days() -> None:
+    document = load(WORKFLOWS / "review.yml")
+    uploads = {
+        step["with"]["name"]: step["with"]["retention-days"]
+        for _, step in all_steps(document)
+        if step.get("uses", "").startswith("actions/upload-artifact@")
+    }
+    attempts = {name: days for name, days in uploads.items() if name.startswith("oracle-verdict-attempt-")}
+    assert sorted(attempts) == [f"oracle-verdict-attempt-{number}" for number in range(1, 6)]
+    assert set(attempts.values()) == {30}
+    assert uploads["oracle-verdict-capture"] == 30
+
+
 def test_every_action_in_every_workflow_is_pinned_to_a_full_commit_sha() -> None:
     for path in sorted(WORKFLOWS.glob("*.yml")):
         for _, step in all_steps(load(path)):

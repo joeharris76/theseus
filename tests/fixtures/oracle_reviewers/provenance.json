@@ -77,6 +77,11 @@
       "redaction": "pattern scan finds no token, gateway host or URL, or operator home path; no credential-shaped value present",
       "source": "captured from the pinned omp 18.12.1 build against the loopback replay chain; upstream provider bodies are hand-built stubs, every later event is build output"
     },
+    "omp_candidate/read_lines.jsonl": {
+      "origin": "captured",
+      "redaction": "pattern scan finds no token, gateway host or URL, or operator home path; no credential-shaped value present",
+      "source": "captured from the pinned omp 18.13.3 build against the loopback replay chain; upstream provider turns are hand-built stubs that read a file bare, with a line range, raw, raw with a range and as part of a multi-path read, every later event is build output"
+    },
     "omp_candidate/roster_breach.jsonl": {
       "origin": "captured",
       "redaction": "pattern scan finds no token, gateway host or URL, or operator home path; no credential-shaped value present",

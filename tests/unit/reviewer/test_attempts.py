@@ -63,7 +63,6 @@ def _plan(policy: Policy, buckets: tuple[str, ...] = ("small", "medium")) -> dic
         "decision": "review",
         "decision_reason": "",
         "max_defects": policy.protocol.max_defects,
-        "brief_max_bytes": policy.brief_max_bytes,
         "evidence_files": [CHECKER],
         "chain": [policy.reviewers[bucket].to_json() for bucket in buckets],
         "omp_sha256": omp_pin.sha256_of(Path(sys.executable)),

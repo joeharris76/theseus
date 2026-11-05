@@ -165,7 +165,7 @@ def test_the_local_digest_equals_the_ci_digest_for_a_rename_a_mode_change_and_a_
         for item in local.changed_files(repo, base, head)
     ]
     plan = {"repo": "owner/name", "base_sha": base, "head_sha": head}
-    ci_states = cli._file_states(plan, files)
+    ci_states = cli._file_states(plan, files, base)
     assert ci_states is not None
     assert sorted(ci_states, key=lambda state: state.new_path) == sorted(local_states, key=lambda state: state.new_path)
     assert protocol.patch_digest(protocol.fingerprints(ci_states)) == protocol.patch_digest(

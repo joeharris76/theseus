@@ -180,6 +180,7 @@ def test_the_harness_phase_reports_a_failed_install_without_failing_the_step(
 
 def test_the_phases_are_exactly_the_cutover_set_and_none_accepts_shadow() -> None:
     assert set(driver.PHASES) == {
+        "plan",
         "prepare",
         "harness",
         "scan",

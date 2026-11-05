@@ -75,9 +75,26 @@ def _reads(*paths: str) -> str:
     for index, path in enumerate(paths):
         call = {"type": "toolCall", "id": f"r{index}", "name": "read", "arguments": {"path": path}}
         lines.append(json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [call]}}))
-        result = {"role": "toolResult", "toolCallId": f"r{index}", "toolName": "read", "isError": False}
+        shown = {"totalLines": 1, "displayContent": {"text": "x", "startLine": 1, "lineNumbers": [1]}}
+        result = {
+            "role": "toolResult",
+            "toolCallId": f"r{index}",
+            "toolName": "read",
+            "isError": False,
+            "details": shown,
+        }
         lines.append(json.dumps({"type": "message_end", "message": result}))
     return "\n".join(lines)
+
+
+def _stage_added(tmp_path: Path, workspace: Path, paths: tuple[str, ...]) -> None:
+    text = "".join(
+        f"diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+x\n"
+        for path in paths
+    )
+    source = tmp_path / "staged-source.patch"
+    source.write_text(text, encoding="utf-8")
+    runner.stage_pull_request_diff(source, workspace)
 
 
 def _review(
@@ -94,8 +111,13 @@ def _review(
     exempt_paths: tuple[str, ...] = (),
     binary_files: tuple[str, ...] = (),
     protected_files: tuple[str, ...] | None = None,
+    diff_inline: str | None = None,
+    stage_diff: bool = True,
 ):
+    if brief_mode != "inline" and required and stage_diff:
+        _stage_added(tmp_path, workspace, required)
     plan = {
+        "diff_inline": diff_inline,
         "brief_mode": brief_mode,
         "evidence_files": list(required),
         "evidence_exempt_paths": list(exempt_paths),
@@ -535,7 +557,6 @@ def _plan_dir(
         "base_sha": "a" * 40,
         "head_sha": head,
         "brief_mode": brief_mode,
-        "brief_max_bytes": 100000,
         "max_defects": 10,
         "scope": scope,
         "reviewed_head": None,
@@ -690,7 +711,7 @@ def test_a_miscited_defect_is_kept_and_marked_so_the_change_still_fails(
     from theseus_reviewer.verdict import validate
 
     workspace, head = _workspace(tmp_path)
-    _omp_says(tmp_path, monkeypatch, decision="SHIP", defects=[{**DEFECT, **defect}])
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt",), decision="SHIP", defects=[{**DEFECT, **defect}])
     outcome = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt",))
     assert outcome.missing is None and outcome.verdict is not None
     assert outcome.verdict["defects"][0]["detail"] == f"{note} d"
@@ -748,8 +769,44 @@ def test_a_file_list_ship_must_examine_every_required_file(
     assert short.missing == absence.Absence(
         absence.INCOMPLETE, "the verdict would ship but did not examine b.txt", unread=("b.txt",)
     )
-    inline = _review(policy, tmp_path, workspace, head, brief_mode="inline", required=("a.txt", "b.txt"))
+    brief = "".join(
+        f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n-x\n+{name}\n"
+        for name in ("a.txt", "b.txt")
+    )
+    inline = _review(
+        policy, tmp_path, workspace, head, brief_mode="inline", required=("a.txt", "b.txt"), diff_inline=brief
+    )
     assert inline.missing is None
+
+
+@skip_on_windows
+def test_an_inline_ship_whose_brief_omits_a_required_diff_is_incomplete(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, head = _two_files(tmp_path)
+    _omp_says(tmp_path, monkeypatch, files_examined=["a.txt"])
+    omitted = _review(policy, tmp_path, workspace, head, brief_mode="inline", required=("a.txt", "b.txt"))
+    assert omitted.missing == absence.Absence(
+        absence.INCOMPLETE,
+        "the verdict would ship but the brief omits the diff of a.txt, b.txt",
+        unread=("a.txt", "b.txt"),
+    )
+
+
+@skip_on_windows
+def test_a_file_list_ship_without_a_staged_diff_is_refused(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, head = _two_files(tmp_path)
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt", "b.txt"), files_examined=["a.txt", "b.txt"])
+    outcome = _review(
+        policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"), stage_diff=False
+    )
+    assert outcome.missing == absence.Absence(
+        absence.INCOMPLETE,
+        "the verdict would ship but the staged diff lists none of the required files: a.txt, b.txt",
+        unread=("a.txt", "b.txt"),
+    )
 
 
 @skip_on_windows
@@ -759,16 +816,12 @@ def test_a_file_list_ship_must_have_read_every_file_it_claims(
     workspace, head = _two_files(tmp_path)
     _omp_says(tmp_path, monkeypatch, reads=("a.txt:1-5",), files_examined=["a.txt", "b.txt"])
     outcome = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"))
-    assert outcome.missing == absence.Absence(
-        absence.INCOMPLETE, "the verdict would ship but its trace shows no read of b.txt", unread=("b.txt",)
-    )
+    assert outcome.missing is not None and outcome.missing.unread == ("b.txt",)
+    assert "b.txt" in outcome.missing.detail and "changed hunks" in outcome.missing.detail
     _omp_says(tmp_path, monkeypatch, files_examined=["a.txt", "b.txt"])
     unread = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"))
-    assert unread.missing == absence.Absence(
-        absence.INCOMPLETE,
-        "the verdict would ship but its trace shows no successful file read",
-        unread=("a.txt", "b.txt"),
-    )
+    assert unread.missing is not None and unread.missing.kind == absence.INCOMPLETE
+    assert unread.missing.unread == ("a.txt", "b.txt")
 
 
 @skip_on_windows
@@ -871,11 +924,11 @@ def test_a_follow_up_ship_with_an_unchanged_file_defect_counts_correctly(
 
 
 @skip_on_windows
-def test_a_follow_up_defect_in_a_changed_file_needs_no_reads(
+def test_a_follow_up_defect_in_a_changed_file_counts_once_the_file_is_read(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, head = _two_files(tmp_path)
-    _omp_says(tmp_path, monkeypatch, decision="SHIP", defects=[INSIDE, OUTSIDE])
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt",), decision="SHIP", defects=[INSIDE, OUTSIDE])
     outcome = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt",), rules=FOLLOW_UP)
     judged = _judged(outcome, FOLLOW_UP)
     assert judged.decision == "SHIP_WITH_FIXES"
@@ -883,24 +936,28 @@ def test_a_follow_up_defect_in_a_changed_file_needs_no_reads(
 
 
 @skip_on_windows
-def test_a_follow_up_leaving_a_prior_defect_open_needs_no_reads(
+def test_a_follow_up_leaving_a_prior_defect_open_counts_once_the_file_is_read(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, head = _two_files(tmp_path)
     prior = {"id": "D1", "severity": "High", "file": "a.txt", "line": 1, "end_line": None, "title": "Old"}
     rules = {**FOLLOW_UP, "prior": [prior]}
-    _omp_says(tmp_path, monkeypatch, defects=[OUTSIDE])
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt",), defects=[OUTSIDE])
     outcome = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt",), rules=rules)
     assert _judged(outcome, rules).decision == "SHIP_WITH_FIXES"
 
 
 @skip_on_windows
 @pytest.mark.parametrize("defect", [INSIDE, OUTSIDE], ids=["changed-file", "other-file"])
-def test_a_first_round_file_list_defect_needs_no_reads(
+def test_a_first_round_file_list_defect_ship_with_fixes_needs_its_reads(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, defect: dict
 ) -> None:
     workspace, head = _two_files(tmp_path)
     _omp_says(tmp_path, monkeypatch, decision="SHIP", defects=[defect])
+    unread = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt",))
+    assert unread.missing is not None and unread.missing.kind == absence.INCOMPLETE
+    assert unread.missing.unread == ("a.txt",)
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt",), decision="SHIP", defects=[defect])
     outcome = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt",))
     assert _judged(outcome, {}).decision == "SHIP_WITH_FIXES"
 
@@ -965,17 +1022,18 @@ def test_an_evidence_failure_keeps_a_bounded_redacted_trace_diagnostic(
     assert outcome.missing is not None and outcome.missing.kind == absence.INCOMPLETE
     assert "trace: reads=1 greps=0" in outcome.diagnostic
     assert "required=2" in outcome.diagnostic and "missing=[b.txt]" in outcome.diagnostic
+    assert outcome.diagnostic.endswith("hunks_covered=1/2 files_open=1")
     assert len(outcome.diagnostic) < 1100
 
 
 @skip_on_windows
-def test_a_plain_read_and_single_file_grep_complete_a_file_list_verdict(
+def test_a_plain_read_completes_a_file_list_verdict_and_a_grep_does_not(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, head = _two_files(tmp_path)
     _omp_says(tmp_path, monkeypatch, reads=("a.txt?q=.version", "a.txt"), files_examined=["a.txt", "b.txt"])
     missing = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"))
-    assert missing.missing is not None and "no read of b.txt" in missing.missing.detail
+    assert missing.missing is not None and missing.missing.unread == ("b.txt",)
     grep_call = {"type": "toolCall", "id": "g1", "name": "grep", "arguments": {"path": "b.txt"}}
     grep_events = [
         {"type": "message_end", "message": {"role": "assistant", "content": [grep_call]}},
@@ -993,6 +1051,9 @@ def test_a_plain_read_and_single_file_grep_complete_a_file_list_verdict(
     verdict = {**VERDICT, "files_examined": ["a.txt", "b.txt"]}
     stdout = "\n".join([_reads("a.txt"), *(json.dumps(event) for event in grep_events), _envelope(json.dumps(verdict))])
     _fake_omp(tmp_path, monkeypatch, f"print({json.dumps(stdout)})")
+    grepped = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"))
+    assert grepped.missing is not None and grepped.missing.unread == ("b.txt",)
+    _omp_says(tmp_path, monkeypatch, reads=("a.txt", "b.txt"), files_examined=["a.txt", "b.txt"])
     done = _review(policy, tmp_path, workspace, head, brief_mode="file-list", required=("a.txt", "b.txt"))
     assert done.missing is None
 

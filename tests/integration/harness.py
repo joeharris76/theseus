@@ -123,8 +123,20 @@ class Harness:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text((ALPHA_ROOT / path).read_text(encoding="utf-8"), encoding="utf-8")
         self._seed()
+        self._publish_remote()
         self.github = FakeGitHub(SLUG, self.repo).start()
         self.jev = FakeJev().start()
+
+    @property
+    def remote_root(self) -> Path:
+        return self.root / "remote"
+
+    def _publish_remote(self) -> None:
+        link = self.remote_root / f"{SLUG}.git"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.repo / ".git", target_is_directory=True)
+        git(self.repo, "config", "uploadpack.allowFilter", "true")
+        git(self.repo, "config", "uploadpack.allowAnySHA1InWant", "true")
 
     @property
     def omp_cache(self) -> Path:
@@ -254,6 +266,9 @@ class Harness:
             "GITHUB_REPOSITORY": SLUG,
             "GITHUB_SERVER_URL": f"https://{GH_HOST}",
             "GITHUB_API_URL": self.github.url,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"url.file://{self.remote_root}/.insteadOf",
+            "GIT_CONFIG_VALUE_0": f"https://{GH_HOST}/",
         }
         if temp is not None:
             env["RUNNER_TEMP"] = str(temp)

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from theseus_reviewer import promotion, protocol
+from theseus_reviewer.diff import hunk_index
 from theseus_reviewer.policy import Policy, PromotionRules
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -104,6 +105,7 @@ def _base_record(head_sha: str = SHA_A, **overrides: Any) -> dict[str, Any]:
         "carried": False,
         "summary": "",
         "run_uuid": "9" * 32,
+        "coverage": 1,
     }
     return {**record, **overrides}
 
@@ -625,6 +627,8 @@ def test_ci_bootstrap_reads_authenticated_comments_and_holds_on_fetch_failure(
         lock_requests.append(endpoint)
         if endpoint.endswith(f"?ref={SHA_C}"):
             raise github.GitHubError("gh: Not Found (HTTP 404)")
+        if endpoint.startswith(f"repos/BenchBox-dev/BenchBox/contents/{promotion.WORKFLOW_DIR}"):
+            return "[]"
         return inputs["head_lock_text"]
 
     def comments(endpoint: str) -> list[dict[str, Any]]:
@@ -660,10 +664,13 @@ def test_ci_bootstrap_reads_authenticated_comments_and_holds_on_fetch_failure(
         ],
     )
     assert requests == ["repos/BenchBox-dev/BenchBox/issues/7/comments?per_page=100"]
-    assert lock_requests == [
+    expected_requests = [
         f"repos/BenchBox-dev/BenchBox/contents/{promotion.LOCK_PATH}?ref={SHA_C}",
         f"repos/BenchBox-dev/BenchBox/contents/{promotion.LOCK_PATH}?ref={SHA_A}",
     ]
+    if not fetch_fails:
+        expected_requests.append(f"repos/BenchBox-dev/BenchBox/contents/{promotion.WORKFLOW_DIR}?ref={SHA_A}")
+    assert lock_requests == expected_requests
     if fetch_fails:
         assert bundle is None
         assert reason is not None and "comment fetch unavailable" in reason
@@ -871,3 +878,176 @@ def test_oversized_record_field_raises_promotion_error() -> None:
     entries["pyyaml-6.0.3.dist-info/RECORD"] = b"x" * (promotion.csv.field_size_limit() + 1)
     with pytest.raises(promotion.PromotionError, match="invalid wheel RECORD"):
         promotion.verify_wheel_record(entries, "pyyaml", "6.0.3")
+
+
+STAGED_NEW = f"{promotion.STAGED_PROMOTION_DIR}/new/"
+STAGED_OLD = f"{promotion.STAGED_PROMOTION_DIR}/old/"
+THESEUS = "joeharris76/theseus"
+CONSUMER_WORKFLOWS = {
+    ".github/workflows/oracle.yml": (
+        "jobs:\n"
+        "  review:\n"
+        f"    uses: {THESEUS}/.github/workflows/review.yml@v1\n"
+        "  gate:\n"
+        f"    uses: '{THESEUS}/.github/workflows/gate.yml@v1'\n"
+        "  other:\n"
+        "    uses: someone/else/.github/workflows/review.yml@v1\n"
+        "  # uses: joeharris76/theseus/.github/workflows/commented.yml@v1\n"
+    )
+}
+SIMILAR_BODY = b"".join(f"line {number}\n".encode() for number in range(1, 21))
+SURFACE_OLD = {
+    "src/theseus_reviewer/__init__.py": b"VALUE = 1\n",
+    "src/theseus_reviewer/cli.py": b"def run():\n    return 1\n",
+    "src/theseus_reviewer/moved_from.py": b"identical\ncontent\nmoved\n",
+    "src/theseus_reviewer/edited_from.py": SIMILAR_BODY,
+    "pyproject.toml": b'[project]\nname = "theseus-reviewer"\nversion = "1"\n',
+    ".github/workflows/review.yml": b"name: review\n",
+    ".github/workflows/gate.yml": b"name: gate\n",
+    ".github/workflows/ci.yml": b"name: ci\n",
+    "docs/guide.md": b"guide\n",
+    "tests/test_cli.py": b"def test():\n    pass\n",
+    "tests/test_old_name.py": b"alpha\nbeta\ngamma\n",
+}
+SURFACE_NEW = {
+    "src/theseus_reviewer/__init__.py": b"VALUE = 1\n",
+    "src/theseus_reviewer/cli.py": b"def run():\n    return 2\n",
+    "src/theseus_reviewer/moved_to.py": b"identical\ncontent\nmoved\n",
+    "src/theseus_reviewer/edited_to.py": SIMILAR_BODY.replace(b"line 20", b"line twenty"),
+    "pyproject.toml": b'[project]\nname = "theseus-reviewer"\nversion = "2"\n',
+    ".github/workflows/review.yml": b"name: review changed\n",
+    ".github/workflows/gate.yml": b"name: gate\n",
+    ".github/workflows/ci.yml": b"name: ci changed\n",
+    "docs/guide.md": b"guide changed\n",
+    "tests/test_cli.py": b"def test():\n    assert True\n",
+    "tests/test_new_name.py": b"alpha\nbeta\ngamma\n",
+}
+
+
+def _surface(tree: dict[str, bytes], workflows: dict[str, str] | None = None) -> frozenset[str]:
+    return promotion.executed_surface(
+        tree,
+        package="theseus-reviewer",
+        repository=THESEUS,
+        consumer_workflows=CONSUMER_WORKFLOWS if workflows is None else workflows,
+    )
+
+
+def test_delta_detects_exact_and_similar_renames() -> None:
+    changed, diff_text, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
+    renames = {item.path: item for item in changed if item.status == "renamed"}
+    assert set(renames) == {
+        f"{STAGED_NEW}src/theseus_reviewer/moved_to.py",
+        f"{STAGED_NEW}src/theseus_reviewer/edited_to.py",
+        f"{STAGED_NEW}tests/test_new_name.py",
+    }
+    exact = [item for item in renames.values() if (item.additions, item.deletions) == (0, 0)]
+    assert sorted(item.path for item in exact) == [
+        f"{STAGED_NEW}src/theseus_reviewer/moved_to.py",
+        f"{STAGED_NEW}tests/test_new_name.py",
+    ]
+    similar = renames[f"{STAGED_NEW}src/theseus_reviewer/edited_to.py"]
+    assert similar.previous_path == f"{STAGED_OLD}src/theseus_reviewer/edited_from.py"
+    assert (similar.additions, similar.deletions) == (1, 1)
+    assert "rename from src/theseus_reviewer/edited_from.py\nrename to src/theseus_reviewer/edited_to.py" in diff_text
+    assert "diff --git a/src/theseus_reviewer/edited_from.py b/src/theseus_reviewer/edited_to.py\n" in diff_text
+    index = hunk_index(diff_text)
+    assert len(index["src/theseus_reviewer/edited_to.py"]) == 1
+    assert not index.get("src/theseus_reviewer/moved_to.py")
+    assert not any(item.status == "removed" for item in changed)
+    assert {item.status for item in changed} == {"renamed", "modified"}
+
+
+def test_removed_files_keep_a_whole_old_content_hunk() -> None:
+    changed, diff_text, _ = promotion.compute_upstream_delta(
+        {"src/guard.py": b"a\nb\nc\n", "keep.py": b"k\n"}, {"keep.py": b"k\n"}
+    )
+    assert [(item.path, item.status, item.deletions) for item in changed] == [
+        (f"{STAGED_OLD}src/guard.py", "removed", 3)
+    ]
+    hunks = hunk_index(diff_text)["src/guard.py"]
+    assert len(hunks) == 1 and not hunks[0].additive
+
+
+def test_identical_move_needs_no_read() -> None:
+    changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
+    surface = _surface(SURFACE_NEW)
+    assert "src/theseus_reviewer/moved_to.py" in surface
+    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, surface)
+    assert f"{STAGED_NEW}src/theseus_reviewer/moved_to.py" not in required
+    assert f"{STAGED_NEW}src/theseus_reviewer/edited_to.py" in required
+
+
+def test_required_reads_are_the_executed_surface() -> None:
+    changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
+    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, _surface(SURFACE_NEW))
+    assert required == {
+        f"{STAGED_NEW}src/theseus_reviewer/cli.py",
+        f"{STAGED_NEW}src/theseus_reviewer/edited_to.py",
+        f"{STAGED_NEW}pyproject.toml",
+        f"{STAGED_NEW}.github/workflows/review.yml",
+    }
+    assert {item.path for item in changed} - required >= {
+        f"{STAGED_NEW}docs/guide.md",
+        f"{STAGED_NEW}tests/test_cli.py",
+        f"{STAGED_NEW}.github/workflows/ci.yml",
+    }
+
+
+def test_flat_layout_package_files_are_executed() -> None:
+    tree = {"theseus_reviewer/__init__.py": b"x\n", "theseus_reviewer/data.json": b"{}\n", "other/mod.py": b"y\n"}
+    assert _surface(tree, {}) == {"theseus_reviewer/__init__.py", "theseus_reviewer/data.json"}
+
+
+def test_unreferenced_workflow_change_is_not_required() -> None:
+    changed, _, _ = promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)
+    surface = _surface(SURFACE_NEW)
+    assert ".github/workflows/ci.yml" not in surface
+    required = promotion.required_read_paths(changed, SURFACE_OLD, SURFACE_NEW, surface)
+    assert f"{STAGED_NEW}.github/workflows/ci.yml" not in required
+    assert f"{STAGED_NEW}.github/workflows/review.yml" in required
+
+
+def test_nested_workflow_references_inside_the_theseus_tree_are_followed() -> None:
+    tree = {
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": b"jobs:\n  a:\n    uses: ./.github/workflows/ci.yml\n",
+    }
+    assert ".github/workflows/ci.yml" in _surface(tree)
+    tree[".github/workflows/review.yml"] = (
+        f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/missing.yml@v1\n".encode()
+    )
+    with pytest.raises(promotion.PromotionError, match="missing.yml"):
+        _surface(tree)
+
+
+def test_missing_referenced_workflow_holds() -> None:
+    tree = {path: content for path, content in SURFACE_NEW.items() if path != ".github/workflows/gate.yml"}
+    with pytest.raises(promotion.PromotionError, match="gate.yml.*missing"):
+        _surface(tree)
+    inputs = _preparation_inputs()
+    inputs["workflow_loader"] = lambda _ref: CONSUMER_WORKFLOWS
+    with pytest.raises(promotion.PromotionError, match="missing from the promoted source"):
+        promotion.prepare_promotion(**inputs)
+
+
+def test_preparation_records_the_required_paths_of_the_executed_surface() -> None:
+    inputs = _preparation_inputs()
+    inputs["workflow_loader"] = lambda _ref: {}
+    bundle = promotion.prepare_promotion(**inputs)
+    assert bundle is not None
+    assert bundle.required_paths == {f"{STAGED_NEW}src/theseus_reviewer/__init__.py"}
+
+
+def test_delta_digest_unchanged_by_rename_detection() -> None:
+    assert promotion.compute_upstream_delta(SURFACE_OLD, SURFACE_NEW)[2] == (
+        "d75284f89ff241c8c6067792a687119abe64b258fbfefb92ae646a0324d02ca5"
+    )
+    moved_old = {"a.py": b"1\n", "dir/b.py": b"two\n"}
+    moved_new = {"a.py": b"1\n", "dir2/b.py": b"two\n", "empty.txt": b""}
+    assert promotion.compute_upstream_delta(moved_old, moved_new)[2] == (
+        "bd51cb82572fffdce95981357b187ed57a92a1f4d9a371524895c9a0f38b7e55"
+    )
+    assert promotion.compute_upstream_delta(moved_new, moved_old)[2] == (
+        "9d5e1a48d28478fcd2d531dbf47ca6bc14c873932d7973f8dd0adaa9f121abce"
+    )

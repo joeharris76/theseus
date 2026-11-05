@@ -126,8 +126,6 @@ def test_fully_disabled_policy_needs_no_attempts() -> None:
         (lambda raw: raw.update(findings_delivery="pr"), r"findings_delivery must be one of"),
         (lambda raw: raw.update(bot_login="BenchBox!"), r"bot_login must be an App slug"),
         (lambda raw: raw.update(bot_login="-lead"), r"bot_login must be an App slug"),
-        (lambda raw: raw.update(brief_max_bytes=0), r"brief_max_bytes must fit in one command-line argument"),
-        (lambda raw: raw.update(brief_max_bytes=120001), r"brief_max_bytes must fit in one command-line argument"),
         (lambda raw: raw["protocol"].update(max_defects=0), r"protocol limits must be positive"),
         (lambda raw: raw.pop("protocol"), r"protocol limits must be positive"),
         (lambda raw: raw["protocol"].update(max_do_not_ship=0), r"protocol limits must be positive"),
@@ -261,12 +259,42 @@ def test_a_policy_without_a_promotion_section_parses_with_empty_promotion_rules(
     assert (rules.repository, rules.bootstrap_reviewers) == ("", ())
 
 
-@pytest.mark.parametrize("missing", ["repository", "bootstrap_reviewers"])
-def test_a_promotion_section_without_a_required_key_is_rejected(missing: str) -> None:
+def test_a_promotion_section_without_a_repository_is_rejected() -> None:
     raw = _raw()
-    raw["promotion"] = {key: value for key, value in PROMOTION.items() if key != missing}
-    with pytest.raises(PolicyError, match=f"promotion {missing} is required when the policy has a promotion section"):
+    raw["promotion"] = {key: value for key, value in PROMOTION.items() if key != "repository"}
+    with pytest.raises(PolicyError, match="promotion repository is required when the policy has a promotion section"):
         parse_policy(raw)
+
+
+def test_a_promotion_section_without_bootstrap_keys_means_no_bootstrap_is_configured() -> None:
+    raw = _raw()
+    raw["promotion"] = {"repository": "owner/theseus"}
+    rules = parse_policy(raw).promotion
+    assert rules.repository == "owner/theseus"
+    assert rules.bootstrap_reviewers == ()
+    assert rules.bootstrap_baseline_commit is None
+    assert dict(rules.bootstrap_path_map) == {}
+
+
+def test_a_policy_carrying_the_removed_brief_size_key_is_rejected() -> None:
+    raw = _raw()
+    raw["brief_max_bytes"] = 100000
+    with pytest.raises(PolicyError, match="unknown top-level key 'brief_max_bytes'"):
+        parse_policy(raw)
+
+
+def test_a_policy_with_an_unknown_top_level_key_is_rejected_by_name() -> None:
+    raw = _raw()
+    raw["surprise"] = True
+    with pytest.raises(PolicyError, match="unknown top-level key 'surprise'"):
+        parse_policy(raw)
+
+
+def test_the_brief_size_bound_is_a_fixed_constant() -> None:
+    from theseus_reviewer.policy import BRIEF_MAX_BYTES
+
+    assert BRIEF_MAX_BYTES == 100_000
+    assert not hasattr(parse_policy(_raw()), "brief_max_bytes")
 
 
 def test_the_live_policy_carries_its_consumer_binding(policy: Policy) -> None:

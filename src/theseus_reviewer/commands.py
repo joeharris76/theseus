@@ -26,6 +26,9 @@ contextPromotion:
 prewalk:
   enabled: false
   auto: "off"
+compaction:
+  enabled: false
+  midTurnEnabled: false
 read:
   summarize:
     enabled: false

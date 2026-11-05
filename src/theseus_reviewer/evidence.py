@@ -4,13 +4,17 @@ import fnmatch
 import json
 import os
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 
+from . import coverage
+from .coverage import Ranges, Returned
 from .verdict import FIXED, MAX_PATH, NOT_FIXED, WITHDRAWN, Finding, Verdict, display_path, sanitize, valid_path
 
 INLINE = "inline"
+COMPACTION_EVENT = "auto_compaction_start"
 _LINE_SUFFIX = re.compile(r":\d+(?:-\d+)?$")
 
 
@@ -18,7 +22,7 @@ TRACED = ("omp",)
 OMP_READERS = frozenset({"read", "grep"})
 _CHUNK = r"(?:L?\d+(?:(?:-|\.\.)(?:L?\d+)?|\+L?\d+)?|-\d+)"
 _RANGES = rf"{_CHUNK}(?:,:?{_CHUNK})*"
-_OMP_SELECTOR = re.compile(rf":(?:raw(?::{_RANGES})?|{_RANGES}(?::raw)?)$")
+OMP_SELECTOR = re.compile(rf":(?:raw(?::{_RANGES})?|{_RANGES}(?::raw)?)$")
 ARCHIVE_EXTENSIONS = (
     "tar.gz|tar.bz2|tar.xz|tar.zst|tar.z|tar|tgz|tbz2|tbz|txz|tzst|zip|jar|war|ear|apk|whl|ipa|xpi|vsix|nupkg|cbz"
     "|rar|cbr|7z|iso|cab|cpio|rpm|ar|a|lib|deb|lzh|lha|arj|asar|gz|bz2|xz|zst|z|lzma"
@@ -55,6 +59,8 @@ class Trace:
     greps: tuple[str, ...] = ()
     elisions: tuple[tuple[str, int, int], ...] = ()
     failed: int = 0
+    spans: tuple[tuple[str, Ranges], ...] = ()
+    ledger: tuple[tuple[str, Ranges, bool, bool], ...] = ()
 
 
 def _completed_messages(stdout: str) -> Iterable[dict]:
@@ -73,10 +79,61 @@ class _Outcome:
     text: str
     spans: int
     lines: int
+    ranges: Ranges = ()
+    truncated: bool = False
 
 
 def _count(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _shown_bounds(details: dict, display: dict) -> tuple[int | None, int | None] | None:
+    truncation = details.get("truncation")
+    meta = details.get("meta")
+    meta_truncation = meta.get("truncation") if isinstance(meta, dict) else None
+    shown = meta_truncation.get("shownRange") if isinstance(meta_truncation, dict) else None
+    low: int | None = None
+    high: int | None = None
+    if isinstance(shown, dict):
+        low, high = _int(shown.get("start")), _int(shown.get("end"))
+        if low is None or high is None:
+            return None
+    if isinstance(truncation, dict):
+        if truncation.get("firstLineExceedsLimit") is True:
+            return None
+        if truncation.get("truncated") is True and low is None:
+            low = _int(display.get("startLine"))
+            output = _int(truncation.get("outputLines"))
+            if low is None or output is None:
+                return None
+            high = low + output - 1
+    return low, high
+
+
+def _returned_ranges(details: object) -> Ranges:
+    if not isinstance(details, dict) or isinstance(details.get("summary"), dict):
+        return ()
+    display = details.get("displayContent")
+    numbers = display.get("lineNumbers") if isinstance(display, dict) else None
+    if not isinstance(numbers, list):
+        return ()
+    bounds = _shown_bounds(details, display)
+    if bounds is None:
+        return ()
+    low, high = bounds
+    total = _int(details.get("totalLines"))
+    lines = sorted({n for n in numbers if _int(n) is not None and n >= 1})
+    lines = [
+        n for n in lines if (low is None or n >= low) and (high is None or n <= high) and (total is None or n <= total)
+    ]
+    truncation = details.get("truncation")
+    if lines and isinstance(truncation, dict) and truncation.get("lastLinePartial") is True:
+        lines.pop()
+    return coverage.merge(lines)
 
 
 def _outcome(message: dict) -> _Outcome:
@@ -94,7 +151,10 @@ def _outcome(message: dict) -> _Outcome:
     found = message.get("isError") is False
     if found and message.get("toolName") == "grep":
         found = not text.strip().startswith(OMP_NO_MATCHES)
-    return _Outcome(found, text, spans, lines)
+    ranges = _returned_ranges(details) if found and message.get("toolName") == "read" else ()
+    truncation = details.get("truncation") if isinstance(details, dict) else None
+    truncated = isinstance(truncation, dict) and truncation.get("truncated") is True
+    return _Outcome(found, text, spans, lines, ranges, truncated)
 
 
 def _archive_container(part: str) -> str | None:
@@ -125,6 +185,8 @@ def _omp_reads(stdout: str) -> Trace:
     reads: list[str] = []
     greps: list[str] = []
     elisions: list[tuple[str, int, int]] = []
+    spans: list[tuple[str, Ranges]] = []
+    ledger: list[tuple[str, Ranges, bool, bool]] = []
     failed = 0
     for call, (name, path) in calls.items():
         outcome = results.get(call)
@@ -140,7 +202,25 @@ def _omp_reads(stdout: str) -> Trace:
         reads.append(path)
         if outcome.spans or outcome.lines:
             elisions.append((path, outcome.spans, outcome.lines))
-    return Trace(tuple(reads), tuple(greps), tuple(elisions), failed)
+        if outcome.ranges:
+            spans.append((path, outcome.ranges))
+        ledger.append((path, outcome.ranges, outcome.truncated, bool(outcome.spans or outcome.lines)))
+    return Trace(tuple(reads), tuple(greps), tuple(elisions), failed, tuple(spans), tuple(ledger))
+
+
+def compacted(harness: str, stdout: str) -> bool:
+    if harness != "omp":
+        return False
+    for line in stdout.splitlines():
+        if COMPACTION_EVENT not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == COMPACTION_EVENT:
+            return True
+    return False
 
 
 def trace(harness: str, stdout: str) -> Trace:
@@ -181,43 +261,43 @@ def _ambiguous(root: str, part: str, workspace: Path) -> bool:
     return False
 
 
-def credited(run: Trace, workspace: Path) -> frozenset[str]:
-    root = os.path.realpath(workspace)
-    read: set[str] = set()
-    for path in run.reads:
-        parts = [item.strip() for item in path.split(";")]
-        for part in parts:
-            if not part or _ambiguous(root, part, workspace):
-                continue
-            if (literal := _literal(root, part, workspace)) is not None:
-                read.add(literal)
-                continue
-            container = _archive_container(path.strip()) if len(parts) == 1 else None
-            target = container if container is not None else _plain(_OMP_SELECTOR.sub("", part))
-            if target is not None and _inside(root, candidate := _normalize(target, workspace)):
-                read.add(candidate)
-    for path in run.greps:
-        request = path.strip()
-        if not request or ";" in request or _ambiguous(root, request, workspace):
-            continue
-        literal = _literal(root, request, workspace)
-        if literal is not None:
-            if os.path.isfile(os.path.join(root, literal)):
-                read.add(literal)
-            continue
-        target = _plain(_OMP_SELECTOR.sub("", request))
+def _single(root: str, part: str, workspace: Path) -> str | None:
+    request = part.strip()
+    if not request or ";" in request or _ambiguous(root, request, workspace):
+        return None
+    candidate = _literal(root, request, workspace)
+    if candidate is None:
+        if _archive_container(request) is not None:
+            return None
+        target = _plain(OMP_SELECTOR.sub("", request))
         if target is None:
-            continue
+            return None
         candidate = _normalize(target, workspace)
-        if _inside(root, candidate) and os.path.isfile(os.path.join(root, candidate)):
-            read.add(candidate)
-    return frozenset(read)
+        if not _inside(root, candidate):
+            return None
+    return candidate if os.path.isfile(os.path.join(root, candidate)) else None
 
 
-def unread(harness: str, required: Iterable[str], run: Trace, workspace: Path) -> list[str]:
-    if harness not in TRACED:
-        return []
-    return _missing(required, credited(run, workspace), workspace)
+def returned(run: Trace, workspace: Path) -> dict[str, Ranges]:
+    root = os.path.realpath(workspace)
+    gathered: dict[str, list[Ranges]] = {}
+    for path, ranges in run.spans:
+        target = _single(root, path, workspace)
+        if target is not None:
+            gathered.setdefault(target, []).append(ranges)
+    return {path: coverage.join(*groups) for path, groups in gathered.items()}
+
+
+def evaluate(
+    run: Trace, targets: Mapping[str, coverage.Target], needed: Iterable[str], workspace: Path
+) -> coverage.Report:
+    root = os.path.realpath(workspace)
+    touched = {
+        coverage.canonical(target, workspace)
+        for target in (_single(root, path, workspace) for path in run.reads)
+        if target is not None
+    }
+    return coverage.evaluate(targets, needed, returned(run, workspace), workspace, touched)
 
 
 def _real(path: str, workspace: Path) -> str:
@@ -239,9 +319,9 @@ def _listed(paths: Iterable[str]) -> str:
     return f"[{shown}{f' and {len(items) - _TRACE_PATHS} more' if len(items) > _TRACE_PATHS else ''}]"
 
 
-def describe(run: Trace, required: Iterable[str], workspace: Path) -> str:
+def describe(run: Trace, required: Iterable[str], workspace: Path, report: coverage.Report | None = None) -> str:
     needed = sorted(set(required))
-    seen = credited(run, workspace)
+    seen = returned(run, workspace)
     text = (
         f"trace: reads={len(run.reads)} greps={len(run.greps)} failed={run.failed}"
         f" credited={_listed(sorted(seen))} required={len(needed)}"
@@ -249,6 +329,8 @@ def describe(run: Trace, required: Iterable[str], workspace: Path) -> str:
         f" elided_reads={len(run.elisions)} elided_spans={sum(item[1] for item in run.elisions)}"
         f" elided_lines={sum(item[2] for item in run.elisions)}"
     )
+    if report is not None:
+        text += f" hunks_covered={report.covered}/{report.total} files_open={len(report.files)}"
     return sanitize(text, _TRACE_LIMIT)
 
 
@@ -322,9 +404,17 @@ def _repro_citations(evidence: str) -> Iterable[str]:
                 yield cited
 
 
-def _withdrawal_verified(evidence: str, workspace: Path, read: frozenset[str]) -> bool:
+def _returned_line(read: Returned, workspace: Path, cited: str, line: int) -> bool:
+    return any(
+        coverage.contains(ranges, line, line)
+        for path, ranges in read.items()
+        if path == cited or coverage.canonical(path, workspace) == coverage.canonical(cited, workspace)
+    )
+
+
+def _withdrawal_verified(evidence: str, workspace: Path, read: Returned) -> bool:
     for cited, line in _line_citations(evidence):
-        if line < 1 or cited not in read:
+        if line < 1 or not _returned_line(read, workspace, cited, line):
             continue
         count = _line_count(workspace, cited)
         if count is not None and line <= count:
@@ -332,14 +422,20 @@ def _withdrawal_verified(evidence: str, workspace: Path, read: frozenset[str]) -
     return False
 
 
-def withdrawal_cited(evidence_text: str | None, read: frozenset[str] | None = None) -> bool:
-    return any(read is None or cited in read for cited, _ in _line_citations(evidence_text or ""))
+def withdrawal_cited(evidence_text: str | None, read: Returned | None = None) -> bool:
+    return any(
+        read is None or coverage.contains(read.get(cited, ()), line, line)
+        for cited, line in _line_citations(evidence_text or "")
+    )
 
 
-def _repro_verified(evidence: str, workspace: Path, read: frozenset[str]) -> bool:
+def _repro_verified(evidence: str, workspace: Path, read: Returned) -> bool:
     root = os.path.realpath(workspace)
     for cited in _repro_citations(evidence):
-        if cited not in read:
+        if not any(
+            ranges and (path == cited or coverage.canonical(path, workspace) == coverage.canonical(cited, workspace))
+            for path, ranges in read.items()
+        ):
             continue
         target = os.path.realpath(os.path.join(root, cited))
         if not target.startswith(root + os.sep) or not os.path.isfile(target):
@@ -348,12 +444,12 @@ def _repro_verified(evidence: str, workspace: Path, read: frozenset[str]) -> boo
     return False
 
 
-def maintain_verified(evidence: str, workspace: Path, read: frozenset[str]) -> bool:
+def maintain_verified(evidence: str, workspace: Path, read: Returned) -> bool:
     return _withdrawal_verified(evidence, workspace, read) or _repro_verified(evidence, workspace, read)
 
 
 def mark_citations(
-    verdict: Verdict, workspace: Path, disputed: Iterable[str] = (), read: frozenset[str] = frozenset()
+    verdict: Verdict, workspace: Path, disputed: Iterable[str] = (), read: Returned = MappingProxyType({})
 ) -> Verdict:
     marked = []
     for finding in verdict.defects:
@@ -414,21 +510,13 @@ def glob_match(path: str, pattern: str) -> bool:
     return _segments_match(tuple(path.split("/")), tuple(pattern.split("/")))
 
 
-def check(
-    verdict: Verdict,
-    *,
-    ships: bool,
-    harness: str,
-    brief_mode: str,
-    workspace: Path,
+def required_files(
     required: Iterable[str],
-    run: Trace,
-    binary_files: Iterable[str] = (),
-    exempt_paths: Iterable[str] = (),
+    workspace: Path,
+    binary_files: Iterable[str],
+    exempt_paths: Iterable[str],
     is_protected: Callable[[str], bool],
-) -> Gap | None:
-    if brief_mode == INLINE or not ships:
-        return None
+) -> list[str]:
     hinted = {relative(p, workspace) for p in binary_files}
     detected_binary = {path for path in hinted if is_binary_candidate(path) and has_nul_head(workspace, path)}
     patterns = tuple(exempt_paths)
@@ -439,14 +527,42 @@ def check(
             return False
         return norm in detected_binary or any(glob_match(norm, pattern) for pattern in patterns)
 
-    required_paths = set(required)
-    needed = sorted(path for path in required_paths if not _is_exempt(path))
+    return sorted(path for path in set(required) if not _is_exempt(path))
+
+
+def check(
+    verdict: Verdict,
+    *,
+    clears: bool,
+    harness: str,
+    brief_mode: str,
+    workspace: Path,
+    required: Iterable[str],
+    run: Trace,
+    targets: Mapping[str, coverage.Target],
+    binary_files: Iterable[str] = (),
+    exempt_paths: Iterable[str] = (),
+    is_protected: Callable[[str], bool],
+) -> Gap | None:
+    if not clears:
+        return None
+    needed = required_files(required, workspace, binary_files, exempt_paths, is_protected)
     if harness in TRACED:
-        if not run.reads and not run.greps:
-            return Gap("the verdict would ship but its trace shows no successful file read", tuple(needed))
-        missing = unread(harness, needed, run, workspace)
-        if missing:
-            return Gap(f"the verdict would ship but its trace shows no read of {_shown(missing)}", tuple(missing))
+        if brief_mode == INLINE:
+            absent = [path for path in needed if path not in targets or not targets[path].listed]
+            if absent:
+                return Gap(f"the verdict would ship but the brief omits the diff of {_shown(absent)}", tuple(absent))
+        else:
+            if needed and not any(path in targets and targets[path].listed for path in needed):
+                return Gap(
+                    f"the verdict would ship but the staged diff lists none of the required files: {_shown(needed)}",
+                    tuple(needed),
+                )
+            report = evaluate(run, targets, needed, workspace)
+            if not report.complete:
+                return Gap(f"the verdict would ship but {coverage.reason(report)}", report.files)
+    if brief_mode == INLINE:
+        return None
     examined = {relative(path, workspace) for path in verdict.files_examined}
     missing = [path for path in needed if path not in examined]
     if missing:

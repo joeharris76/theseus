@@ -674,16 +674,6 @@ def test_latest_state_ignores_artifacts_from_another_workflow(monkeypatch: pytes
     assert downloaded == []
 
 
-def test_gh_returns_diff_bytes_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = b"diff --git a/EULA.txt b/EULA.txt\n\x93smart quote\x94\n"
-
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(argv, 0, payload, b"")
-
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
-    assert github.get_diff(REPO, PR) == payload
-
-
 def test_gh_reports_decodable_stderr_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(argv, 1, b"", b"\xffailure")

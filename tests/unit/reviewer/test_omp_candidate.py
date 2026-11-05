@@ -134,6 +134,7 @@ def _probe_runs() -> dict[str, ClientRun]:
 def _good_runs() -> dict[str, ClientRun]:
     return {
         "review": _run("review", _read("chain_review.jsonl"), upstream=tuple(_request() for _ in range(5))),
+        "read-lines": _run("read-lines", _read("read_lines.jsonl"), upstream=tuple(_request() for _ in range(7))),
         "control": _run(
             "control",
             _read("elided_read.jsonl"),
@@ -903,3 +904,103 @@ def test_a_workspace_copy_of_a_working_directory_surface_is_checked_but_not_requ
             "cursor reached the model from .cursor/rules/canary-cursor.mdc (workspace) despite disabledProviders",
         )
     }
+
+
+def _retouch_read(name: str, change: Callable[[dict[str, Any]], None]) -> str:
+    call = f"toolu_read_{name}"
+    lines = []
+    for line in _read("read_lines.jsonl").splitlines():
+        event = json.loads(line)
+        message = event.get("message")
+        if isinstance(message, dict) and message.get("toolCallId") == call:
+            change(message["details"])
+        lines.append(json.dumps(event))
+    return "\n".join(lines) + "\n"
+
+
+def test_the_captured_read_lines_stream_passes_every_read_line_expectation() -> None:
+    assert candidate_checks.read_line_failures(_read("read_lines.jsonl")) == []
+
+
+def test_a_bare_read_over_the_default_window_that_credits_more_than_300_lines_is_red() -> None:
+    def widen(details: dict[str, Any]) -> None:
+        details["displayContent"]["lineNumbers"] = list(range(1, 351))
+        details["meta"]["truncation"]["shownRange"] = {"start": 1, "end": 350}
+        details["truncation"]["outputLines"] = 350
+
+    failures = candidate_checks.read_line_failures(_retouch_read("long", widen))
+    assert any("the bare long read reports lines" in item and "expected exactly 1-300" in item for item in failures)
+
+
+def test_a_multi_path_read_that_reports_lines_is_red() -> None:
+    def report(details: dict[str, Any]) -> None:
+        details["displayContent"] = {"text": "x", "startLine": 1, "lineNumbers": [1, 2, 3]}
+
+    failures = candidate_checks.read_line_failures(_retouch_read("multi", report))
+    assert any(
+        "the multi-path read reports lines" in item and "none for a read of several paths" in item for item in failures
+    )
+
+
+def test_a_stream_without_the_raw_read_is_red() -> None:
+    stdout = _read("read_lines.jsonl").replace('long_module.py:raw"', 'long_module.py:rew"')
+    assert "the raw read is missing from the stream" in candidate_checks.read_line_failures(stdout)
+
+
+def test_a_stream_without_the_multi_path_read_is_red() -> None:
+    stdout = _read("read_lines.jsonl").replace('long_module.py:1-3"', 'long_module.py:1-4"')
+    assert "the multi-path read is missing from the stream" in candidate_checks.read_line_failures(stdout)
+
+
+def test_a_read_that_loses_its_truncation_flag_is_red() -> None:
+    def drop(details: dict[str, Any]) -> None:
+        details["truncation"]["truncated"] = False
+
+    failures = candidate_checks.read_line_failures(_retouch_read("long", drop))
+    assert any("the bare long read truncation flag is False, expected True" in item for item in failures)
+
+
+def test_the_read_lines_fixture_is_registered_and_replays_green() -> None:
+    manifest = json.loads(_read("manifest.json"))["streams"]["read-lines"]
+    assert manifest["kind"] == "read-lines" and manifest["rows"] == [7]
+    replayed = {check.name: check for check in candidate_checks.fixture_checks(FIXTURES)}
+    assert replayed["fixture-read-lines"].ok
+
+
+def test_a_mutated_read_lines_capture_turns_its_fixture_replay_red(tmp_path: Path) -> None:
+    mutate = _rewrite("read_lines.jsonl", 'long_module.py:raw:5-9"', 'long_module.py:raw:5-8"')
+    failed = _failed(_captured(tmp_path, mutate))
+    assert any("the raw ranged read is missing from the stream" in item for item in failed["fixture-read-lines"])
+
+
+def test_the_live_read_lines_check_covers_row_seven_and_passes_on_the_captured_run() -> None:
+    checks = [check for check in candidate_checks.live_checks(_good_runs()) if check.name == "live-read-lines"]
+    assert len(checks) == 1 and checks[0].ok and checks[0].rows == (7,)
+    assert 7 in candidate_checks.covered_rows(checks)
+
+
+def test_the_live_read_lines_check_is_red_when_its_run_fails_or_misreports_lines() -> None:
+    failed = _failed(candidate_checks.live_checks(_mutated("read-lines", exit_code=1)))
+    assert any("exited 1" in item for item in failed["live-read-lines"])
+    stdout = _read("read_lines.jsonl").replace('long_module.py:raw"', 'long_module.py:rew"')
+    failed = _failed(candidate_checks.live_checks(_mutated("read-lines", stdout=stdout)))
+    assert any("raw read is missing" in item for item in failed["live-read-lines"])
+
+
+@pytest.mark.parametrize("key", ["compaction.enabled", "compaction.midTurnEnabled"])
+def test_an_overlay_compaction_key_the_build_does_not_know_is_red(tmp_path: Path, key: str) -> None:
+    def forget(data: dict[str, Any]) -> None:
+        del data["config_json"][key]
+
+    assert _static(tmp_path, forget)["overlay-schema"].failures == (
+        f"the build has no setting {key}; it would be ignored",
+    )
+
+
+def test_an_overlay_schema_lacking_the_compaction_keys_is_red(tmp_path: Path) -> None:
+    def forget(data: dict[str, Any]) -> None:
+        del data["config_json"]["compaction.enabled"]
+        del data["config_json"]["compaction.midTurnEnabled"]
+
+    failures = _static(tmp_path, forget)["overlay-schema"].failures
+    assert failures and all("compaction" in item for item in failures)

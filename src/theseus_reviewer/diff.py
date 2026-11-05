@@ -1,8 +1,25 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+_FULL_HUNK = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+STAGED_DIFF_NAME = ".oracle-pull-request.diff"
+
+
+@dataclass(frozen=True)
+class Hunk:
+    block_start: int
+    block_end: int
+    new_start: int
+    new_count: int
+    additive: bool
+    size: int
+
+    @property
+    def new_end(self) -> int:
+        return self.new_start + max(self.new_count, 1) - 1
 
 
 def _target_path(line: str) -> str | None:
@@ -76,3 +93,119 @@ def binary_files(diff_text: str) -> frozenset[str]:
                 names.add(new)
                 break
     return frozenset(names)
+
+
+_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34}
+_OCTAL = re.compile(r"[0-7]{1,3}")
+
+
+def _unquote(token: str) -> str:
+    if len(token) < 2 or token[0] != '"' or token[-1] != '"':
+        return token
+    out = bytearray()
+    position = 1
+    end = len(token) - 1
+    while position < end:
+        char = token[position]
+        if char != "\\" or position + 1 >= end:
+            out += char.encode("utf-8")
+            position += 1
+            continue
+        octal = _OCTAL.match(token, position + 1, end)
+        if octal is not None:
+            out.append(int(octal.group(), 8) & 0xFF)
+            position = octal.end()
+        elif token[position + 1] in _ESCAPES:
+            out.append(_ESCAPES[token[position + 1]])
+            position += 2
+        else:
+            out += token[position : position + 2].encode("utf-8")
+            position += 2
+    return out.decode("utf-8", "replace")
+
+
+def _side_path(line: str, prefix: str) -> str | None:
+    target = _unquote(line[4:].rstrip("\n\t"))
+    if target == "/dev/null":
+        return None
+    return target[len(prefix) :] if target.startswith(prefix) else target
+
+
+def _header_path(line: str) -> str | None:
+    rest = line[len("diff --git ") :]
+    if rest.startswith('"'):
+        end = 1
+        while end < len(rest) and not (rest[end] == '"' and rest[end - 1] != "\\"):
+            end += 1
+        target = _unquote(rest[end + 1 :].lstrip())
+        return (target[2:] if target.startswith("b/") else target) or None
+    if not rest.startswith("a/"):
+        return None
+    candidates = [match.start() for match in re.finditer(r' (?=b/|")', rest)]
+    for position in candidates:
+        right = _unquote(rest[position + 1 :])
+        right = right[2:] if right.startswith("b/") else right
+        if rest[2:position] == right:
+            return right
+    if not candidates:
+        return None
+    tail = _unquote(rest[candidates[0] + 1 :])
+    return tail[2:] if tail.startswith("b/") else tail
+
+
+def hunk_index(diff_text: str) -> dict[str, list[Hunk]]:
+    lines = diff_text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    index: dict[str, list[Hunk]] = {}
+    path: str | None = None
+    old_path: str | None = None
+    position = 0
+    while position < len(lines):
+        line = lines[position]
+        if line.startswith("diff --git "):
+            old_path = None
+            path = _header_path(line)
+            if path is not None:
+                index.setdefault(path, [])
+            position += 1
+            continue
+        if line.startswith("--- "):
+            old_path = _side_path(line, "a/")
+            position += 1
+            continue
+        if line.startswith("+++ "):
+            path = _side_path(line, "b/") or old_path or path
+            if path is not None:
+                index.setdefault(path, [])
+            position += 1
+            continue
+        match = _FULL_HUNK.match(line)
+        if match is None or path is None:
+            position += 1
+            continue
+        old_left = int(match.group("old_count") or "1")
+        new_left = int(match.group("count") or "1")
+        new_count = new_left
+        start = position
+        additive = True
+        position += 1
+        while position < len(lines) and (old_left > 0 or new_left > 0 or lines[position].startswith("\\")):
+            body = lines[position]
+            if body.startswith("\\"):
+                position += 1
+                continue
+            if body.startswith("-"):
+                old_left -= 1
+                additive = False
+            elif body.startswith("+"):
+                new_left -= 1
+            else:
+                old_left -= 1
+                new_left -= 1
+            position += 1
+        size = sum(len(item.encode("utf-8")) + 1 for item in lines[start:position])
+        index.setdefault(path, []).append(
+            Hunk(start + 1, position, int(match.group("start")), new_count, additive and new_count > 0, size)
+        )
+    return index

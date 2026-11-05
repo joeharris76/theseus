@@ -14,6 +14,27 @@ HARNESSES = ("omp",)
 OMP_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto")
 READ_ONLY_KINDS = ("hard", "soft")
 DELIVERIES = ("comment", "review")
+BRIEF_MAX_BYTES = 100_000
+POLICY_KEYS = frozenset(
+    {
+        "version",
+        "mode",
+        "status_context",
+        "findings_delivery",
+        "bot_login",
+        "max_attempts",
+        "protocol",
+        "retry",
+        "omp",
+        "pools",
+        "reviewers",
+        "buckets",
+        "classifier",
+        "evidence",
+        "consumer",
+        "promotion",
+    }
+)
 
 
 class PolicyError(ValueError):
@@ -137,7 +158,6 @@ class Policy:
     status_context: str
     findings_delivery: str
     bot_login: str
-    brief_max_bytes: int
     max_attempts: int
     retry: RetryRules
     protocol: ProtocolRules
@@ -257,6 +277,11 @@ def _consumer(data: Any) -> Consumer:
 
 def parse_policy(data: Mapping[str, Any]) -> Policy:
     _require(isinstance(data, Mapping) and data.get("version") == 2, "policy version must be 2")
+    unknown_keys = sorted(str(key) for key in set(data) - POLICY_KEYS)
+    if unknown_keys:
+        raise PolicyError(
+            f"policy has unknown top-level key {unknown_keys[0]!r}; allowed keys are {sorted(POLICY_KEYS)}"
+        )
     pools = _str_tuple(data.get("pools"), "pools")
     reviewers_data = data.get("reviewers")
     _require(isinstance(reviewers_data, Mapping) and bool(reviewers_data), "reviewers must be a mapping")
@@ -316,12 +341,14 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         clean_src = src_key.strip("/")
         _require(clean_src not in parsed_path_map, "promotion bootstrap_path_map has duplicate source paths")
         parsed_path_map[clean_src] = dst_val.strip("/")
-    promo_reviewers = _str_tuple(promotion_raw.get("bootstrap_reviewers", []), "promotion bootstrap_reviewers")
-    _require(all(item.strip() for item in promo_reviewers), "bootstrap_reviewers cannot contain blank logins")
-    _require(
-        not promotion_raw or bool(promo_reviewers),
-        "promotion bootstrap_reviewers is required when the policy has a promotion section",
-    )
+    raw_reviewers = promotion_raw.get("bootstrap_reviewers")
+    promo_reviewers: tuple[str, ...] = ()
+    if "bootstrap_reviewers" in promotion_raw:
+        promo_reviewers = _str_tuple(raw_reviewers, "promotion bootstrap_reviewers")
+        _require(
+            bool(promo_reviewers) and all(item.strip() for item in promo_reviewers),
+            "promotion bootstrap_reviewers must be a non-empty list of logins",
+        )
     allowed_hosts = _str_tuple(
         promotion_raw.get("allowed_artifact_hosts", list(DEFAULT_ALLOWED_ARTIFACT_HOSTS)),
         "promotion allowed_artifact_hosts",
@@ -349,7 +376,6 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         status_context=data.get("status_context", ""),
         findings_delivery=data.get("findings_delivery", ""),
         bot_login=data.get("bot_login", ""),
-        brief_max_bytes=int(data.get("brief_max_bytes", 0)),
         max_attempts=int(data.get("max_attempts", 0)),
         retry=RetryRules(
             daily_budget=int(retry.get("daily_budget", 0)),
@@ -388,7 +414,6 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
     _require(bool(policy.status_context), "status_context is required")
     _require(policy.findings_delivery in DELIVERIES, f"findings_delivery must be one of {DELIVERIES}")
     _require(re.fullmatch(r"[a-z0-9][a-z0-9-]*", policy.bot_login) is not None, "bot_login must be an App slug")
-    _require(0 < policy.brief_max_bytes <= 120_000, "brief_max_bytes must fit in one command-line argument")
     _require(
         policy.max_attempts >= policy.longest_enabled_chain(),
         f"max_attempts must cover the longest enabled chain ({policy.longest_enabled_chain()})",

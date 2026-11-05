@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from theseus_reviewer._vendor import yaml
+from theseus_reviewer.render import REQUIRED_READS_HEADER, UNREAD_MARK, retry_note
 
 from .harness import ALPHA_ROOT, CHECKER, Harness, ReviewRun
 
@@ -14,14 +15,15 @@ GUIDE = "docs/guide.md"
 FONT = "assets/fonts/ui.woff2"
 FAKE_FONT = "assets/fonts/fake.woff2"
 LOGO = "assets/logo.png"
-UNREAD_MARK = "[unread in your previous attempt]"
 FEEDBACK = "Earlier attempt feedback: "
 FEEDBACK_NONE = f"{FEEDBACK}none"
 FILLER = "".join(f"CELL_{number:05d} = {number}\n" for number in range(5000))
 LARGE_CHECKER = "def checker(a, b):\n    return a == b\n" + FILLER
 BINARY = b"\x00\x01\x02 glyph table\x00" * 8
 SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no defects.", "files_examined": [CHECKER]}
-FULL_READ = {**SHIP, "files_examined": [CHECKER, CELLS], "reads": [CELLS]}
+WHOLE = ":1-100000"
+READ_CHECKER = {**SHIP, "reads": [f"{CHECKER}{WHOLE}"]}
+FULL_READ = {**SHIP, "files_examined": [CHECKER, CELLS], "reads": [f"{CHECKER}{WHOLE}", f"{CELLS}{WHOLE}"]}
 INERT_WITHOUT_MARKDOWN = (
     "\n".join(
         line
@@ -43,7 +45,7 @@ def test_a_file_list_brief_names_the_required_reads_and_a_retry_marks_the_missed
         "add the cell table",
     )
     harness.github.open_pull(81, "feat/large")
-    harness.script_omp([SHIP, FULL_READ])
+    harness.script_omp([READ_CHECKER, FULL_READ])
 
     run = harness.review(81)
 
@@ -51,12 +53,12 @@ def test_a_file_list_brief_names_the_required_reads_and_a_retry_marks_the_missed
     assert run.plan["evidence_files"] == [CELLS, CHECKER]
     first, second = harness.omp_prompts()
     required, _, others = first.partition("BEGIN CHANGE DATA")[2].partition("Not required reads")
-    assert "Required reads: each file listed here needs its own direct read" in required
+    assert REQUIRED_READS_HEADER.strip() in required
     assert CHECKER in required and CELLS in required and NOTES not in required
     assert NOTES in others
     assert FEEDBACK_NONE in first and UNREAD_MARK not in _line(first, CELLS)
     assert UNREAD_MARK in _line(second, CELLS) and UNREAD_MARK not in _line(second, CHECKER)
-    assert f"{FEEDBACK}your previous attempt at this review did not read 1 of the required files" in second
+    assert f"{FEEDBACK}{retry_note(1)}" in second
     assert CELLS not in second.partition(FEEDBACK)[2].partition("\n")[0]
     attempts = run.attempts()
     assert [(item["outcome"], (item["absence"] or {}).get("kind")) for item in attempts] == [
@@ -92,7 +94,7 @@ def _large_review(
 ) -> ReviewRun:
     harness.branch(f"feat/exempt-{pr}", {CHECKER: LARGE_CHECKER, **extra}, "change the checker and its companions")
     harness.github.open_pull(pr, f"feat/exempt-{pr}")
-    harness.script_omp([SHIP])
+    harness.script_omp([READ_CHECKER])
     return harness.review(pr, plan_env=plan_env)
 
 

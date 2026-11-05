@@ -265,7 +265,7 @@ def test_a_disputed_fixed_with_a_verified_citation_closes(policy: Policy, tmp_pa
             files=["pkg/kept.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset({"pkg/kept.py"}))
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {"pkg/kept.py": ((1, 20),)})
     assert marked.prior_defects[0].status == "fixed"
     assert protocol.dispute_problem(marked, _plan_with_dispute(policy, _dispute())) is None
 
@@ -280,7 +280,7 @@ def test_a_disputed_fixed_citing_a_file_only_listed_as_examined_is_demoted(polic
             files=["pkg/kept.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset())
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {})
     assert marked.prior_defects[0].status == "not_fixed"
     assert marked.prior_defects[0].demoted == "fixed"
 
@@ -352,7 +352,7 @@ def test_withdrawal_with_a_verified_citation_is_still_accepted(policy: Policy, t
             files=["pkg/kept.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset({"pkg/kept.py"}))
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {"pkg/kept.py": ((1, 20),)})
     assert marked.prior_defects[0].status == "withdrawn"
     assert protocol.dispute_problem(marked, _plan_with_dispute(policy, _dispute())) is None
 
@@ -367,7 +367,7 @@ def test_a_withdrawal_citing_a_file_only_listed_as_examined_stays_open(policy: P
             files=["pkg/kept.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset())
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {})
     assert marked.prior_defects[0].status == "not_fixed"
     assert marked.prior_defects[0].demoted == "withdrawal"
 
@@ -393,7 +393,7 @@ def test_a_reproduction_reference_satisfies_maintain(policy: Policy, tmp_path: P
             files=[CHECKER, "scripts/repro_row.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset({"scripts/repro_row.py"}))
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {"scripts/repro_row.py": ((1, 20),)})
     assert evidence.UNVERIFIED_MAINTAIN not in marked.prior_defects[0].evidence
     assert protocol.dispute_problem(marked, _plan_with_dispute(policy, _dispute())) is None
 
@@ -408,7 +408,7 @@ def test_a_reproduction_the_reviewer_never_read_does_not_satisfy_maintain(policy
             files=[CHECKER, "scripts/repro_row.py"],
         )
     )
-    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], frozenset({CHECKER}))
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {CHECKER: ((1, 20),)})
     assert evidence.UNVERIFIED_MAINTAIN in marked.prior_defects[0].evidence
 
 
@@ -525,3 +525,18 @@ def test_keeping_disputes_open_leaves_well_formed_dispositions_alone(policy: Pol
     plan = _plan_with_dispute(policy, _dispute())
     verdict = validate(_verdict_dict(_disposition("not_fixed")))
     assert protocol.keep_disputes_open(verdict, plan) is verdict
+
+
+def test_a_disputed_fixed_citing_a_line_the_read_did_not_return_is_demoted(tmp_path: Path) -> None:
+    target = tmp_path / "pkg" / "kept.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("\n".join([f"line {index}" for index in range(20)]), encoding="utf-8")
+    verdict = validate(
+        _verdict_dict(
+            _disposition("fixed", evidence_text="reworked at pkg/kept.py:12"),
+            files=["pkg/kept.py"],
+        )
+    )
+    marked = evidence.mark_citations(verdict, tmp_path, ["D1"], {"pkg/kept.py": ((1, 9),)})
+    assert marked.prior_defects[0].status == "not_fixed"
+    assert marked.prior_defects[0].demoted == "fixed"

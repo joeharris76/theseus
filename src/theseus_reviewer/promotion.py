@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import csv
-import difflib
 import hashlib
 import io
 import json
@@ -11,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from .classifier import ChangedFile
 
 LOCK_PATH = ".github/theseus-lock.json"
+WORKFLOW_DIR = ".github/workflows"
 STAGED_PROMOTION_DIR = ".oracle-promotion"
 PROMOTION_PLAN_DIR = "promotion"
 UPSTREAM_DIFF_NAME = "upstream.diff"
@@ -46,6 +47,11 @@ _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPO_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _PACKAGE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
+_WORKFLOW_PATH = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
+_REMOTE_WORKFLOW = re.compile(
+    r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?P<path>\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)"
+)
+_WORKFLOW_USES = re.compile(r"(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?(?P<target>[^\s'\"#]+)")
 
 LOCK_REQUIRED_KEYS = frozenset(
     {
@@ -92,6 +98,7 @@ PROMOTION_RECORD_KEYS = frozenset(
 SourceLoader = Callable[[str, str, tuple[str, ...] | None], dict[str, bytes]]
 ArtifactLoader = Callable[[str], bytes]
 AncestorCheck = Callable[[str, str], bool]
+WorkflowLoader = Callable[[str], Mapping[str, str]]
 
 
 class PromotionError(ValueError):
@@ -211,6 +218,7 @@ class PromotionBundle:
     diff_text: str
     old_tree: Mapping[str, bytes]
     new_tree: Mapping[str, bytes]
+    required_paths: frozenset[str] = frozenset()
 
 
 def _require(condition: bool, message: str) -> None:
@@ -456,15 +464,86 @@ def compute_delta_sha256(old_tree: Mapping[str, bytes], new_tree: Mapping[str, b
     return hashlib.sha256(raw).hexdigest()
 
 
-def _text_lines(raw: bytes | None) -> list[str] | None:
-    if raw is None:
-        return []
-    if b"\0" in raw:
-        return None
-    try:
-        return raw.decode("utf-8").splitlines(keepends=True)
-    except UnicodeDecodeError:
-        return None
+def _git_scratch(repo: Path | None, *args: str, stdin: bytes | None = None) -> bytes:
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "LC_ALL": "C"})
+    if repo is not None:
+        env["GIT_DIR"] = str(repo)
+    result = subprocess.run(["git", *args], input=stdin, capture_output=True, env=env, check=False)
+    _require(
+        result.returncode == 0,
+        f"git failed while building the upstream delta: {result.stderr.decode('utf-8', 'replace').strip()}",
+    )
+    return result.stdout
+
+
+def _write_tree_objects(repo: Path, tree: Mapping[str, bytes], blob_dir: Path) -> str:
+    contents = sorted(set(tree.values()))
+    blob_dir.mkdir(parents=True, exist_ok=True)
+    names: list[str] = []
+    for index, content in enumerate(contents):
+        target = blob_dir / f"blob-{index}"
+        target.write_bytes(content)
+        names.append(str(target))
+    shas: dict[bytes, str] = {}
+    if names:
+        written = _git_scratch(repo, "hash-object", "-w", "--stdin-paths", stdin="\n".join(names).encode()).decode()
+        listed = written.split()
+        _require(len(listed) == len(contents), "git hash-object returned an unexpected number of objects")
+        shas = dict(zip(contents, listed, strict=True))
+    root: dict[str, Any] = {}
+    for path, content in tree.items():
+        parts = path.split("/")
+        node = root
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            _require(isinstance(child, dict), f"source tree path {path!r} conflicts with a file")
+            node = child
+        _require(parts[-1] not in node, f"source tree path {path!r} conflicts with a directory")
+        node[parts[-1]] = shas[content]
+
+    def write(node: Mapping[str, Any]) -> str:
+        rows = bytearray()
+        for name in sorted(node):
+            child = node[name]
+            if isinstance(child, dict):
+                rows += b"040000 tree " + write(child).encode() + b"\t" + name.encode("utf-8") + b"\0"
+            else:
+                rows += b"100644 blob " + child.encode() + b"\t" + name.encode("utf-8") + b"\0"
+        return _git_scratch(repo, "mktree", "-z", stdin=bytes(rows)).decode().strip()
+
+    return write(root)
+
+
+def _raw_entries(raw: bytes) -> list[tuple[str, str, str | None]]:
+    tokens = raw.split(b"\0")
+    entries: list[tuple[str, str, str | None]] = []
+    position = 0
+    while position < len(tokens) and tokens[position].startswith(b":"):
+        status = tokens[position].decode("ascii").split(" ")[4]
+        if status[0] in "RC":
+            old_path = tokens[position + 1].decode("utf-8")
+            entries.append((status, old_path, tokens[position + 2].decode("utf-8")))
+            position += 3
+        else:
+            entries.append((status, tokens[position + 1].decode("utf-8"), None))
+            position += 2
+    return entries
+
+
+def _numstat(raw: bytes) -> dict[str, tuple[int, int]]:
+    tokens = raw.split(b"\0")
+    counts: dict[str, tuple[int, int]] = {}
+    position = 0
+    while position < len(tokens) and tokens[position]:
+        added, deleted, path = tokens[position].decode("utf-8").split("\t", 2)
+        if path == "":
+            path = tokens[position + 2].decode("utf-8")
+            position += 3
+        else:
+            position += 1
+        counts[path] = (int(added) if added.isdigit() else 0, int(deleted) if deleted.isdigit() else 0)
+    return counts
 
 
 def compute_upstream_delta(
@@ -473,38 +552,133 @@ def compute_upstream_delta(
     from .classifier import ChangedFile
 
     delta_digest = compute_delta_sha256(old_tree, new_tree)
-    changed: list[ChangedFile] = []
-    chunks: list[str] = []
-    for path in sorted(set(old_tree) | set(new_tree)):
-        old_bytes = old_tree.get(path)
-        new_bytes = new_tree.get(path)
-        if old_bytes == new_bytes:
-            continue
-        status = "added" if old_bytes is None else ("removed" if new_bytes is None else "modified")
-        staged_path = (
-            f"{STAGED_PROMOTION_DIR}/old/{path}" if status == "removed" else f"{STAGED_PROMOTION_DIR}/new/{path}"
+    with tempfile.TemporaryDirectory(prefix="theseus-delta-") as scratch_name:
+        scratch = Path(scratch_name)
+        repo = scratch / "objects.git"
+        _git_scratch(None, "init", "--bare", "-q", str(repo))
+        old_oid = _write_tree_objects(repo, old_tree, scratch / "old-blobs")
+        new_oid = _write_tree_objects(repo, new_tree, scratch / "new-blobs")
+        rename_flags = ("-M", f"-l{MAX_TREE_FILES}")
+        raw = _git_scratch(repo, "diff-tree", "-r", *rename_flags, "--raw", "-z", old_oid, new_oid)
+        stats = _numstat(_git_scratch(repo, "diff-tree", "-r", *rename_flags, "--numstat", "-z", old_oid, new_oid))
+        diff_bytes = _git_scratch(
+            repo,
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            *rename_flags,
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            old_oid,
+            new_oid,
         )
-        old_lines = _text_lines(old_bytes)
-        new_lines = _text_lines(new_bytes)
-        if old_lines is None or new_lines is None:
-            chunks.append(f"diff --git a/{path} b/{path}\nBinary files a/{path} and b/{path} differ\n")
-            changed.append(ChangedFile(path=staged_path, previous_path=None, additions=0, deletions=0, status=status))
-            continue
-        diff_lines = list(
-            difflib.unified_diff(
-                old_lines,
-                new_lines,
-                fromfile=f"a/{path}",
-                tofile=f"b/{path}",
+    old_prefix = f"{STAGED_PROMOTION_DIR}/old/"
+    new_prefix = f"{STAGED_PROMOTION_DIR}/new/"
+    changed: list[tuple[str, ChangedFile]] = []
+    for status, first, second in _raw_entries(raw):
+        path = second if second is not None else first
+        added, deleted = stats.get(path, (0, 0))
+        if status[0] == "R":
+            item = ChangedFile(
+                path=new_prefix + path,
+                previous_path=old_prefix + first,
+                additions=added,
+                deletions=deleted,
+                status="renamed",
             )
-        )
-        added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
-        deleted = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
-        chunks.append(f"diff --git a/{path} b/{path}\n" + "".join(diff_lines))
-        changed.append(
-            ChangedFile(path=staged_path, previous_path=None, additions=added, deletions=deleted, status=status)
-        )
-    return tuple(changed), "".join(chunks), delta_digest
+        elif status == "D":
+            item = ChangedFile(
+                path=old_prefix + path, previous_path=None, additions=0, deletions=deleted, status="removed"
+            )
+        else:
+            item = ChangedFile(
+                path=new_prefix + path,
+                previous_path=None,
+                additions=added,
+                deletions=deleted,
+                status="added" if status == "A" else "modified",
+            )
+        changed.append((path, item))
+    changed.sort(key=lambda entry: entry[0])
+    return tuple(item for _, item in changed), diff_bytes.decode("utf-8", errors="replace"), delta_digest
+
+
+def _package_source_files(source_tree: Mapping[str, bytes], pkg_prefix: str) -> dict[str, str]:
+    has_src_layout = any(path.startswith(f"src/{pkg_prefix}") for path in source_tree)
+    source_prefix = "src/" if has_src_layout else ""
+    return {
+        path: path.removeprefix(source_prefix)
+        for path in source_tree
+        if path.startswith(f"{source_prefix}{pkg_prefix}")
+    }
+
+
+def executed_surface(
+    new_tree: Mapping[str, bytes],
+    *,
+    package: str,
+    repository: str,
+    consumer_workflows: Mapping[str, str],
+) -> frozenset[str]:
+    surface = set(_package_source_files(new_tree, f"{_normalized_dist_name(package)}/"))
+    if "pyproject.toml" in new_tree:
+        surface.add("pyproject.toml")
+    pending: list[str] = []
+    for text in consumer_workflows.values():
+        pending.extend(sorted(_workflow_references(text, repository, nested=False)))
+    visited: set[str] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        raw = new_tree.get(path)
+        _require(raw is not None, f"workflow {path} referenced by the consumer is missing from the promoted source")
+        assert raw is not None
+        surface.add(path)
+        pending.extend(sorted(_workflow_references(raw.decode("utf-8", errors="replace"), repository, nested=True)))
+    return frozenset(surface)
+
+
+def _workflow_references(text: str, repository: str, *, nested: bool) -> set[str]:
+    found: set[str] = set()
+    for match in _WORKFLOW_USES.finditer(text):
+        target = match.group("target").split("@", 1)[0]
+        if nested and target.startswith("./"):
+            candidate = target[2:]
+            if _WORKFLOW_PATH.fullmatch(candidate):
+                found.add(candidate)
+            continue
+        remote = _REMOTE_WORKFLOW.fullmatch(target)
+        if remote is not None and remote.group("repo").casefold() == repository.casefold():
+            found.add(remote.group("path"))
+    return found
+
+
+def required_read_paths(
+    changed_files: Iterable[ChangedFile],
+    old_tree: Mapping[str, bytes],
+    new_tree: Mapping[str, bytes],
+    surface: Iterable[str],
+) -> frozenset[str]:
+    executed = set(surface)
+    old_prefix = f"{STAGED_PROMOTION_DIR}/old/"
+    new_prefix = f"{STAGED_PROMOTION_DIR}/new/"
+    required: set[str] = set()
+    for item in changed_files:
+        if item.removed or not item.path.startswith(new_prefix):
+            continue
+        tree_path = item.path.removeprefix(new_prefix)
+        if tree_path not in executed:
+            continue
+        if item.status == "renamed" and item.previous_path is not None:
+            if old_tree.get(item.previous_path.removeprefix(old_prefix)) == new_tree.get(tree_path):
+                continue
+        required.add(item.path)
+    return frozenset(required)
 
 
 def _within(path: str, prefixes: tuple[str, ...] | None) -> bool:
@@ -808,13 +982,8 @@ def verify_wheel_matches_source(
         any(name.endswith(".py") for name in wheel_pkg_files),
         f"wheel for {package} contains no Python modules under {pkg_prefix}",
     )
-    src_layout_prefix = f"src/{pkg_prefix}"
-    has_src_layout = any(path.startswith(src_layout_prefix) for path in source_tree)
-    source_prefix = "src/" if has_src_layout else ""
     expected_pkg_files = {
-        path.removeprefix(source_prefix): content
-        for path, content in source_tree.items()
-        if path.startswith(f"{source_prefix}{pkg_prefix}")
+        name: source_tree[path] for path, name in _package_source_files(source_tree, pkg_prefix).items()
     }
     _require(
         set(wheel_pkg_files) == set(expected_pkg_files),
@@ -873,6 +1042,52 @@ def ci_ancestor_check(repo: str) -> AncestorCheck:
         return comparison.get("status") in ("ahead", "identical")
 
     return check
+
+
+def local_workflow_loader(git_root: Path) -> WorkflowLoader:
+    def load(ref: str) -> dict[str, str]:
+        listed = subprocess.run(
+            ["git", "-C", str(git_root), "ls-tree", "-r", "-z", "--name-only", ref, "--", WORKFLOW_DIR],
+            capture_output=True,
+            check=False,
+        )
+        if listed.returncode != 0:
+            raise PromotionError(f"git ls-tree {ref[:12]}:{WORKFLOW_DIR} failed")
+        workflows: dict[str, str] = {}
+        for name in listed.stdout.decode("utf-8").split("\0"):
+            if not _WORKFLOW_PATH.fullmatch(name):
+                continue
+            shown = subprocess.run(
+                ["git", "-C", str(git_root), "show", f"{ref}:{name}"], capture_output=True, check=False
+            )
+            if shown.returncode != 0:
+                raise PromotionError(f"git show {ref[:12]}:{name} failed")
+            workflows[name] = shown.stdout.decode("utf-8", errors="replace")
+        return workflows
+
+    return load
+
+
+def ci_workflow_loader(repo: str) -> WorkflowLoader:
+    def load(ref: str) -> dict[str, str]:
+        try:
+            listing = github.get_json(f"repos/{repo}/contents/{WORKFLOW_DIR}?ref={ref}")
+        except github.GitHubError as exc:
+            if re.search(r"\(HTTP 404\)\s*$", str(exc)):
+                return {}
+            raise
+        _require(isinstance(listing, list), f"{WORKFLOW_DIR} at {ref[:12]} is not a directory")
+        workflows: dict[str, str] = {}
+        for entry in listing:
+            if not isinstance(entry, Mapping) or entry.get("type") != "file":
+                continue
+            name = entry.get("path")
+            if not isinstance(name, str) or not _WORKFLOW_PATH.fullmatch(name):
+                continue
+            workflows[name] = github._gh(f"repos/{repo}/contents/{name}?ref={ref}", accept="application/vnd.github.raw")
+        return workflows
+
+    return load
 
 
 def local_ancestor_check(git_root: Path) -> AncestorCheck:
@@ -938,6 +1153,7 @@ def prepare_promotion(
     pr_paths: Iterable[str] = (),
     rules: PromotionRules,
     approval_comments: Iterable[Mapping[str, Any]] | None,
+    workflow_loader: WorkflowLoader | None = None,
 ) -> PromotionBundle | None:
     _require(not has_planted_promotion_path(pr_paths), f"pull request cannot touch {STAGED_PROMOTION_DIR}")
     if head_lock_text is None:
@@ -1019,12 +1235,20 @@ def prepare_promotion(
         lock_sha256=lock_digest(head_lock),
         bootstrap=is_bootstrap,
     )
+    workflows = workflow_loader(head_sha) if workflow_loader is not None else {}
+    surface = executed_surface(
+        new_tree,
+        package=head_lock.package,
+        repository=head_lock.repository,
+        consumer_workflows=workflows,
+    )
     return PromotionBundle(
         record=record,
         changed_files=changed_files,
         diff_text=diff_text,
         old_tree=old_tree,
         new_tree=new_tree,
+        required_paths=required_read_paths(changed_files, old_tree, new_tree, surface),
     )
 
 

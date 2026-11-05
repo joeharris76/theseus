@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import absence, commands, evidence, omp_pin
+from . import absence, commands, coverage, evidence, omp_pin
 from ._vendor import yaml
 from .candidate_canaries import CANARIES, GROUPS, PROVIDERS, WHERES, Canary, control_name, group_canaries, overlay_name
-from .candidate_chain import AGENTS_TOKEN, BREACH_TOOLS, CLAUDE_TOKEN, NATIVE_TOKEN, ClientRun
+from .candidate_chain import AGENTS_TOKEN, BREACH_TOOLS, CLAUDE_TOKEN, LONG_SOURCE, NATIVE_TOKEN, ClientRun
 from .candidate_env import quiet_env
 from .policy import OMP_THINKING_LEVELS
 from .verdict import omp_terminal_error, parse_output
@@ -333,6 +333,53 @@ def elision_failures(stdout: str) -> list[str]:
     return failures
 
 
+READ_DEFAULT_LINES = 300
+
+
+def _ledger_entry(traced: evidence.Trace, suffix: str, *, multi: bool = False) -> tuple[Any, ...] | None:
+    for entry in traced.ledger:
+        if entry[0].endswith(suffix) and (";" in entry[0]) == multi:
+            return entry
+    return None
+
+
+def read_line_failures(stdout: str) -> list[str]:
+    traced = evidence.trace("omp", stdout)
+    total = len(LONG_SOURCE.splitlines())
+    failures = []
+
+    def expect(
+        suffix: str, label: str, start: int, end: int, *, exact: bool = False, truncated: bool | None = None
+    ) -> None:
+        entry = _ledger_entry(traced, suffix)
+        if entry is None:
+            failures.append(f"the {label} read is missing from the stream")
+            return
+        _, ranges, cut, _ = entry
+        if not coverage.contains(ranges, start, end):
+            failures.append(f"the {label} read reports lines {list(ranges)}, expected lines {start}-{end} among them")
+        if exact and ranges != ((start, end),):
+            failures.append(f"the {label} read reports lines {list(ranges)}, expected exactly {start}-{end}")
+        if any(high > total for _, high in ranges):
+            failures.append(f"the {label} read reports lines beyond the {total} the file has")
+        if truncated is not None and cut is not truncated:
+            failures.append(f"the {label} read truncation flag is {cut}, expected {truncated}")
+
+    expect("equivalence/checker.py", "bare", 1, 2, exact=True, truncated=False)
+    expect("long_module.py", "bare long", 1, READ_DEFAULT_LINES, exact=True, truncated=True)
+    expect("long_module.py:5-9", "ranged", 5, 9)
+    expect("long_module.py:raw", "raw", 1, READ_DEFAULT_LINES, exact=True, truncated=True)
+    expect("long_module.py:raw:5-9", "raw ranged", 5, 9, exact=True, truncated=False)
+    multi = _ledger_entry(traced, "long_module.py:1-3", multi=True)
+    if multi is None:
+        failures.append("the multi-path read is missing from the stream")
+    elif multi[1]:
+        failures.append(
+            f"the multi-path read reports lines {list(multi[1])}, expected none for a read of several paths"
+        )
+    return failures
+
+
 def _tool_names(request: Mapping[str, Any]) -> frozenset[str]:
     body = request.get("body")
     tools = body.get("tools") if isinstance(body, dict) else None
@@ -403,6 +450,10 @@ def review_checks(run: ClientRun) -> list[Check]:
             + (["the review workspace was modified"] if run.workspace_changed else []),
         ),
     ]
+
+
+def read_line_checks(run: ClientRun) -> list[Check]:
+    return [_check("live-read-lines", (7,), _run_failures(run, succeeds=True) + read_line_failures(run.stdout))]
 
 
 def control_checks(run: ClientRun) -> list[Check]:
@@ -518,6 +569,7 @@ def auth_checks(upstream: ClientRun, bad_token: ClientRun) -> list[Check]:
 def live_checks(runs: Mapping[str, ClientRun]) -> list[Check]:
     return [
         *review_checks(runs["review"]),
+        *read_line_checks(runs["read-lines"]),
         *control_checks(runs["control"]),
         *provider_checks(runs),
         *breach_checks(runs["roster-breach"]),
@@ -542,6 +594,8 @@ def fixture_checks(directory: Path) -> list[Check]:
             failures = walk_failures(stdout, first=entry["first"], then=entry["then"])
         elif kind == "elision":
             failures = elision_failures(stdout)
+        elif kind == "read-lines":
+            failures = read_line_failures(stdout)
         elif kind == "refusal":
             failures = refusal_failures(stdout)
         else:

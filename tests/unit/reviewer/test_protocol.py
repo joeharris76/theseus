@@ -433,7 +433,7 @@ def test_a_marker_with_a_malformed_field_is_refused(record: dict[str, Any]) -> N
 
 
 def test_a_marker_with_every_optional_field_decodes() -> None:
-    record = _marker_record(patch_map={"0a1b2c3d": "e" * 16}, forced=True, run_uuid="1" * 32)
+    record = _marker_record(patch_map={"0a1b2c3d": "e" * 16}, forced=True, run_uuid="1" * 32, coverage=1)
     assert decode_marker(f"line\n{encode_marker(record)}") == record
 
 
@@ -544,7 +544,7 @@ def test_the_strike_limit_refuses_a_head_whose_latest_record_is_not_a_refusal() 
 
 
 def test_a_base_change_at_the_decision_moment_makes_the_same_head_carry() -> None:
-    latest = _marker_record(decision="SHIP", cycle=2, round=3)
+    latest = _marker_record(decision="SHIP", cycle=2, round=3, coverage=1)
     step = _round(_found(latest), base_changed_at=DECIDED)
     assert (step.kind, step.cycle, step.number, step.previous) == (protocol.CARRY, 2, 3, latest)
 
@@ -564,7 +564,7 @@ def test_a_restart_opens_the_next_cycle_at_round_one(latest: dict[str, Any], ove
 
 
 def test_an_unchanged_patch_on_a_new_head_carries_the_latest_round() -> None:
-    latest = _marker_record(head_sha=OTHER, cycle=2, round=3, decision="SHIP_WITH_FIXES")
+    latest = _marker_record(head_sha=OTHER, cycle=2, round=3, decision="SHIP_WITH_FIXES", coverage=1)
     step = _round(_found(latest))
     assert (step.kind, step.cycle, step.number, step.previous) == (protocol.CARRY, 2, 3, latest)
 
@@ -609,3 +609,89 @@ def test_a_stored_marker_clamps_pre_bound_finding_coordinates() -> None:
     first, second = decoded["open_defects"]
     assert first["line"] == first["end_line"] == MAX_LINE
     assert (second["line"], second["end_line"]) == (7, None)
+
+
+@pytest.mark.parametrize("value", [1, 2, 7])
+def test_a_marker_round_trips_a_positive_integer_coverage(value: int) -> None:
+    record = _marker_record(coverage=value)
+    assert decode_marker(f"line\n{encode_marker(record)}")["coverage"] == value
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, "1", 1.0, 1.5, None, [1]])
+def test_a_marker_refuses_a_coverage_that_is_not_a_positive_integer(value: Any) -> None:
+    with pytest.raises(MarkerError):
+        decode_marker(f"line\n{_wire(_marker_record(coverage=value))}")
+
+
+def test_a_marker_from_before_the_coverage_rule_still_decodes_without_the_key() -> None:
+    record = _marker_record(decision="SHIP_WITH_FIXES", patch_map={"0a1b2c3d": "e" * 16})
+    decoded = decode_marker(f"line\n{_wire(record)}")
+    assert decoded == record and "coverage" not in decoded
+
+
+def _legacy(**over: Any) -> dict[str, Any]:
+    return _marker_record(head_sha=OTHER, cycle=2, round=3, **over)
+
+
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES"])
+def test_a_legacy_clearance_with_the_same_patch_on_a_new_head_is_reviewed_first_in_a_new_cycle(decision: str) -> None:
+    latest = _legacy(decision=decision)
+    step = _round(_found(latest))
+    assert (step.kind, step.cycle, step.number, step.previous) == (protocol.FIRST, 3, 1, latest)
+    assert "no hunk coverage" in step.reason
+
+
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES"])
+def test_a_legacy_clearance_is_not_carried_when_the_base_changed_after_it(decision: str) -> None:
+    latest = _marker_record(decision=decision, cycle=2, round=3)
+    step = _round(_found(latest), base_changed_at=DECIDED)
+    assert step.kind == protocol.FIRST and step.previous == latest and step.cycle == 3 and step.number == 1
+
+
+def test_a_legacy_clearance_is_not_carried_when_the_base_change_is_unreadable() -> None:
+    latest = _marker_record(decision="SHIP", cycle=2, round=3)
+    step = _round(_found(latest), base_change_unreadable=True)
+    assert (step.kind, step.cycle, step.number) == (protocol.FIRST, 3, 1)
+
+
+def test_a_covered_clearance_still_carries_across_a_base_change_and_a_new_head() -> None:
+    latest = _marker_record(decision="SHIP", cycle=2, round=3, coverage=1)
+    assert _round(_found(latest), base_changed_at=DECIDED).kind == protocol.CARRY
+    other = _legacy(decision="SHIP", coverage=1)
+    assert _round(_found(other)).kind == protocol.CARRY
+
+
+def test_a_do_not_ship_without_coverage_is_unaffected_by_the_coverage_rule() -> None:
+    same_head = _marker_record(decision="DO_NOT_SHIP", cycle=2, round=3)
+    assert _round(_found(same_head), base_changed_at=DECIDED).kind == protocol.CARRY
+    other = _legacy(decision="DO_NOT_SHIP")
+    step = _round(_found(other))
+    assert (step.kind, step.cycle) == (protocol.CARRY, 2)
+
+
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES"])
+def test_a_forced_round_on_a_legacy_clearance_is_still_a_forced_follow_up(decision: str) -> None:
+    same_head = _marker_record(decision=decision, cycle=2, round=3)
+    step = _round(_found(same_head), force=True)
+    assert (step.kind, step.forced, step.number) == (protocol.FOLLOW_UP, True, 4)
+    other = _legacy(decision=decision)
+    step = _round(_found(other), force=True)
+    assert (step.kind, step.forced) == (protocol.FOLLOW_UP, True)
+
+
+def test_follow_up_after_legacy_record_takes_full_scope() -> None:
+    paths = ["a.py", "b.py"]
+    reviewed = {"a.py": "1" * 64, "b.py": "2" * 64}
+    latest = _legacy(decision="SHIP_WITH_FIXES", patch_map=protocol.patch_map(reviewed, paths))
+    current = {**reviewed, "b.py": "3" * 64}
+    step = _round(_found(latest), digest="e" * 32, paths=paths, patches=protocol.patch_map(current, paths))
+    assert step.kind == protocol.FOLLOW_UP and step.changed == frozenset(paths)
+
+
+def test_a_follow_up_after_a_covered_record_scopes_to_the_changed_paths() -> None:
+    paths = ["a.py", "b.py"]
+    reviewed = {"a.py": "1" * 64, "b.py": "2" * 64}
+    latest = _legacy(decision="SHIP_WITH_FIXES", coverage=1, patch_map=protocol.patch_map(reviewed, paths))
+    current = {**reviewed, "b.py": "3" * 64}
+    step = _round(_found(latest), digest="e" * 32, paths=paths, patches=protocol.patch_map(current, paths))
+    assert step.kind == protocol.FOLLOW_UP and step.changed == frozenset({"b.py"})
