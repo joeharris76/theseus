@@ -209,6 +209,7 @@ def prepare(env: Environment, args: argparse.Namespace) -> int:
                 slot=1,
                 classification=str(layout.classification),
                 workspace=None,
+                classify_only=True,
             )
         )
     except (Exception, SystemExit) as exc:

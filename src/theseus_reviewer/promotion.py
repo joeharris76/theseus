@@ -756,25 +756,8 @@ def _action_surface(
             found = _step_action(target, repository, pin=pin, local=True, label=manifest)
             if found is not None:
                 nested.add(found)
-    elif kind == "docker":
-        image = runs.get("image")
-        _require(
-            isinstance(image, str) and image.startswith("docker://"),
-            f"action {manifest} builds a container image from the promoted source, which cannot be reviewed",
-        )
     elif kind.startswith("node"):
-        for key in ("main", "pre", "post"):
-            entry = runs.get(key)
-            if entry is None:
-                continue
-            _require(isinstance(entry, str), f"action {manifest} runs.{key} cannot be resolved")
-            path = posixpath.normpath(f"{prefix}{entry}")
-            _require(
-                "${{" not in entry and "\\" not in entry and not entry.startswith("/") and path.startswith(prefix),
-                f"action {manifest} runs.{key} reaches outside its own directory",
-            )
-            if path not in tree:
-                _require(not strict, f"action {manifest} runs.{key} {entry!r} is missing from the promoted source")
+        raise PromotionError(f"action {manifest}: node actions in the Theseus repository are not supported")
     else:
         raise PromotionError(f"action {manifest} uses unsupported runs.using {using!r}")
     return files, nested

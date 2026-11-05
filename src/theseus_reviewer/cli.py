@@ -1325,12 +1325,18 @@ def command_select(args: argparse.Namespace) -> int:
     workspace = getattr(args, "workspace", None)
     loaded = attempt_files.load(Path(args.attempts_dir), plan, os.environ["GITHUB_RUN_ID"], workspace=workspace)
     classification_path = Path(args.classification)
+    classify_only = getattr(args, "classify_only", False)
     if args.slot == 1:
         try:
             classification = _classify_plan(plan)
         except (JevError, KeyError, TypeError, ValueError) as exc:
+            if classify_only:
+                _summary(f"classification unavailable: {exc}")
+                return 0
             return _empty_selection(f"classification unavailable: {exc}", args.slot)
         _write_json(classification_path, classification.to_json())
+        if classify_only:
+            return 0
     else:
         read = _read_classification(classification_path)
         if read is None:

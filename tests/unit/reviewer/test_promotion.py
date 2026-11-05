@@ -1193,20 +1193,6 @@ def test_step_level_composite_actions_are_in_the_surface_and_required() -> None:
     assert f"{STAGED_NEW}.github/actions/inner/action.yaml" in required
 
 
-def test_step_level_node_action_surface_is_every_file_in_its_directory() -> None:
-    tree = {
-        **ACTION_TREE,
-        "actions/node/action.yml": b"runs:\n  using: node20\n  main: dist/index.js\n",
-        "actions/node/dist/index.js": b"x\n",
-        "actions/node/lib/helper.js": b"y\n",
-        "actions/other/x.js": b"z\n",
-    }
-    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/actions/node@{SHA_B}\n"
-    surface = _surface(tree, {"w.yml": workflow})
-    assert {"actions/node/action.yml", "actions/node/dist/index.js", "actions/node/lib/helper.js"} <= surface
-    assert "actions/other/x.js" not in surface
-
-
 @pytest.mark.parametrize(
     "uses",
     [
@@ -1222,21 +1208,35 @@ def test_unresolvable_theseus_step_reference_holds(uses: str) -> None:
         _surface(ACTION_TREE, {"w.yml": workflow})
 
 
-def test_theseus_docker_action_and_missing_nested_action_hold() -> None:
-    docker = {**ACTION_TREE, ".github/actions/setup/action.yml": b"runs:\n  using: docker\n  image: Dockerfile\n"}
-    with pytest.raises(promotion.PromotionError, match="container image"):
-        _surface(docker, {"w.yml": ACTION_WORKFLOW})
+def test_missing_nested_action_holds() -> None:
     nested = {
         **ACTION_TREE,
         ".github/actions/setup/action.yml": b"runs:\n  using: composite\n  steps:\n    - uses: ./nowhere\n",
     }
     with pytest.raises(promotion.PromotionError, match="missing"):
         _surface(nested, {"w.yml": ACTION_WORKFLOW})
-    external = {
-        **ACTION_TREE,
-        ".github/actions/setup/action.yml": b"runs:\n  using: docker\n  image: docker://alpine:3\n",
-    }
-    assert ".github/actions/setup/action.yml" in _surface(external, {"w.yml": ACTION_WORKFLOW})
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            b"runs:\n  using: node20\n  main: dist/index.js\n",
+            "node actions in the Theseus repository are not supported",
+        ),
+        (
+            b"runs:\n  using: node16\n  main: ../lib/evil.js\n",
+            "node actions in the Theseus repository are not supported",
+        ),
+        (b"runs:\n  using: docker\n  image: Dockerfile\n", "unsupported runs.using 'docker'"),
+        (b"runs:\n  using: docker\n  image: docker://alpine:3\n", "unsupported runs.using 'docker'"),
+        (b"runs:\n  using: bash\n", "unsupported runs.using 'bash'"),
+    ],
+)
+def test_theseus_action_that_is_not_composite_holds(body: bytes, message: str) -> None:
+    tree = {**ACTION_TREE, ".github/actions/setup/action.yml": body}
+    with pytest.raises(promotion.PromotionError, match=message):
+        _surface(tree, {"w.yml": ACTION_WORKFLOW})
 
 
 def test_step_references_to_other_repositories_are_ignored() -> None:
@@ -1306,17 +1306,6 @@ def test_inline_and_action_path_runs_are_accepted() -> None:
     )
     tree = {**ACTION_TREE, ".github/actions/setup/action.yml": body, ".github/actions/setup/payload.py": b"x\n"}
     assert ".github/actions/setup/payload.py" in _surface(tree, {"w.yml": ACTION_WORKFLOW})
-
-
-@pytest.mark.parametrize("entry", ["../lib/evil.js", "/abs/evil.js", "${{ github.workspace }}/x.js"])
-def test_node_action_entry_outside_its_directory_holds(entry: str) -> None:
-    tree = {
-        **ACTION_TREE,
-        ".github/actions/setup/action.yml": f"runs:\n  using: node20\n  main: '{entry}'\n".encode(),
-        "lib/evil.js": b"x\n",
-    }
-    with pytest.raises(promotion.PromotionError, match="outside its own directory"):
-        _surface(tree, {"w.yml": ACTION_WORKFLOW})
 
 
 @pytest.mark.parametrize("ref", ["main", "v1", "refs/heads/main", "refs/tags/v1", SHA_C, SHA_B.upper(), SHA_B[:7]])
