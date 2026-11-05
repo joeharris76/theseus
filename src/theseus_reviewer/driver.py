@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -235,10 +236,17 @@ def _record_capacity(
         config_text = Path(plan["omp_config"]).read_text(encoding="utf-8")
         held = capacity.measure(plan, config_text, lambda: reader(binary, config_text))
     except (OSError, ValueError, KeyError, TypeError, capacity.CatalogError) as exc:
-        print(f"oracle-verdict: reviewer capacity is unknown ({exc}); assuming {capacity.UNKNOWN_CAPACITY_TOKENS}")
+        print(f"oracle-verdict: reviewer capacity is unknown ({exc}); no reviewer is selected for a sized change")
+        with contextlib.suppress(OSError, ValueError):
+            cli._write_json(plan_file, {**_read(plan_file), capacity.ERROR_KEY: str(exc)})
         return
-    cli._write_json(plan_file, {**plan, capacity.CAPACITY_KEY: held})
+    unlisted = sorted(str(item["name"]) for item in plan["chain"] if str(item["name"]) not in held)
+    cli._write_json(
+        plan_file, {**{k: v for k, v in plan.items() if k != capacity.ERROR_KEY}, capacity.CAPACITY_KEY: held}
+    )
     cli._summary(f"reviewer capacity: {json.dumps(held, sort_keys=True)}")
+    if unlisted:
+        cli._summary(f"reviewer capacity is unknown for: {', '.join(unlisted)}; {capacity.UNLISTED_CAUSE}")
 
 
 def harness(env: Environment, args: argparse.Namespace) -> int:

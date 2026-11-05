@@ -21,6 +21,7 @@ from theseus_reviewer import (
     candidate_chain,
     candidate_checks,
     candidate_stub,
+    capacity,
     commands,
     omp_candidate,
     omp_pin,
@@ -33,6 +34,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 FIXTURES = DATA_FIXTURES / "oracle_reviewers" / "omp_candidate"
 OMP_CONFIG = CONSUMER_ALPHA / ".github" / "oracle-omp-config.yml"
 CONFIG_TEXT = OMP_CONFIG.read_text(encoding="utf-8")
+CONFIG = yaml.safe_load(CONFIG_TEXT)
 STATIC = json.loads((FIXTURES / "static_outputs.json").read_text(encoding="utf-8"))
 VERSION = "18.12.1"
 OTHER = "unlisted-host-platform"
@@ -52,6 +54,8 @@ SCRIPT = (
     "    emit(data['help'])\n"
     "if args[:2] == ['config', 'list']:\n"
     "    emit(json.dumps(data['config_json']) if '--json' in args else data['config_text'])\n"
+    "if args[:2] == ['models', '--json']:\n"
+    "    emit(json.dumps(dict(models=[dict(selector=n, contextWindow=1000000, maxTokens=128000) for n in data['models']])))\n"
     "if args[:1] == ['--print']:\n"
     "    flag = args[1]\n"
     "    if flag in data['invalid']:\n"
@@ -62,6 +66,7 @@ SCRIPT = (
 
 def _fake(tmp_path: Path, mutate: Callable[[dict[str, Any]], None] | None = None) -> tuple[Path, Path]:
     data = copy.deepcopy(STATIC)
+    data["models"] = sorted({capacity.strip_effort(name) for name in capacity.configured_models(CONFIG)})
     if mutate is not None:
         mutate(data)
     directory = tmp_path / "bin"
@@ -1021,3 +1026,34 @@ def test_an_overlay_schema_lacking_the_compaction_keys_is_red(tmp_path: Path) ->
 
     failures = _static(tmp_path, forget)["overlay-schema"].failures
     assert failures and all("compaction" in item for item in failures)
+
+
+def test_a_catalog_that_lists_every_configured_model_passes_the_catalog_check(tmp_path: Path) -> None:
+    check = _static(tmp_path)["model-catalog"]
+
+    assert check.ok and check.rows == (13,)
+    assert 13 in candidate_checks.CONTRACT_ROWS
+
+
+def test_a_model_the_catalog_no_longer_lists_is_red(tmp_path: Path) -> None:
+    def drop(data: dict[str, Any]) -> None:
+        data["models"].remove("anthropic/claude-opus-5-5")
+        data["models"].remove("google-antigravity/gemini-4-argon")
+
+    check = _static(tmp_path, drop)["model-catalog"]
+
+    assert check.failures == (
+        "the model catalog does not list anthropic/claude-opus-5-5",
+        "the model catalog does not list google-antigravity/gemini-4-argon",
+    )
+
+
+def test_a_catalog_listing_that_fails_is_red(tmp_path: Path) -> None:
+    binary, _ = _fake(tmp_path)
+    broken = binary.with_name("broken-omp")
+    broken.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    broken.chmod(0o755)
+
+    check = candidate_checks.check_model_catalog(broken, CONFIG_TEXT)
+
+    assert check.failures == ("the model catalog could not be listed: exit code 1",)

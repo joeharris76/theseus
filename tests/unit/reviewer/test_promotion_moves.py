@@ -20,7 +20,7 @@ EDITED = BODY.replace(b"line 20", b"line twenty")
 INIT = f"{PACKAGE}/__init__.py"
 NEW_HELPER = f"{promotion.STAGED_PROMOTION_DIR}/new/{PACKAGE}/helper.py"
 OLD_HELPER = f"{promotion.STAGED_PROMOTION_DIR}/old/{PACKAGE}/helper.py"
-SURFACE_KEYS = {"package": "theseus-reviewer", "repository": "owner/theseus", "consumer_workflows": {}}
+SURFACE_KEYS = {"package": "theseus-reviewer", "repository": "owner/theseus", "consumer_workflows": {}, "pins": {}}
 
 
 def _requirements(old: dict[str, bytes], new: dict[str, bytes]) -> tuple[Any, frozenset[str], frozenset[str]]:
@@ -95,12 +95,15 @@ def test_move_within_the_surface_stays_unrequired() -> None:
     assert required == whole == frozenset()
 
 
-def test_plan_lists_the_staged_old_file_of_a_move_out_and_marks_whole_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    old, new, staged = MOVE_OUT_EDITED
-    (changed, diff_text), required, whole = _requirements(old, new)
-    bundle = promotion.PromotionBundle(
+def _bundle(
+    old: dict[str, bytes],
+    new: dict[str, bytes],
+    changed: Any,
+    diff_text: str,
+    required: frozenset[str],
+    whole: frozenset[str],
+) -> promotion.PromotionBundle:
+    return promotion.PromotionBundle(
         record=promotion.PromotionRecord(
             head_sha="a" * 40,
             old_source_sha256="1" * 64,
@@ -118,6 +121,9 @@ def test_plan_lists_the_staged_old_file_of_a_move_out_and_marks_whole_files(
         required_paths=required,
         whole_paths=whole,
     )
+
+
+def _plan(bundle: promotion.PromotionBundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     policy = load_policy(POLICY_PATH)
     matchers = load_matchers(policy.consumer, POLICY_PATH.parents[1])
     plan = cli._base_plan(policy, "owner/repo", 7, "1")
@@ -140,6 +146,16 @@ def test_plan_lists_the_staged_old_file_of_a_move_out_and_marks_whole_files(
         promotion=bundle,
     )
     assert cli.plan_decision(plan, policy, tmp_path, inputs, matchers) == 0
+    return plan
+
+
+def test_plan_lists_the_staged_old_file_of_a_move_out_and_marks_whole_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old, new, staged = MOVE_OUT_EDITED
+    (changed, diff_text), required, whole = _requirements(old, new)
+    bundle = _bundle(old, new, changed, diff_text, required, whole)
+    plan = _plan(bundle, tmp_path, monkeypatch)
     assert plan["decision"] == "review"
     assert staged in plan["evidence_files"]
     assert plan["evidence_whole_files"] == [staged]
@@ -166,3 +182,20 @@ def test_whole_file_hint_names_a_raw_read_when_lines_are_cut(tmp_path: Path) -> 
             assert hints[NEW_HELPER].endswith(f"read with :raw as {NEW_HELPER}:raw:1-3)")
         else:
             assert hints[NEW_HELPER] == "(read the whole file)"
+
+
+def test_plan_lists_and_stages_a_newly_executed_unchanged_file_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = f"{PACKAGE}/payload.py"
+    old = {INIT: b"x\n", payload: BODY}
+    new = {INIT: b"y\n", payload: BODY}
+    (changed, diff_text), _, _ = _requirements(old, new)
+    staged = f"{promotion.STAGED_PROMOTION_DIR}/new/{payload}"
+    bundle = _bundle(old, new, changed, diff_text, frozenset({staged}), frozenset({staged}))
+    plan = _plan(bundle, tmp_path, monkeypatch)
+    assert staged in plan["evidence_files"]
+    assert plan["evidence_whole_files"] == [staged]
+    assert staged in plan["evidence_protected_files"]
+    assert (tmp_path / promotion.PROMOTION_PLAN_DIR / "new" / payload).read_bytes() == BODY
+    assert not _report(tmp_path, frozenset({staged}), frozenset({staged}), {}).complete

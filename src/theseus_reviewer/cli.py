@@ -1151,6 +1151,7 @@ def _plan_review(
     names = {reviewer.name for reviewer in chain}
     follow_up_reviewer = latest.get("reviewer") if follow_up and latest.get("reviewer") in names else None
     old_staged_prefix = f"{promotion.STAGED_PROMOTION_DIR}/old/"
+    delta_paths = {path for item in files for path in item.paths}
     evidence_files = sorted(
         {
             *(
@@ -1163,6 +1164,7 @@ def _plan_review(
                 for item in reviewed_now
                 if item.previous_path in whole_files and item.previous_path in in_scope
             ),
+            *(path for path in sorted(whole_files) if path in in_scope and path not in delta_paths and not partial),
         }
     )
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
@@ -1201,7 +1203,8 @@ def _plan_review(
             capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files),
             file_list_bytes,
         )
-    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes)
+    load_mode = "promotion" if promotion_record is not None else "inline" if brief_mode == "inline" else "file-list"
+    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes, load_mode)
     evidence_set = set(evidence_files)
     plan.update(
         {

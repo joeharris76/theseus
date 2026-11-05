@@ -214,7 +214,7 @@ def check_candidate(
             code, text = candidate_checks.run_omp(candidate, home, "--version")
             transcript = " ".join(text.split()) if code == 0 else f"exit {code}"
         else:
-            checks = [Check("static-probes", (1, 2, 3, 4, 11), (f"skipped: {transcript}",))]
+            checks = [Check("static-probes", (1, 2, 3, 4, 11, 13), (f"skipped: {transcript}",))]
         runnable = host_build.ok and all(check.ok for check in checks)
         checks.extend(candidate_checks.fixture_checks(fixtures))
         live_runs: dict[str, ClientRun] = {}

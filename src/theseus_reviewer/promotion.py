@@ -50,9 +50,6 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPO_SLUG = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _PACKAGE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 _WORKFLOW_PATH = re.compile(r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml")
-_REMOTE_WORKFLOW = re.compile(
-    r"(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?P<path>\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)"
-)
 
 LOCK_REQUIRED_KEYS = frozenset(
     {
@@ -624,27 +621,29 @@ def executed_surface(
     package: str,
     repository: str,
     consumer_workflows: Mapping[str, str],
+    pins: Mapping[str, str | None],
     strict: bool = True,
 ) -> frozenset[str]:
     surface = set(_package_source_files(tree, f"{_normalized_dist_name(package)}/"))
     if "pyproject.toml" in tree:
         surface.add("pyproject.toml")
-    pending: list[tuple[str, str]] = []
+    pending: list[tuple[str, str, str | None]] = []
     for name, text in sorted(consumer_workflows.items()):
-        workflows, actions = _workflow_references(text, repository, nested=False, label=name)
-        pending.extend(("action", path) for path in sorted(actions))
-        pending.extend(("workflow", path) for path in sorted(workflows))
-    visited: set[tuple[str, str]] = set()
+        pin = pins.get(name)
+        workflows, actions = _workflow_references(text, repository, pin=pin, nested=False, label=name)
+        pending.extend(("action", path, pin) for path in sorted(actions))
+        pending.extend(("workflow", path, pin) for path in sorted(workflows))
+    visited: set[tuple[str, str, str | None]] = set()
     while pending:
         item = pending.pop()
         if item in visited:
             continue
         visited.add(item)
-        kind, path = item
+        kind, path, pin = item
         if kind == "action":
-            surface_files, nested_actions = _action_surface(tree, path, repository, strict=strict)
+            surface_files, nested_actions = _action_surface(tree, path, repository, pin=pin, strict=strict)
             surface.update(surface_files)
-            pending.extend(("action", nested) for nested in sorted(nested_actions))
+            pending.extend(("action", nested, pin) for nested in sorted(nested_actions))
             continue
         raw = tree.get(path)
         if raw is None:
@@ -652,9 +651,9 @@ def executed_surface(
             continue
         surface.add(path)
         text = raw.decode("utf-8", errors="replace")
-        workflows, actions = _workflow_references(text, repository, nested=True, label=path)
-        pending.extend(("action", nested) for nested in sorted(actions))
-        pending.extend(("workflow", nested) for nested in sorted(workflows))
+        workflows, actions = _workflow_references(text, repository, pin=pin, nested=True, label=path)
+        pending.extend(("action", nested, pin) for nested in sorted(actions))
+        pending.extend(("workflow", nested, pin) for nested in sorted(workflows))
     return frozenset(surface)
 
 
@@ -664,8 +663,7 @@ def _mentions_repository(target: str, repository: str) -> bool:
 
 
 def _action_directory(path: str, label: str) -> str:
-    if not path:
-        return ""
+    _require(bool(path), f"{label} references an action at the repository root, which cannot be bounded")
     clean = posixpath.normpath(path)
     _require(
         "\\" not in path and not clean.startswith(("/", "..")) and clean != ".",
@@ -674,18 +672,30 @@ def _action_directory(path: str, label: str) -> str:
     return clean
 
 
-def _step_action(target: str, repository: str, *, local: bool, label: str) -> str | None:
+def _theseus_target(target: str, repository: str, pin: str | None, label: str) -> str | None:
+    base, separator, ref = target.partition("@")
+    parts = base.split("/", 2)
+    if len(parts) >= 2:
+        name = parts[1].casefold().removesuffix(".git")
+        if f"{parts[0].casefold()}/{name}" == repository.casefold():
+            _require(bool(separator), f"{label} references {target!r} without a version")
+            _require(
+                pin is not None and ref == pin,
+                f"{label} references {target!r}, which is not the promoted commit {pin}",
+            )
+            return parts[2] if len(parts) == 3 else ""
+    _require(not _mentions_repository(target, repository), f"{label} references {target!r}, which cannot be resolved")
+    return None
+
+
+def _step_action(target: str, repository: str, *, pin: str | None, local: bool, label: str) -> str | None:
     target = target.strip()
     if target.startswith("docker://"):
         return None
     if target == "." or target.startswith("./"):
         return _action_directory(target[2:], label) if local else None
-    parts = target.split("@", 1)[0].split("/", 2)
-    if len(parts) >= 2 and f"{parts[0]}/{parts[1]}".casefold() == repository.casefold():
-        _require("@" in target, f"{label} references {target!r} without a version")
-        return _action_directory(parts[2] if len(parts) == 3 else "", label)
-    _require(not _mentions_repository(target, repository), f"{label} references {target!r}, which cannot be resolved")
-    return None
+    path = _theseus_target(target, repository, pin, label)
+    return None if path is None else _action_directory(path, label)
 
 
 def _step_targets(document: Any) -> Iterable[str]:
@@ -705,13 +715,26 @@ def _uses_of(steps: Any) -> Iterable[str]:
             yield target
 
 
+_ESCAPING_RUN = re.compile(
+    r"github\.workspace|GITHUB_WORKSPACE|RUNNER_WORKSPACE|_actions/|(?:^|[\s/'\"=:])\.\.(?:[/\\'\"\s]|$)"
+)
+
+
+def _run_texts(steps: Any) -> Iterable[str]:
+    if isinstance(steps, list):
+        for step in steps:
+            text = step.get("run") if isinstance(step, Mapping) else None
+            if isinstance(text, str):
+                yield text
+
+
 def _action_surface(
-    tree: Mapping[str, bytes], directory: str, repository: str, *, strict: bool
+    tree: Mapping[str, bytes], directory: str, repository: str, *, pin: str | None, strict: bool
 ) -> tuple[set[str], set[str]]:
-    prefix = f"{directory}/" if directory else ""
+    prefix = f"{directory}/"
     manifest = next((f"{prefix}{name}" for name in ("action.yml", "action.yaml") if f"{prefix}{name}" in tree), None)
     if manifest is None:
-        _require(not strict, f"action {directory or '.'} referenced from the promoted source is missing")
+        _require(not strict, f"action {directory} referenced from the promoted source is missing")
         return set(), set()
     try:
         document = yaml.safe_load(tree[manifest].decode("utf-8", errors="replace"))
@@ -720,11 +743,17 @@ def _action_surface(
     runs = document.get("runs") if isinstance(document, Mapping) else None
     using = runs.get("using") if isinstance(runs, Mapping) else None
     _require(isinstance(using, str), f"action {manifest} has no runs.using")
-    files, nested = {manifest}, set()
+    files, nested = {path for path in tree if path.startswith(prefix)}, set()
     kind = using.strip().casefold()
     if kind == "composite":
-        for target in _uses_of(runs.get("steps")):
-            found = _step_action(target, repository, local=True, label=manifest)
+        steps = runs.get("steps")
+        for text in _run_texts(steps):
+            _require(
+                _ESCAPING_RUN.search(text) is None,
+                f"action {manifest} runs a command that reaches outside its own directory",
+            )
+        for target in _uses_of(steps):
+            found = _step_action(target, repository, pin=pin, local=True, label=manifest)
             if found is not None:
                 nested.add(found)
     elif kind == "docker":
@@ -736,20 +765,24 @@ def _action_surface(
     elif kind.startswith("node"):
         for key in ("main", "pre", "post"):
             entry = runs.get(key)
-            if not isinstance(entry, str):
+            if entry is None:
                 continue
+            _require(isinstance(entry, str), f"action {manifest} runs.{key} cannot be resolved")
             path = posixpath.normpath(f"{prefix}{entry}")
-            _require(not path.startswith(("/", "..")), f"action {manifest} runs.{key} cannot be resolved")
-            if path in tree:
-                files.add(path)
-            else:
+            _require(
+                "${{" not in entry and "\\" not in entry and not entry.startswith("/") and path.startswith(prefix),
+                f"action {manifest} runs.{key} reaches outside its own directory",
+            )
+            if path not in tree:
                 _require(not strict, f"action {manifest} runs.{key} {entry!r} is missing from the promoted source")
     else:
         raise PromotionError(f"action {manifest} uses unsupported runs.using {using!r}")
     return files, nested
 
 
-def _workflow_references(text: str, repository: str, *, nested: bool, label: str) -> tuple[set[str], set[str]]:
+def _workflow_references(
+    text: str, repository: str, *, pin: str | None, nested: bool, label: str
+) -> tuple[set[str], set[str]]:
     try:
         document = yaml.safe_load(text)
     except (yaml.YAMLError, ValueError, RecursionError) as exc:
@@ -760,21 +793,30 @@ def _workflow_references(text: str, repository: str, *, nested: bool, label: str
     if not isinstance(jobs, Mapping):
         return found, actions
     for target in _step_targets(document):
-        action = _step_action(target, repository, local=nested, label=label)
+        action = _step_action(target, repository, pin=pin, local=nested, label=label)
         if action is not None:
             actions.add(action)
     for job in jobs.values():
         target = job.get("uses") if isinstance(job, Mapping) else None
         if not isinstance(target, str):
             continue
-        target = target.strip().split("@", 1)[0]
-        if nested and target.startswith("./"):
-            if _WORKFLOW_PATH.fullmatch(target[2:]):
-                found.add(target[2:])
+        target = target.strip()
+        if target.startswith("./"):
+            if nested:
+                workflow = target.split("@", 1)[0][2:]
+                _require(
+                    _WORKFLOW_PATH.fullmatch(workflow) is not None,
+                    f"{label} references {target!r}, which cannot be resolved",
+                )
+                found.add(workflow)
             continue
-        remote = _REMOTE_WORKFLOW.fullmatch(target)
-        if remote is not None and remote.group("repo").casefold() == repository.casefold():
-            found.add(remote.group("path"))
+        workflow = _theseus_target(target, repository, pin, label)
+        if workflow is not None:
+            _require(
+                _WORKFLOW_PATH.fullmatch(workflow) is not None,
+                f"{label} references {target!r}, which cannot be resolved",
+            )
+            found.add(workflow)
     return found, actions
 
 
@@ -791,6 +833,7 @@ def read_requirements(
     new_prefix = f"{STAGED_PROMOTION_DIR}/new/"
     required: set[str] = set()
     whole: set[str] = set()
+    decided: set[str] = set()
     for item in changed_files:
         if item.removed:
             if item.path.startswith(old_prefix) and item.path.removeprefix(old_prefix) in previously_executed:
@@ -799,6 +842,7 @@ def read_requirements(
         if not item.path.startswith(new_prefix):
             continue
         tree_path = item.path.removeprefix(new_prefix)
+        decided.add(tree_path)
         renamed = item.status == "renamed" and item.previous_path is not None
         old_path = item.previous_path.removeprefix(old_prefix) if renamed and item.previous_path else None
         if tree_path not in executed:
@@ -816,6 +860,11 @@ def read_requirements(
         elif item.status == "modified" and tree_path not in previously_executed:
             whole.add(item.path)
         required.add(item.path)
+    for tree_path in sorted(executed - previously_executed):
+        staged = f"{new_prefix}{tree_path}"
+        if tree_path in new_tree and tree_path not in decided:
+            required.add(staged)
+            whole.add(staged)
     return frozenset(required), frozenset(whole)
 
 
@@ -1315,8 +1364,10 @@ def prepare_promotion(
         "theseus lock repository does not match consumer policy",
     )
     validate_lock_policy(head_lock, rules)
+    base_pin: str | None = None
     if base_lock_text is not None:
         base_lock = parse_lock(base_lock_text)
+        base_pin = base_lock.source_commit
         _require(
             head_lock.bootstrap is None,
             "bootstrap baseline is only valid when no prior theseus lock exists on the base branch",
@@ -1393,12 +1444,14 @@ def prepare_promotion(
         package=head_lock.package,
         repository=head_lock.repository,
         consumer_workflows={**base_workflows, **head_workflows},
+        pins={**dict.fromkeys(base_workflows, base_pin), **dict.fromkeys(head_workflows, head_lock.source_commit)},
     )
     old_surface = executed_surface(
         old_tree,
         package=head_lock.package,
         repository=head_lock.repository,
         consumer_workflows=base_workflows,
+        pins=dict.fromkeys(base_workflows, base_pin),
         strict=False,
     )
     required_paths, whole_paths = read_requirements(changed_files, old_tree, new_tree, surface, old_surface)

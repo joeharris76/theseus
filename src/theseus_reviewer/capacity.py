@@ -12,16 +12,19 @@ from . import commands, credentials, promotion
 from ._vendor import yaml
 from .diff import Hunk, hunk_index
 
-OVERHEAD_TOKENS = 150_000
+OVERHEAD_TOKENS = {"inline": 80_000, "file-list": 170_000, "promotion": 170_000}
 BYTES_PER_TOKEN = 2.27
-UNKNOWN_CAPACITY_TOKENS = 200_000
+USAGE_LIMIT_FALLBACK = "usage-limit"
 CATALOG_TIMEOUT_SECONDS = 60
 CATALOG_GATEWAY_URL = "https://catalog.invalid"
 CATALOG_TOKEN = json.dumps({"oauthAccessToken": "catalog", "apiKey": "catalog"})
 CAPACITY_KEY = "capacity"
+ERROR_KEY = "capacity_error"
 LOAD_KEY = "review_load_tokens"
 SPLIT_INSTRUCTION = "split the change into smaller pull requests"
 SKIP_PREFIX = "skipped: the change needs about"
+UNKNOWN_PREFIX = "skipped: this reviewer's capacity cannot be determined:"
+UNLISTED_CAUSE = "its primary model is not in the model catalog"
 
 Catalog = Callable[[], Mapping[str, int]]
 
@@ -34,8 +37,8 @@ def tokens(byte_count: int) -> int:
     return math.ceil(max(byte_count, 0) / BYTES_PER_TOKEN)
 
 
-def review_load(required_bytes: int, brief_bytes: int) -> int:
-    return OVERHEAD_TOKENS + tokens(required_bytes) + tokens(brief_bytes)
+def review_load(required_bytes: int, brief_bytes: int, mode: str) -> int:
+    return OVERHEAD_TOKENS[mode] + tokens(required_bytes) + tokens(brief_bytes)
 
 
 def _block_bytes(blocks: Iterable[Hunk]) -> int:
@@ -76,7 +79,7 @@ def required_bytes(
     return total
 
 
-def _strip_effort(target: str) -> str:
+def strip_effort(target: str) -> str:
     provider, _, model = target.partition("/")
     return f"{provider}/{model.split(':', 1)[0]}" if model else target
 
@@ -89,6 +92,11 @@ def _role_target(model: str, config: Mapping[str, Any]) -> str | None:
     return target if isinstance(target, str) and target else None
 
 
+def _fallback_on(config: Mapping[str, Any]) -> object:
+    retry = config.get("retry")
+    return retry.get("fallbackOn") if isinstance(retry, Mapping) else None
+
+
 def reviewer_models(model: str, config: Mapping[str, Any]) -> list[str]:
     target = _role_target(model, config)
     if target is None:
@@ -99,7 +107,7 @@ def reviewer_models(model: str, config: Mapping[str, Any]) -> list[str]:
     if isinstance(chains, Mapping):
         followers = chains.get(target)
         if followers is None:
-            followers = chains.get(_strip_effort(target))
+            followers = chains.get(strip_effort(target))
         if isinstance(followers, Sequence) and not isinstance(followers, str):
             models.extend(item for item in followers if isinstance(item, str))
     return models
@@ -108,12 +116,37 @@ def reviewer_models(model: str, config: Mapping[str, Any]) -> list[str]:
 def _window(model: str, catalog: Mapping[str, int]) -> int | None:
     if model in catalog:
         return catalog[model]
-    return catalog.get(_strip_effort(model))
+    return catalog.get(strip_effort(model))
+
+
+def configured_models(config: Mapping[str, Any]) -> list[str]:
+    names: list[str] = []
+    roles = config.get("modelRoles")
+    if isinstance(roles, Mapping):
+        names.extend(target for target in roles.values() if isinstance(target, str) and target)
+    retry = config.get("retry")
+    chains = retry.get("fallbackChains") if isinstance(retry, Mapping) else None
+    if isinstance(chains, Mapping):
+        for leader, followers in chains.items():
+            names.append(str(leader))
+            if isinstance(followers, Sequence) and not isinstance(followers, str):
+                names.extend(item for item in followers if isinstance(item, str))
+    return list(dict.fromkeys(names))
+
+
+def unlisted_models(config: Mapping[str, Any], catalog: Mapping[str, int]) -> list[str]:
+    return list(
+        dict.fromkeys(strip_effort(name) for name in configured_models(config) if _window(name, catalog) is None)
+    )
 
 
 def reviewer_capacity(model: str, config: Mapping[str, Any], catalog: Mapping[str, int]) -> int | None:
-    known = [window for item in reviewer_models(model, config) if (window := _window(item, catalog)) is not None]
-    return min(known) if known else None
+    chain = reviewer_models(model, config)
+    if not chain or (primary := _window(chain[0], catalog)) is None:
+        return None
+    if _fallback_on(config) == USAGE_LIMIT_FALLBACK:
+        return primary
+    return min([primary, *(window for item in chain[1:] if (window := _window(item, catalog)) is not None)])
 
 
 def reviewer_capacities(
@@ -185,14 +218,9 @@ def measure(plan: Mapping[str, Any], config_text: str, catalog: Catalog) -> dict
     return reviewer_capacities(plan["chain"], held if isinstance(held, Mapping) else {}, catalog())
 
 
-def effective(capacities: Mapping[str, int], reviewer: str) -> tuple[int, bool]:
-    known = capacities.get(reviewer)
-    return (UNKNOWN_CAPACITY_TOKENS, False) if known is None else (known, True)
+def skip_text(load: int, capacity: int) -> str:
+    return f"{SKIP_PREFIX} {load} tokens of reading; this reviewer's capacity is {capacity}"
 
 
-def skip_text(load: int, capacity: int, known: bool) -> str:
-    if known:
-        return f"{SKIP_PREFIX} {load} tokens of reading; this reviewer's capacity is {capacity}"
-    return (
-        f"{SKIP_PREFIX} {load} tokens of reading; this reviewer's capacity is unknown and at most {capacity} is assumed"
-    )
+def unknown_text(cause: str) -> str:
+    return f"{UNKNOWN_PREFIX} {cause or UNLISTED_CAUSE}"

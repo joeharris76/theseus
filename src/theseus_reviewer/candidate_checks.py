@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import absence, commands, coverage, evidence, omp_pin
+from . import absence, capacity, commands, coverage, evidence, omp_pin
 from ._vendor import yaml
 from .candidate_canaries import CANARIES, GROUPS, PROVIDERS, WHERES, Canary, control_name, group_canaries, overlay_name
 from .candidate_chain import (
@@ -55,6 +55,7 @@ CONTRACT_ROWS = {
     10: "process and on-disk behaviour",
     11: "version output format",
     12: "auth-gateway serve protocol and client tokens",
+    13: "model catalog listing under a placeholder credential",
 }
 RECORDED_REASONS = {
     8: "provider reset-time wording is originated by each provider and is never observable offline; reset parsing stays covered by the calibrated absence tests",
@@ -224,6 +225,16 @@ def check_reviewer_config_schema(binary: Path, home: Path, config_text: str) -> 
     return _check("reviewer-config-schema", (4,), failures)
 
 
+def check_model_catalog(binary: Path, config_text: str) -> Check:
+    try:
+        config = yaml.safe_load(config_text)
+        catalog = capacity.read_catalog(binary, config_text)
+    except (yaml.YAMLError, capacity.CatalogError) as exc:
+        return _check("model-catalog", (13,), [str(exc)])
+    missing = capacity.unlisted_models(config if isinstance(config, Mapping) else {}, catalog)
+    return _check("model-catalog", (13,), [f"the model catalog does not list {name}" for name in missing])
+
+
 def static_checks(binary: Path, home: Path, version: str, config_text: str) -> list[Check]:
     return [
         check_version(binary, home, version),
@@ -231,6 +242,7 @@ def static_checks(binary: Path, home: Path, version: str, config_text: str) -> l
         check_flag_values(binary, home),
         check_overlay_schema(binary, home),
         check_reviewer_config_schema(binary, home, config_text),
+        check_model_catalog(binary, config_text),
     ]
 
 

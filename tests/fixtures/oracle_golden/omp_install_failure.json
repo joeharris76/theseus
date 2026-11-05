@@ -178,7 +178,7 @@
     },
     "repo": "BenchBox-dev/BenchBox",
     "restart_summary": null,
-    "review_load_tokens": 150163,
+    "review_load_tokens": 80163,
     "reviewed_files": [
       {
         "additions": 2,
@@ -261,5 +261,5 @@
       "skip": "false"
     }
   },
-  "summary": "oracle-verdict plan for #85: review (first review of this pull request; pull request event)\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\noracle-verdict #85 <sha0>: pending: the pinned omp build could not be installed; no reviewer ran\n"
+  "summary": "oracle-verdict plan for #85: review (first review of this pull request; pull request event)\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: pending\noracle-verdict #85 <sha0>: pending: the pinned omp build could not be installed; no reviewer ran\n"
 }

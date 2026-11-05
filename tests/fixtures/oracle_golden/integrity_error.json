@@ -69,7 +69,7 @@
       "huge": 936000,
       "large": 936000,
       "max": 936000,
-      "medium": 368000,
+      "medium": 936000,
       "small": 336000,
       "trivial": 336000
     },
@@ -216,7 +216,7 @@
     },
     "repo": "BenchBox-dev/BenchBox",
     "restart_summary": null,
-    "review_load_tokens": 150163,
+    "review_load_tokens": 80163,
     "reviewed_files": [
       {
         "additions": 2,
@@ -308,5 +308,5 @@
       "skip": "false"
     }
   },
-  "summary": "oracle-verdict plan for #86: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 936000, \"medium\": 368000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\noracle-verdict #86 <sha1>: pending: result withheld: artifacts failed validation\n### oracle-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld: the run's artifacts failed validation**\n\nattempt-1.json: names another head\n\n"
+  "summary": "oracle-verdict plan for #86: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 936000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: pending\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\noracle-verdict #86 <sha1>: pending: result withheld: artifacts failed validation\n### oracle-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld: the run's artifacts failed validation**\n\nattempt-1.json: names another head\n\n"
 }

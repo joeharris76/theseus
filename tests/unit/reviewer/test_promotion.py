@@ -891,9 +891,9 @@ CONSUMER_WORKFLOWS = {
     ".github/workflows/oracle.yml": (
         "jobs:\n"
         "  review:\n"
-        f"    uses: {THESEUS}/.github/workflows/review.yml@v1\n"
+        f"    uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"
         "  gate:\n"
-        f"    uses: '{THESEUS}/.github/workflows/gate.yml@v1'\n"
+        f"    uses: '{THESEUS}/.github/workflows/gate.yml@{SHA_B}'\n"
         "  other:\n"
         "    uses: someone/else/.github/workflows/review.yml@v1\n"
         "  # uses: joeharris76/theseus/.github/workflows/commented.yml@v1\n"
@@ -933,7 +933,8 @@ def _surface(tree: dict[str, bytes], workflows: dict[str, str] | None = None, *,
         tree,
         package="theseus-reviewer",
         repository=THESEUS,
-        consumer_workflows=CONSUMER_WORKFLOWS if workflows is None else workflows,
+        consumer_workflows=(chosen := CONSUMER_WORKFLOWS if workflows is None else workflows),
+        pins=dict.fromkeys(chosen, SHA_B),
         strict=strict,
     )
 
@@ -1025,7 +1026,7 @@ def test_nested_workflow_references_inside_the_theseus_tree_are_followed() -> No
     }
     assert ".github/workflows/ci.yml" in _surface(tree)
     tree[".github/workflows/review.yml"] = (
-        f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/missing.yml@v1\n".encode()
+        f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/missing.yml@{SHA_B}\n".encode()
     )
     with pytest.raises(promotion.PromotionError, match="missing.yml"):
         _surface(tree)
@@ -1036,7 +1037,9 @@ def test_missing_referenced_workflow_holds() -> None:
     with pytest.raises(promotion.PromotionError, match="gate.yml.*missing"):
         _surface(tree)
     inputs = _preparation_inputs()
-    inputs["workflow_loader"] = lambda _ref: CONSUMER_WORKFLOWS
+    inputs["workflow_loader"] = lambda ref: {
+        name: text.replace(SHA_B, SHA_C) if ref == SHA_C else text for name, text in CONSUMER_WORKFLOWS.items()
+    }
     with pytest.raises(promotion.PromotionError, match="missing from the promoted source"):
         promotion.prepare_promotion(**inputs)
 
@@ -1072,7 +1075,7 @@ def test_removed_executed_file_is_required_and_removed_other_file_is_not() -> No
 
 
 def test_flow_style_workflow_reference_is_found() -> None:
-    workflows = {"w.yml": f"jobs: {{gate: {{uses: '{THESEUS}/.github/workflows/gate.yml@abc'}}}}\n"}
+    workflows = {"w.yml": f"jobs: {{gate: {{uses: '{THESEUS}/.github/workflows/gate.yml@{SHA_B}'}}}}\n"}
     assert ".github/workflows/gate.yml" in _surface(SURFACE_NEW, workflows)
     assert ".github/workflows/review.yml" not in _surface(SURFACE_NEW, workflows)
 
@@ -1081,7 +1084,7 @@ def test_anchored_and_aliased_workflow_reference_is_found() -> None:
     workflows = {
         "w.yml": (
             "x-shared: &shared\n"
-            f"  uses: {THESEUS}/.github/workflows/review.yml@abc\n"
+            f"  uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"
             "jobs:\n"
             "  first: *shared\n"
             "  second:\n"
@@ -1099,7 +1102,7 @@ def test_unparseable_workflow_holds() -> None:
 def test_workflow_references_from_the_base_widen_the_surface() -> None:
     inputs = _preparation_inputs()
     inputs["workflow_loader"] = lambda ref: (
-        {"w.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@abc\n"} if ref == SHA_C else {}
+        {"w.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_C}\n"} if ref == SHA_C else {}
     )
     with pytest.raises(promotion.PromotionError, match="gate.yml"):
         promotion.prepare_promotion(**inputs)
@@ -1131,8 +1134,8 @@ def _surface_pair(
 def test_newly_referenced_workflow_is_required_whole() -> None:
     old = {**SURFACE_OLD, ".github/workflows/gate.yml": b"a\nb\nc\nd\n"}
     new = {**SURFACE_NEW, ".github/workflows/gate.yml": b"a\nb\nc\nD\n"}
-    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@v1\n"}
-    head = {"h.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@v1\n"}
+    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"}
+    head = {"h.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_B}\n"}
     surface, old_surface = _surface_pair(old, new, base, head)
     assert ".github/workflows/gate.yml" in surface
     assert ".github/workflows/gate.yml" not in old_surface
@@ -1146,7 +1149,7 @@ def test_newly_referenced_workflow_is_required_whole() -> None:
 def test_workflow_referenced_by_the_base_needs_only_its_hunks() -> None:
     old = {**SURFACE_OLD, ".github/workflows/gate.yml": b"a\nb\nc\nd\n"}
     new = {**SURFACE_NEW, ".github/workflows/gate.yml": b"a\nb\nc\nD\n"}
-    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@v1\n"}
+    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_B}\n"}
     surface, old_surface = _surface_pair(old, new, base, {})
     changed, _, _ = promotion.compute_upstream_delta(old, new)
     required, whole = promotion.read_requirements(changed, old, new, surface, old_surface)
@@ -1157,18 +1160,19 @@ def test_workflow_referenced_by_the_base_needs_only_its_hunks() -> None:
 def test_preparation_requires_a_workflow_newly_referenced_by_the_head_whole() -> None:
     gate = ".github/workflows/gate.yml"
     inputs = _preparation_inputs(old_extra={gate: b"a\nb\nc\nd\n"}, new_extra={gate: b"a\nb\nc\nD\n"})
-    reference = f"jobs:\n  a:\n    uses: {THESEUS}/{gate}@v1\n"
+    reference = f"jobs:\n  a:\n    uses: {THESEUS}/{gate}@{SHA_B}\n"
+    base_reference = f"jobs:\n  a:\n    uses: {THESEUS}/{gate}@{SHA_C}\n"
     inputs["workflow_loader"] = lambda ref: {"w.yml": reference} if ref == SHA_A else {}
     bundle = promotion.prepare_promotion(**inputs)
     assert f"{STAGED_NEW}{gate}" in bundle.required_paths
     assert f"{STAGED_NEW}{gate}" in bundle.whole_paths
-    inputs["workflow_loader"] = lambda ref: {"w.yml": reference} if ref == SHA_C else {}
+    inputs["workflow_loader"] = lambda ref: {"w.yml": base_reference} if ref == SHA_C else {}
     bundle = promotion.prepare_promotion(**inputs)
     assert f"{STAGED_NEW}{gate}" in bundle.required_paths
     assert f"{STAGED_NEW}{gate}" not in bundle.whole_paths
 
 
-ACTION_WORKFLOW = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/setup@v1\n"
+ACTION_WORKFLOW = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/setup@{SHA_B}\n"
 ACTION_TREE = {
     **SURFACE_NEW,
     ".github/actions/setup/action.yml": (
@@ -1189,18 +1193,26 @@ def test_step_level_composite_actions_are_in_the_surface_and_required() -> None:
     assert f"{STAGED_NEW}.github/actions/inner/action.yaml" in required
 
 
-def test_step_level_remote_action_forms_in_the_theseus_repository() -> None:
-    tree = {**ACTION_TREE, "action.yml": b"runs:\n  using: node20\n  main: dist/index.js\n", "dist/index.js": b"x\n"}
-    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}@v1\n"
-    assert {"action.yml", "dist/index.js"} <= _surface(tree, {"w.yml": workflow})
+def test_step_level_node_action_surface_is_every_file_in_its_directory() -> None:
+    tree = {
+        **ACTION_TREE,
+        "actions/node/action.yml": b"runs:\n  using: node20\n  main: dist/index.js\n",
+        "actions/node/dist/index.js": b"x\n",
+        "actions/node/lib/helper.js": b"y\n",
+        "actions/other/x.js": b"z\n",
+    }
+    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/actions/node@{SHA_B}\n"
+    surface = _surface(tree, {"w.yml": workflow})
+    assert {"actions/node/action.yml", "actions/node/dist/index.js", "actions/node/lib/helper.js"} <= surface
+    assert "actions/other/x.js" not in surface
 
 
 @pytest.mark.parametrize(
     "uses",
     [
-        f"{THESEUS}/.github/actions/missing@v1",
+        f"{THESEUS}/.github/actions/missing@{SHA_B}",
         f"{THESEUS}/.github/actions/setup",
-        f"{THESEUS}/../escape@v1",
+        f"{THESEUS}/../escape@{SHA_B}",
         f"https://github.com/{THESEUS}/x",
     ],
 )
@@ -1232,9 +1244,129 @@ def test_step_references_to_other_repositories_are_ignored() -> None:
         "jobs:\n  a:\n    steps:\n"
         "      - uses: actions/checkout@v4\n"
         "      - uses: someone/else/.github/actions/x@v1\n"
-        f"      - uses: {THESEUS}-extras/x@v1\n"
+        f"      - uses: {THESEUS}-extras/x@{SHA_B}\n"
         "      - uses: docker://alpine:3\n"
         "      - uses: ./.github/actions/consumer-local\n"
         "      - run: echo\n"
     )
     assert _surface(SURFACE_NEW, {"w.yml": workflow}) == _surface(SURFACE_NEW, {})
+
+
+def test_unchanged_files_newly_executed_by_the_head_are_required_whole() -> None:
+    action = ".github/actions/payload/action.yml"
+    script = ".github/actions/payload/payload.py"
+    unchanged = {
+        action: b"runs:\n  using: composite\n  steps:\n    - run: python ${{ github.action_path }}/payload.py\n",
+        script: b"print(1)\n",
+    }
+    inputs = _preparation_inputs(old_extra=unchanged, new_extra=unchanged)
+    head_reference = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/payload@{SHA_B}\n"
+    inputs["workflow_loader"] = lambda ref: {"w.yml": head_reference} if ref == SHA_A else {}
+    bundle = promotion.prepare_promotion(**inputs)
+    assert {f"{STAGED_NEW}{action}", f"{STAGED_NEW}{script}"} <= bundle.required_paths
+    assert {f"{STAGED_NEW}{action}", f"{STAGED_NEW}{script}"} <= bundle.whole_paths
+    assert not any(item.path.endswith("payload.py") for item in bundle.changed_files)
+
+
+def test_action_surface_includes_every_file_in_the_action_directory() -> None:
+    tree = {
+        **ACTION_TREE,
+        ".github/actions/setup/payload.py": b"print(1)\n",
+        ".github/actions/setup/nested/more.sh": b"true\n",
+    }
+    surface = _surface(tree, {"w.yml": ACTION_WORKFLOW})
+    assert {".github/actions/setup/payload.py", ".github/actions/setup/nested/more.sh"} <= surface
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        "python ${{ github.action_path }}/../lib/evil.py",
+        "python ${{ github.workspace }}/.github/actions/other/x.py",
+        "python $GITHUB_WORKSPACE/x.py",
+        "cd .. && ./run.sh",
+        "python /home/runner/work/_actions/joeharris76/theseus/abc/x.py",
+    ],
+)
+def test_composite_run_reaching_outside_the_action_directory_holds(run: str) -> None:
+    tree = {
+        **ACTION_TREE,
+        ".github/actions/setup/action.yml": (
+            f"runs:\n  using: composite\n  steps:\n    - run: {run!r}\n      shell: bash\n"
+        ).encode(),
+    }
+    with pytest.raises(promotion.PromotionError, match="outside its own directory"):
+        _surface(tree, {"w.yml": ACTION_WORKFLOW})
+
+
+def test_inline_and_action_path_runs_are_accepted() -> None:
+    body = (
+        b"runs:\n  using: composite\n  steps:\n"
+        b"    - run: echo hello && python ${{ github.action_path }}/payload.py\n      shell: bash\n"
+    )
+    tree = {**ACTION_TREE, ".github/actions/setup/action.yml": body, ".github/actions/setup/payload.py": b"x\n"}
+    assert ".github/actions/setup/payload.py" in _surface(tree, {"w.yml": ACTION_WORKFLOW})
+
+
+@pytest.mark.parametrize("entry", ["../lib/evil.js", "/abs/evil.js", "${{ github.workspace }}/x.js"])
+def test_node_action_entry_outside_its_directory_holds(entry: str) -> None:
+    tree = {
+        **ACTION_TREE,
+        ".github/actions/setup/action.yml": f"runs:\n  using: node20\n  main: '{entry}'\n".encode(),
+        "lib/evil.js": b"x\n",
+    }
+    with pytest.raises(promotion.PromotionError, match="outside its own directory"):
+        _surface(tree, {"w.yml": ACTION_WORKFLOW})
+
+
+@pytest.mark.parametrize("ref", ["main", "v1", "refs/heads/main", "refs/tags/v1", SHA_C, SHA_B.upper(), SHA_B[:7]])
+@pytest.mark.parametrize("level", ["step", "job"])
+def test_theseus_reference_not_pinned_to_the_promoted_commit_holds(level: str, ref: str) -> None:
+    if level == "step":
+        workflow = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/setup@{ref}\n"
+    else:
+        workflow = f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{ref}\n"
+    with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
+        _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
+
+
+def test_theseus_reference_matches_owner_and_repository_case_insensitively() -> None:
+    owner, name = THESEUS.split("/")
+    spelled = f"{owner.upper()}/{name.title()}"
+    workflow = (
+        f"jobs:\n  a:\n    uses: {spelled}/.github/workflows/review.yml@{SHA_B}\n"
+        f"  b:\n    steps:\n      - uses: {spelled}/.github/actions/setup@{SHA_B}\n"
+    )
+    surface = _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
+    assert {".github/workflows/review.yml", ".github/actions/setup/action.yml"} <= surface
+
+
+def test_git_suffix_on_the_repository_name_is_the_same_repository() -> None:
+    workflow = (
+        f"jobs:\n  a:\n    uses: {THESEUS}.git/.github/workflows/review.yml@{SHA_B}\n"
+        f"  b:\n    steps:\n      - uses: {THESEUS}.git/.github/actions/setup@{SHA_B}\n"
+    )
+    surface = _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
+    assert {".github/workflows/review.yml", ".github/actions/setup/action.yml"} <= surface
+    with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
+        _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow.replace(SHA_B, "main")})
+
+
+@pytest.mark.parametrize(
+    "uses",
+    [
+        f"https://github.com/{THESEUS}/.github/workflows/review.yml@{SHA_B}",
+        f"{THESEUS}/not-a-workflow.yml@{SHA_B}",
+        f"{THESEUS}/.github/workflows/review.yml",
+        f"{THESEUS}@{SHA_B}",
+    ],
+)
+def test_job_level_theseus_reference_that_cannot_be_resolved_holds(uses: str) -> None:
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved|without a version"):
+        _surface(SURFACE_NEW, {"w.yml": f"jobs:\n  a:\n    uses: {uses}\n"})
+
+
+def test_nested_local_job_reference_that_is_not_a_workflow_holds() -> None:
+    tree = {**SURFACE_NEW, ".github/workflows/review.yml": b"jobs:\n  a:\n    uses: ./scripts/run.yml\n"}
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved"):
+        _surface(tree)

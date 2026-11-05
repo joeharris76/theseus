@@ -62,7 +62,10 @@ def _synthetic_plan(
 def test_review_load_adds_the_overhead_and_both_token_estimates() -> None:
     assert capacity.tokens(0) == 0
     assert capacity.tokens(227) == 100
-    assert capacity.review_load(227_000, 22_700) == capacity.OVERHEAD_TOKENS + 100_000 + 10_000
+    for mode, overhead in capacity.OVERHEAD_TOKENS.items():
+        assert capacity.review_load(227_000, 22_700, mode) == overhead + 100_000 + 10_000
+    assert set(capacity.OVERHEAD_TOKENS) == {"inline", "file-list", "promotion"}
+    assert capacity.OVERHEAD_TOKENS["inline"] < capacity.OVERHEAD_TOKENS["file-list"]
 
 
 def test_required_bytes_counts_hunk_blocks_of_required_files_only() -> None:
@@ -114,7 +117,20 @@ def test_unknown_catalog_model_is_ignored() -> None:
     assert capacity.reviewer_capacity("@missing-role", CONFIG, CATALOG) is None
     chain = [{"name": "a", "model": "@default"}, {"name": "b", "model": "@other"}]
     assert capacity.reviewer_capacities(chain, CONFIG, CATALOG) == {"a": 372_000}
-    assert capacity.effective({"a": 372_000}, "b") == (capacity.UNKNOWN_CAPACITY_TOKENS, False)
+    assert capacity.unlisted_models(CONFIG, CATALOG) == [
+        "unlisted/some-model",
+        "muse-code/muse-spark-1.3-contributor",
+    ]
+
+
+def test_usage_limit_fallbacks_do_not_lower_a_reviewers_capacity() -> None:
+    limited = {**CONFIG, "retry": {**CONFIG["retry"], "fallbackOn": "usage-limit"}}
+    assert capacity.reviewer_capacity("@review", limited, CATALOG) == 872_000
+    assert capacity.reviewer_capacity("@smol", limited, CATALOG) == 144_000
+    always = {**CONFIG, "retry": {**CONFIG["retry"], "fallbackOn": "any-error"}}
+    assert capacity.reviewer_capacity("@review", always, CATALOG) == 372_000
+    assert capacity.reviewer_capacity("@review", CONFIG, CATALOG) == 372_000
+    assert capacity.reviewer_capacity("@other", limited, CATALOG) is None
 
 
 def test_catalog_capacity_is_window_minus_output_limit() -> None:
@@ -175,16 +191,21 @@ def test_select_skip_text() -> None:
         "small: skipped: the change needs about 300000 tokens of reading; this reviewer's capacity is 144000"
     )
     unknown = next_step(_input(chain[:1], load_tokens=300_000), [])
-    assert unknown.reasons[0] == (
-        "small: skipped: the change needs about 300000 tokens of reading; this reviewer's capacity is unknown "
-        f"and at most {capacity.UNKNOWN_CAPACITY_TOKENS} is assumed"
+    assert unknown.kind == PENDING and not unknown.oversize
+    assert unknown.reasons == (
+        "small: skipped: this reviewer's capacity cannot be determined: its primary model is not in the model catalog",
     )
-    assert next_step(_input(chain[:1], load_tokens=150_000), []).kind == REVIEW
+    explained = next_step(
+        SelectionInput(**{**_input(chain[:1], load_tokens=300_000).__dict__, "capacity_error": "the catalog is empty"}),
+        [],
+    )
+    assert explained.reasons == ("small: skipped: this reviewer's capacity cannot be determined: the catalog is empty",)
+    assert next_step(_input(chain[:1], load_tokens=150_000, capacities={"small": 200_000}), []).kind == REVIEW
     assert next_step(_input(chain[:1], load_tokens=0, capacities={"small": 1}), []).kind == REVIEW
 
 
 def test_pr3942_sized_plan_is_pending_split_before_any_attempt(policy: Policy) -> None:
-    load = capacity.review_load(PR3942_REQUIRED_BYTES, 60_000)
+    load = capacity.review_load(PR3942_REQUIRED_BYTES, 60_000, "file-list")
     assert load > 1_150_000
     plan = _synthetic_plan(policy, load, {"medium": 372_000, "large": 372_000, "huge": 872_000})
     step = next_step(SelectionInput.from_plan(plan, NOW), [])
@@ -256,31 +277,52 @@ def test_the_harness_records_reviewer_capacity_in_the_plan(
     assert stored["decision"] == "review" and len(calls) == 1
 
 
-def test_an_unreadable_catalog_leaves_the_plan_unchanged_and_capacity_unknown(
+def test_an_unreadable_catalog_records_the_reason_and_no_reviewer_is_selected_for_a_sized_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     environment = _environment(tmp_path)
     config = tmp_path / "omp.yml"
     config.write_text(json.dumps(CONFIG), encoding="utf-8")
     _plan(environment.layout, chain=[_reviewer("large", model="@review").to_json()], omp_config=str(config))
-    before = environment.layout.plan_file.read_text(encoding="utf-8")
 
     def broken(binary: Path, text: str) -> dict[str, int]:
         raise capacity.CatalogError("the model catalog could not be listed: exit code 1")
 
     driver._record_capacity(environment, tmp_path / "omp", broken)
 
-    assert environment.layout.plan_file.read_text(encoding="utf-8") == before
+    stored = json.loads(environment.layout.plan_file.read_text(encoding="utf-8"))
+    assert stored[capacity.ERROR_KEY] == "the model catalog could not be listed: exit code 1"
+    assert capacity.CAPACITY_KEY not in stored and stored["decision"] == "review"
     assert "reviewer capacity is unknown" in capsys.readouterr().out
-    plan = json.loads(before)
-    unknown = SelectionInput.from_plan(
-        {**plan, "brief_mode": "file-list", "max_attempts": 5, capacity.LOAD_KEY: 300_000}, NOW
+    sized = {**stored, "brief_mode": "file-list", "max_attempts": 5, capacity.LOAD_KEY: 190_000}
+    step = next_step(SelectionInput.from_plan(sized, NOW), [])
+    assert step.kind == PENDING and not step.oversize and step.reviewer is None
+    assert step.reasons == (
+        "large: skipped: this reviewer's capacity cannot be determined: "
+        "the model catalog could not be listed: exit code 1",
     )
-    assert next_step(unknown, []).oversize
-    fits = SelectionInput.from_plan(
-        {**plan, "brief_mode": "file-list", "max_attempts": 5, capacity.LOAD_KEY: 190_000}, NOW
-    )
-    assert next_step(fits, []).kind == REVIEW
+    unsized = {**stored, "brief_mode": "file-list", "max_attempts": 5, capacity.LOAD_KEY: 0}
+    assert next_step(SelectionInput.from_plan(unsized, NOW), []).kind == REVIEW
+
+
+def test_a_reviewer_whose_primary_model_is_not_in_the_catalog_has_unknown_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    environment = _environment(tmp_path)
+    config = tmp_path / "omp.yml"
+    config.write_text(json.dumps(CONFIG), encoding="utf-8")
+    chain = [_reviewer("large", model="@review").to_json(), _reviewer("odd", model="@other").to_json()]
+    _plan(environment.layout, chain=chain, omp_config=str(config), brief_mode="file-list", max_attempts=5)
+    driver._record_capacity(environment, tmp_path / "omp", lambda binary, text: dict(CATALOG))
+    stored = json.loads(environment.layout.plan_file.read_text(encoding="utf-8"))
+
+    only_odd = {**stored, "chain": chain[1:], capacity.LOAD_KEY: 100_000, capacity.CAPACITY_KEY: {}}
+    step = next_step(SelectionInput.from_plan(only_odd, NOW), [])
+
+    assert stored[capacity.CAPACITY_KEY] == {"large": 372_000}
+    assert step.kind == PENDING and not step.oversize
+    assert step.reasons == (f"odd: {capacity.unknown_text('')}",)
 
 
 GATED_OMP = """#!{python}
@@ -412,5 +454,6 @@ def test_an_unreadable_catalog_gives_the_same_assumption_locally_and_hosted(
         preflight._catalog(trusted, capacity.read_catalog, {"chain": chain, "omp_config": "omp.yml"})
 
     reason = "the model catalog could not be listed: exit code 3"
-    assert f"reviewer capacity is unknown ({reason}); assuming {capacity.UNKNOWN_CAPACITY_TOKENS}" in hosted
+    assert f"reviewer capacity is unknown ({reason});" in hosted
+    assert json.loads(environment.layout.plan_file.read_text(encoding="utf-8"))[capacity.ERROR_KEY] == reason
     assert str(raised.value) == f"{preflight.CATALOG_REASON}: {reason}"
