@@ -155,7 +155,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must pass secrets: inherit and the environment must hold both"
+          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (ORACLE_APP_ID, ORACLE_APP_PRIVATE_KEY) and the environment must hold non-empty values for them"
           exit 1
 
       - name: Check out the trusted gated-branch copy
@@ -295,7 +295,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must pass secrets: inherit and the environment must hold both"
+          echo "::error::ORACLE_APP_ID or ORACLE_APP_PRIVATE_KEY is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (ORACLE_APP_ID, ORACLE_APP_PRIVATE_KEY) and the environment must hold non-empty values for them"
           exit 1
 
       - name: Check out the trusted gated-branch copy
