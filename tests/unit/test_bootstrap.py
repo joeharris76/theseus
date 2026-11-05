@@ -633,6 +633,16 @@ def test_a_valid_retained_artifact_is_never_replaced_so_concurrent_readers_keep_
     assert sha(retained.read_bytes()) == lock.artifact_sha256
 
 
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="POSIX permissions")
+def test_an_unreadable_retained_artifact_is_treated_as_missing_and_replaced(world, repo, cache):
+    lock = _lock(world, repo)
+    bootstrap.install(lock, cache, world.net)
+    retained = bootstrap._retained(cache.resolve(), lock.artifact_sha256)
+    retained.chmod(0)
+    bootstrap.install(lock, cache, world.net)
+    assert sha(retained.read_bytes()) == lock.artifact_sha256
+
+
 def test_filesystem_failures_surface_as_a_refusal(world, repo, cache, monkeypatch):
     lock = _lock(world, repo)
 
