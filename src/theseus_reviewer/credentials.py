@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Iterable
@@ -8,6 +9,7 @@ from functools import lru_cache
 REDACTED = "[redacted]"
 MIN_LENGTH = 8
 GATEWAY_ENV = ("OMP_GATEWAY_TOKEN",)
+GATEWAY_PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
 BROKER_ENV = ("OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN")
 RUNNER_ENV = (
     "ORACLE_GATEWAY_URL",
@@ -32,6 +34,14 @@ _CONTROL_CLASS = r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]*"
 def known(extra: Iterable[str] = ()) -> tuple[str, ...]:
     values = (*extra, *(os.environ.get(name, "") for name in NAMES))
     return tuple(dict.fromkeys(value for value in values if len(value) >= MIN_LENGTH))
+
+
+def gateway_models_text(url: str) -> str:
+    providers = "".join(
+        f"  {provider}:\n    transport: pi-native\n    baseUrl: {json.dumps(url)}\n    apiKey: {GATEWAY_ENV[0]}\n"
+        for provider in GATEWAY_PROVIDERS
+    )
+    return f"providers:\n{providers}"
 
 
 @lru_cache(maxsize=256)

@@ -85,7 +85,6 @@ class DiffNotStagedError(Exception):
 
 WORKFLOW_FILE = "oracle-verdict.yml"
 GATEWAY_TOKEN_ENV = "OMP_GATEWAY_TOKEN"
-GATEWAY_PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
 GATEWAY_CLIENT = "oracle-ci"
 GATEWAY_TOKEN_MIN_LENGTH = 32
 NEW_DIFF_ACTIONS = ("opened", "synchronize")
@@ -2129,11 +2128,7 @@ def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_lo
     agent_dir = home / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "config.yml").write_text(config_text, encoding="utf-8")
-    providers = "".join(
-        f"  {provider}:\n    transport: pi-native\n    baseUrl: {json.dumps(url)}\n    apiKey: {GATEWAY_TOKEN_ENV}\n"
-        for provider in GATEWAY_PROVIDERS
-    )
-    (agent_dir / "models.yml").write_text(f"providers:\n{providers}", encoding="utf-8")
+    (agent_dir / "models.yml").write_text(credentials.gateway_models_text(url), encoding="utf-8")
 
 
 def command_reviewer_home(args: argparse.Namespace) -> int:
@@ -2374,7 +2369,7 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         digests[name] = digest
     models = gateway_models(yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8")))
     providers = list(dict.fromkeys(model.split("/", 1)[0] for model in models))
-    unknown = [provider for provider in providers if provider not in GATEWAY_PROVIDERS]
+    unknown = [provider for provider in providers if provider not in credentials.GATEWAY_PROVIDERS]
     if unknown:
         raise SystemExit(
             f"oracle-verdict: error: the reviewer config names providers the gateway does not serve: {unknown}"

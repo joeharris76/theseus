@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -628,34 +629,140 @@ def executed_surface(
     surface = set(_package_source_files(tree, f"{_normalized_dist_name(package)}/"))
     if "pyproject.toml" in tree:
         surface.add("pyproject.toml")
-    pending: list[str] = []
+    pending: list[tuple[str, str]] = []
     for name, text in sorted(consumer_workflows.items()):
-        pending.extend(sorted(_workflow_references(text, repository, nested=False, label=name)))
-    visited: set[str] = set()
+        workflows, actions = _workflow_references(text, repository, nested=False, label=name)
+        pending.extend(("action", path) for path in sorted(actions))
+        pending.extend(("workflow", path) for path in sorted(workflows))
+    visited: set[tuple[str, str]] = set()
     while pending:
-        path = pending.pop()
-        if path in visited:
+        item = pending.pop()
+        if item in visited:
             continue
-        visited.add(path)
+        visited.add(item)
+        kind, path = item
+        if kind == "action":
+            surface_files, nested_actions = _action_surface(tree, path, repository, strict=strict)
+            surface.update(surface_files)
+            pending.extend(("action", nested) for nested in sorted(nested_actions))
+            continue
         raw = tree.get(path)
         if raw is None:
             _require(not strict, f"workflow {path} referenced by the consumer is missing from the promoted source")
             continue
         surface.add(path)
         text = raw.decode("utf-8", errors="replace")
-        pending.extend(sorted(_workflow_references(text, repository, nested=True, label=path)))
+        workflows, actions = _workflow_references(text, repository, nested=True, label=path)
+        pending.extend(("action", nested) for nested in sorted(actions))
+        pending.extend(("workflow", nested) for nested in sorted(workflows))
     return frozenset(surface)
 
 
-def _workflow_references(text: str, repository: str, *, nested: bool, label: str) -> set[str]:
+def _mentions_repository(target: str, repository: str) -> bool:
+    boundary = r"[A-Za-z0-9_.-]"
+    return re.search(rf"(?<!{boundary}){re.escape(repository)}(?!{boundary})", target, re.IGNORECASE) is not None
+
+
+def _action_directory(path: str, label: str) -> str:
+    if not path:
+        return ""
+    clean = posixpath.normpath(path)
+    _require(
+        "\\" not in path and not clean.startswith(("/", "..")) and clean != ".",
+        f"{label} references an action path {path!r} that cannot be resolved",
+    )
+    return clean
+
+
+def _step_action(target: str, repository: str, *, local: bool, label: str) -> str | None:
+    target = target.strip()
+    if target.startswith("docker://"):
+        return None
+    if target == "." or target.startswith("./"):
+        return _action_directory(target[2:], label) if local else None
+    parts = target.split("@", 1)[0].split("/", 2)
+    if len(parts) >= 2 and f"{parts[0]}/{parts[1]}".casefold() == repository.casefold():
+        _require("@" in target, f"{label} references {target!r} without a version")
+        return _action_directory(parts[2] if len(parts) == 3 else "", label)
+    _require(not _mentions_repository(target, repository), f"{label} references {target!r}, which cannot be resolved")
+    return None
+
+
+def _step_targets(document: Any) -> Iterable[str]:
+    jobs = document.get("jobs") if isinstance(document, Mapping) else None
+    if isinstance(jobs, Mapping):
+        for job in jobs.values():
+            steps = job.get("steps") if isinstance(job, Mapping) else None
+            yield from _uses_of(steps)
+
+
+def _uses_of(steps: Any) -> Iterable[str]:
+    if not isinstance(steps, list):
+        return
+    for step in steps:
+        target = step.get("uses") if isinstance(step, Mapping) else None
+        if isinstance(target, str):
+            yield target
+
+
+def _action_surface(
+    tree: Mapping[str, bytes], directory: str, repository: str, *, strict: bool
+) -> tuple[set[str], set[str]]:
+    prefix = f"{directory}/" if directory else ""
+    manifest = next((f"{prefix}{name}" for name in ("action.yml", "action.yaml") if f"{prefix}{name}" in tree), None)
+    if manifest is None:
+        _require(not strict, f"action {directory or '.'} referenced from the promoted source is missing")
+        return set(), set()
+    try:
+        document = yaml.safe_load(tree[manifest].decode("utf-8", errors="replace"))
+    except (yaml.YAMLError, ValueError, RecursionError) as exc:
+        raise PromotionError(f"action {manifest} cannot be parsed: {exc}") from exc
+    runs = document.get("runs") if isinstance(document, Mapping) else None
+    using = runs.get("using") if isinstance(runs, Mapping) else None
+    _require(isinstance(using, str), f"action {manifest} has no runs.using")
+    files, nested = {manifest}, set()
+    kind = using.strip().casefold()
+    if kind == "composite":
+        for target in _uses_of(runs.get("steps")):
+            found = _step_action(target, repository, local=True, label=manifest)
+            if found is not None:
+                nested.add(found)
+    elif kind == "docker":
+        image = runs.get("image")
+        _require(
+            isinstance(image, str) and image.startswith("docker://"),
+            f"action {manifest} builds a container image from the promoted source, which cannot be reviewed",
+        )
+    elif kind.startswith("node"):
+        for key in ("main", "pre", "post"):
+            entry = runs.get(key)
+            if not isinstance(entry, str):
+                continue
+            path = posixpath.normpath(f"{prefix}{entry}")
+            _require(not path.startswith(("/", "..")), f"action {manifest} runs.{key} cannot be resolved")
+            if path in tree:
+                files.add(path)
+            else:
+                _require(not strict, f"action {manifest} runs.{key} {entry!r} is missing from the promoted source")
+    else:
+        raise PromotionError(f"action {manifest} uses unsupported runs.using {using!r}")
+    return files, nested
+
+
+def _workflow_references(text: str, repository: str, *, nested: bool, label: str) -> tuple[set[str], set[str]]:
     try:
         document = yaml.safe_load(text)
     except (yaml.YAMLError, ValueError, RecursionError) as exc:
         raise PromotionError(f"workflow {label} cannot be parsed: {exc}") from exc
     jobs = document.get("jobs") if isinstance(document, Mapping) else None
     found: set[str] = set()
+    actions: set[str] = set()
     if not isinstance(jobs, Mapping):
-        return found
+        return found, actions
+    for target in _step_targets(document):
+        action = _step_action(target, repository, local=nested, label=label)
+        if action is not None:
+            actions.add(action)
     for job in jobs.values():
         target = job.get("uses") if isinstance(job, Mapping) else None
         if not isinstance(target, str):
@@ -668,7 +775,7 @@ def _workflow_references(text: str, repository: str, *, nested: bool, label: str
         remote = _REMOTE_WORKFLOW.fullmatch(target)
         if remote is not None and remote.group("repo").casefold() == repository.casefold():
             found.add(remote.group("path"))
-    return found
+    return found, actions
 
 
 def read_requirements(
@@ -706,6 +813,8 @@ def read_requirements(
                 continue
             if old_tree.get(old_path) == new_tree.get(tree_path):
                 continue
+        elif item.status == "modified" and tree_path not in previously_executed:
+            whole.add(item.path)
         required.add(item.path)
     return frozenset(required), frozenset(whole)
 
@@ -1274,21 +1383,22 @@ def prepare_promotion(
         lock_sha256=lock_digest(head_lock),
         bootstrap=is_bootstrap,
     )
-    workflows: dict[str, str] = {}
+    base_workflows: dict[str, str] = {}
+    head_workflows: dict[str, str] = {}
     if workflow_loader is not None:
-        for ref in (base_sha, head_sha):
-            workflows.update({f"{ref}:{name}": text for name, text in workflow_loader(ref).items()})
+        base_workflows = {f"{base_sha}:{name}": text for name, text in workflow_loader(base_sha).items()}
+        head_workflows = {f"{head_sha}:{name}": text for name, text in workflow_loader(head_sha).items()}
     surface = executed_surface(
         new_tree,
         package=head_lock.package,
         repository=head_lock.repository,
-        consumer_workflows=workflows,
+        consumer_workflows={**base_workflows, **head_workflows},
     )
     old_surface = executed_surface(
         old_tree,
         package=head_lock.package,
         repository=head_lock.repository,
-        consumer_workflows=workflows,
+        consumer_workflows=base_workflows,
         strict=False,
     )
     required_paths, whole_paths = read_requirements(changed_files, old_tree, new_tree, surface, old_surface)

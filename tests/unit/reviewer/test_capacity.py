@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -280,3 +281,136 @@ def test_an_unreadable_catalog_leaves_the_plan_unchanged_and_capacity_unknown(
         {**plan, "brief_mode": "file-list", "max_attempts": 5, capacity.LOAD_KEY: 190_000}, NOW
     )
     assert next_step(fits, []).kind == REVIEW
+
+
+GATED_OMP = """#!{python}
+import json, os, re, sys
+from pathlib import Path
+
+MODELS = {{
+    "anthropic": {{"claude-sonnet-5-5": 1000000, "claude-opus-5-5": 1000000}},
+    "openai-codex": {{"gpt-6.1-sol": 400000, "gpt-6-luna": 272000}},
+    "muse-code": {{"muse-spark-1.3-contributor": 262144}},
+    "polluted": {{"model": 1000}},
+}}
+agent = Path(os.environ["HOME"]) / ".omp" / "agent"
+sheet = agent / "models.yml"
+providers = re.findall(r"^  (\\S+):$", sheet.read_text(), re.M) if sheet.is_file() else []
+token = os.environ.get("OMP_GATEWAY_TOKEN", "")
+listed = [{{"selector": "apple/on-device", "contextWindow": 8192, "maxTokens": 8192}}]
+for provider in providers:
+    if not token:
+        continue
+    if provider == "muse-code":
+        try:
+            held = json.loads(token)
+            ok = held["oauthAccessToken"].strip() and held["apiKey"].strip()
+        except Exception:
+            ok = False
+        if not ok:
+            sys.exit("Muse Code credential is invalid; sign in again")
+    for name, window in MODELS.get(provider, {{}}).items():
+        listed.append({{"selector": provider + "/" + name, "contextWindow": window, "maxTokens": 128000}})
+print(json.dumps({{"models": listed}}))
+"""
+
+
+@pytest.fixture
+def gated_omp(tmp_path: Path) -> Path:
+    path = tmp_path / "gated-omp"
+    path.write_text(GATED_OMP.format(python=sys.executable), encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _polluted_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    user = tmp_path / "user-home"
+    agent = user / ".omp" / "agent"
+    agent.mkdir(parents=True)
+    (agent / "models.yml").write_text("providers:\n  polluted:\n    apiKey: X\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(user))
+    monkeypatch.delenv("OMP_GATEWAY_TOKEN", raising=False)
+    return user
+
+
+def test_the_catalog_lists_every_gateway_provider_without_a_real_credential(
+    gated_omp: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _polluted_home(tmp_path, monkeypatch)
+    monkeypatch.delenv("OMP_GATEWAY_TOKEN", raising=False)
+
+    listed = capacity.read_catalog(gated_omp, json.dumps(CONFIG))
+
+    assert listed["anthropic/claude-opus-5-5"] == 872_000
+    assert listed["openai-codex/gpt-6-luna"] == 144_000
+    assert "muse-code/muse-spark-1.3-contributor" in listed
+    assert not any(selector.startswith("polluted/") for selector in listed)
+
+
+def test_a_real_gateway_token_in_the_environment_never_reaches_the_catalog_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OMP_GATEWAY_TOKEN", "real-gateway-token-value-0123456789")
+    seen: dict[str, str] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs["env"])
+        body = {"models": [{"selector": "a/b", "contextWindow": 10, "maxTokens": 4}]}
+        return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+
+    capacity.read_catalog(Path("omp"), "", fake_run)
+
+    assert seen["OMP_GATEWAY_TOKEN"] == capacity.CATALOG_TOKEN
+
+
+def test_local_and_hosted_capacity_agree_for_the_same_plan(
+    gated_omp: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from theseus_reviewer import local, preflight
+
+    _polluted_home(tmp_path, monkeypatch)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    config = tmp_path / "omp.yml"
+    config.write_text(json.dumps(CONFIG), encoding="utf-8")
+    chain = [_reviewer("large", model="@review").to_json(), _reviewer("small", model="@default").to_json()]
+    environment = _environment(tmp_path)
+    _plan(environment.layout, chain=chain, omp_config=str(config))
+
+    driver._record_capacity(environment, gated_omp)
+    hosted = json.loads(environment.layout.plan_file.read_text(encoding="utf-8"))[capacity.CAPACITY_KEY]
+
+    monkeypatch.setenv("ORACLE_OMP_BINARY", str(gated_omp))
+    plan = {"chain": chain, "omp_config": "omp.yml"}
+    trusted = local.Trusted(policy="", files=(("omp.yml", config.read_text(encoding="utf-8")),))
+    local_held = preflight._catalog(trusted, capacity.read_catalog, plan)
+
+    assert hosted == local_held
+    assert hosted == {"large": 272_000, "small": 134_144}
+
+
+def test_an_unreadable_catalog_gives_the_same_assumption_locally_and_hosted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from theseus_reviewer import local, preflight
+
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    broken = tmp_path / "broken-omp"
+    broken.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+    broken.chmod(0o755)
+    config = tmp_path / "omp.yml"
+    config.write_text(json.dumps(CONFIG), encoding="utf-8")
+    chain = [_reviewer("large", model="@review").to_json()]
+    environment = _environment(tmp_path)
+    _plan(environment.layout, chain=chain, omp_config=str(config))
+
+    driver._record_capacity(environment, broken)
+    hosted = capsys.readouterr().out
+
+    monkeypatch.setenv("ORACLE_OMP_BINARY", str(broken))
+    trusted = local.Trusted(policy="", files=(("omp.yml", config.read_text(encoding="utf-8")),))
+    with pytest.raises(preflight.Undetermined) as raised:
+        preflight._catalog(trusted, capacity.read_catalog, {"chain": chain, "omp_config": "omp.yml"})
+
+    reason = "the model catalog could not be listed: exit code 3"
+    assert f"reviewer capacity is unknown ({reason}); assuming {capacity.UNKNOWN_CAPACITY_TOKENS}" in hosted
+    assert str(raised.value) == f"{preflight.CATALOG_REASON}: {reason}"

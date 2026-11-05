@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import audit, cli, evidence
+from theseus_reviewer import audit, cli, evidence, promotion, runner
 from theseus_reviewer.diff import STAGED_DIFF_NAME, hunk_index
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -423,6 +423,53 @@ def test_the_audit_exits_two_when_the_head_cannot_be_checked_out(
     root, _ = repository
     _prepared(monkeypatch, tmp_path, "f" * 40, _plan("a.py"))
     assert audit.command_audit(_args(tmp_path, root, _capture(_whole_diff()))) == audit.EXIT_UNDETERMINED
+
+
+def test_the_audit_exits_two_when_the_pull_request_diff_cannot_be_staged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, head = repository
+    _prepared(monkeypatch, tmp_path, head, _plan("a.py"))
+    monkeypatch.setattr(runner, "stage_pull_request_diff", lambda source, workspace: None)
+    assert audit.command_audit(_args(tmp_path, root, _capture(_whole_diff()))) == audit.EXIT_UNDETERMINED
+    assert "the pull request diff could not be staged" in capsys.readouterr().out
+
+
+def test_the_audit_exits_two_when_the_promotion_tree_cannot_be_staged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, head = repository
+    _prepared(monkeypatch, tmp_path, head, _plan("a.py"))
+    (tmp_path / "plan" / promotion.PROMOTION_PLAN_DIR).mkdir()
+    monkeypatch.setattr(promotion, "stage_promotion_workspace", lambda plan_dir, workspace: None)
+    assert audit.command_audit(_args(tmp_path, root, _capture(_whole_diff()))) == audit.EXIT_UNDETERMINED
+    assert "the promotion tree could not be staged" in capsys.readouterr().out
+
+
+def test_the_audit_proceeds_when_both_stagings_succeed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, head = repository
+    _prepared(monkeypatch, tmp_path, head, _plan("a.py"))
+    (tmp_path / "plan" / promotion.PROMOTION_PLAN_DIR).mkdir()
+    staged: list[Path] = []
+
+    def stage_tree(plan_dir: Path, workspace: Path) -> Path:
+        staged.append(workspace)
+        return workspace
+
+    monkeypatch.setattr(promotion, "stage_promotion_workspace", stage_tree)
+    assert audit.command_audit(_args(tmp_path, root, _capture(_whole_diff()))) == audit.EXIT_COVERED
+    assert len(staged) == 1 and json.loads(capsys.readouterr().out)["covered"] is True
+
+
+def test_an_empty_plan_diff_needs_no_diff_staging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repository: tuple[Path, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, head = repository
+    _prepared(monkeypatch, tmp_path, head, _plan("a.py", mode="inline", diff_inline=DIFF), diff="")
+    assert audit.command_audit(_args(tmp_path, root, _capture())) == audit.EXIT_COVERED
+    assert json.loads(capsys.readouterr().out)["covered"] is True
 
 
 @pytest.mark.parametrize("content", [None, "not json", "[1, 2]"], ids=["missing", "garbled", "not-an-object"])

@@ -8,7 +8,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from . import commands, promotion
+from . import commands, credentials, promotion
 from ._vendor import yaml
 from .diff import Hunk, hunk_index
 
@@ -16,6 +16,8 @@ OVERHEAD_TOKENS = 150_000
 BYTES_PER_TOKEN = 2.27
 UNKNOWN_CAPACITY_TOKENS = 200_000
 CATALOG_TIMEOUT_SECONDS = 60
+CATALOG_GATEWAY_URL = "https://catalog.invalid"
+CATALOG_TOKEN = json.dumps({"oauthAccessToken": "catalog", "apiKey": "catalog"})
 CAPACITY_KEY = "capacity"
 LOAD_KEY = "review_load_tokens"
 SPLIT_INSTRUCTION = "split the change into smaller pull requests"
@@ -153,8 +155,9 @@ def read_catalog(
         agent = home / ".omp" / "agent"
         agent.mkdir(parents=True)
         (agent / "config.yml").write_text(config_text, encoding="utf-8")
+        (agent / "models.yml").write_text(credentials.gateway_models_text(CATALOG_GATEWAY_URL), encoding="utf-8")
         overlay = commands.write_overlay(Path(scratch))
-        env = {**commands.omp_env(), "HOME": str(home), "TMPDIR": scratch}
+        env = {**commands.omp_env(), "HOME": str(home), "TMPDIR": scratch, credentials.GATEWAY_ENV[0]: CATALOG_TOKEN}
         try:
             result = run(
                 [str(binary), "models", "--json", "--no-extensions", "--config", str(overlay)],
