@@ -59,8 +59,6 @@ uv build
 
 ## Maintaining the extraction
 
-- [UPSTREAM.md](UPSTREAM.md): ledger and check for BenchBox changes not yet ported
-- `tools/parity.py`: installed-artifact versus BenchBox baseline parity run; the recorded result is in [PROVENANCE.md](PROVENANCE.md)
 - `tools/smoke_wheel.py`: install the built wheel outside the checkout and run the scenario suites
 
 ## Project documents

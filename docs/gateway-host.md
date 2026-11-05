@@ -34,7 +34,7 @@ The first stage is consumer-owned and uses the trusted lock, as in [bootstrap.md
 ## What stays stable
 
 - OMP cache layout is `<cache>/<omp version>/<platform>/omp`. The default root is now `~/.cache/theseus/omp`; a host that already caches builds keeps them by exporting `THESEUS_OMP_CACHE="$HOME/.cache/benchbox/omp"`, and the pinned sha256 is checked against the cached binary either way.
-- Client identity is unchanged: `oracle-ci` from `client.token` plus `oracle-<name>` for each `<name>-client.token`, the same `tokenSha256` of each token, the same model list from the omp config and the same pinned accounts. The same inputs produce byte-identical `clients.json` (compared against the BenchBox script in `tools/parity.py`), so existing client IDs, tokens, the run file and launchd plist paths do not change.
+- Client identity is unchanged: `oracle-ci` from `client.token` plus `oracle-<name>` for each `<name>-client.token`, the same `tokenSha256` of each token, the same model list from the omp config and the same pinned accounts. The same inputs produce byte-identical `clients.json`, so existing client IDs, tokens, the run file and launchd plist paths do not change.
 - The gateway secret names (`ORACLE_GATEWAY_URL`, `ORACLE_GATEWAY_TOKEN`) are unchanged.
 
 ## Not done here
