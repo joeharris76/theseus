@@ -11,7 +11,7 @@
 ## Procedure
 
 1. Confirm `main` CI is green at the intended head and the owner has reviewed every diff since the previous tag.
-2. Confirm `version` in `pyproject.toml` equals the tag (`0.1.0` for `v0.1.0`); change it only through a reviewed PR. If any file under `src/theseus_reviewer/` changed since the last parity run, rerun `uv run python tools/parity.py --benchbox-repo <BenchBox checkout>` and update the parity section of [PROVENANCE.md](PROVENANCE.md) first: the release must be built from the source whose frozen hash it records (`uv run python tools/parity.py --source-hash`).
+2. Confirm `version` in `pyproject.toml` equals the tag (`0.1.0` for `v0.1.0`); change it only through a reviewed PR. Record the frozen source hash of the release in [PROVENANCE.md](PROVENANCE.md): the sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tracked file under `src/theseus_reviewer/` at the tag.
 3. From a clean checkout of the merge commit: `uv sync --locked && uv run -- pytest && uv build`.
 4. Compute hashes: `cd dist && shasum -a 256 *`. The wheel is deterministic, so rebuilding the same source reproduces its hash.
 5. Create an annotated tag `v<version>` on the merge commit (signed when a key is configured) and publish a GitHub Release attaching the wheel, the sdist and the hash list. Attach the wheel a second time under a different asset name (for example `theseus_reviewer-<version>-py3-none-any.retained.whl`) as the retained copy; the file bytes must be identical.
