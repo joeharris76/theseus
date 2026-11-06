@@ -26,7 +26,7 @@ from .test_cli_plan import (
 pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 RUN = "1" * 32
-COMMENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+COMMENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
 
 
 def _decided(decision: str = "SHIP_WITH_FIXES", **over: Any) -> dict[str, Any]:

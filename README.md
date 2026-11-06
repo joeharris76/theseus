@@ -67,11 +67,11 @@ uv build
 - [SECURITY.md](SECURITY.md): reporting and trust model
 - [RELEASING.md](RELEASING.md): release process
 - [docs/repository-settings.md](docs/repository-settings.md): owner-applied GitHub settings
-- [PROVENANCE.md](PROVENANCE.md): BenchBox source baseline and path map
+- [PROVENANCE.md](PROVENANCE.md): BenchBox source baseline and frozen source hashes through v0.1.6
 
 ## Status
 
-Bootstrap. Until a separately authenticated Theseus oracle gate is live, merges require owner full-diff review.
+Bootstrap. Until a separately authenticated Theseus review gate is live, merges require owner full-diff review.
 
 ## License
 

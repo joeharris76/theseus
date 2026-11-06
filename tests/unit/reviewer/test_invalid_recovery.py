@@ -22,7 +22,7 @@ from .test_selection import _input, _reviewer
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
-ANSWERS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "oracle_reviewers" / "jev_recovery_answers.json"
+ANSWERS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "reviewers" / "jev_recovery_answers.json"
 CASES = json.loads(ANSWERS.read_text(encoding="utf-8"))["cases"]
 RAW = "RAW-REPLY-SENTINEL-" + "k3Jd9sLq" * 3
 JEV_STOP = Recovery(STOP, JEV, STOP, 0.95, 0.9)

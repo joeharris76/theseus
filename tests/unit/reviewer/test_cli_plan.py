@@ -140,7 +140,7 @@ class FakeGitHub:
         monkeypatch.setattr(github, "review_edit_states", self._edit_states)
         monkeypatch.setattr(github, "post_status", self._post)
         monkeypatch.setattr(github, "run_timed_out", self._timed_out)
-        monkeypatch.setattr(github, "oracle_reviews", self._reviews)
+        monkeypatch.setattr(github, "reviews", self._reviews)
         monkeypatch.setattr(github, "merge_base", lambda repo, base, head: self.merge_base)
         monkeypatch.setattr(github, "tree_blobs", self._tree)
 
@@ -202,10 +202,10 @@ class FakeGitHub:
             derived.append(
                 {
                     "id": 1000 + int(review.get("id") or 0),
-                    "context": "oracle-verdict",
+                    "context": "review-verdict",
                     "state": "success" if record["decision"] == protocol.SHIP else "failure",
                     "description": f"derived{suffix if record['decision'] == protocol.SHIP else ''}",
-                    "creator": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+                    "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
                     "created_at": review.get("submitted_at") or "2026-10-08T10:00:00Z",
                 }
             )
@@ -310,6 +310,9 @@ SOUNDNESS = [{"filename": CHECKER, "additions": 4, "deletions": 1}]
 CAPTURE = "benchbox/core/expected_results/registry.py"
 
 
+COMMENT_EVENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
+
+
 def test_plan_records_one_run_id_for_binding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _, values, plan = _plan(monkeypatch, tmp_path, _fake(files=SOUNDNESS))
     assert values["decision"] == "review" and plan["run_id"] and "run_uuid" not in plan
@@ -342,7 +345,7 @@ def test_soundness_pr_plans_a_review_over_the_bucket_chain(monkeypatch: pytest.M
 
 
 def test_gate_only_change_is_reviewed_with_gate_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    gate = "_project/scripts/oracle_reviewers/cli.py"
+    gate = "_project/scripts/reviewers/cli.py"
     files = [{"filename": gate, "additions": 2, "deletions": 0}]
     _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), files))
     assert values["decision"] == "review"
@@ -486,7 +489,7 @@ def test_base_edit_event_with_lagging_timeline_plans_a_review_not_skip(
 
 
 def test_comment_run_resolves_the_head_through_the_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     _, values, plan = _plan(
         monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS), event_name="issue_comment", event=event
     )
@@ -513,7 +516,7 @@ def test_comment_rerun_after_a_decisive_result_replans_the_same_head(
 ) -> None:
     state = State(7, HEAD, "success", datetime.now(UTC) - timedelta(hours=3))
     _, values, plan = _plan(
-        monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, state), event_name="issue_comment", event={}
+        monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, state), event_name="issue_comment", event=COMMENT_EVENT
     )
     assert values["decision"] == "review" and values["post"] == "true"
     assert "manual same-head re-review within budget" in plan["decision_reason"]
@@ -523,7 +526,7 @@ def test_manual_retry_inside_backoff_waits_for_the_next_slot(monkeypatch: pytest
     now = datetime.now(UTC)
     state = State(7, HEAD, "pending", now, (now,), pending_cause="all-absent")
     _, values, plan = _plan(
-        monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, state), event_name="issue_comment", event={}
+        monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, state), event_name="issue_comment", event=COMMENT_EVENT
     )
     assert values["decision"] == "skip" and values["post"] == "false"
     assert "backoff" in plan["decision_reason"]
@@ -578,7 +581,7 @@ def test_a_primary_provider_block_older_than_the_backoff_is_dropped(
 
 
 def test_an_owner_reset_clears_the_carried_pool_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     block = _block("anthropic", recorded=timedelta(minutes=40), remaining=timedelta(hours=2))
     backed_off = _backed_off()
     state = State(7, HEAD, "pending", backed_off.updated_at, backed_off.retries, {"claude": block}, "all-absent")
@@ -628,7 +631,7 @@ def _verdict_run(
 ) -> dict[str, Any]:
     return {
         "id": next(_RUN_IDS),
-        "display_title": f"oracle-verdict ({event} pr={pr}{'' if head is None else f' head={head}'})",
+        "display_title": f"review-verdict ({event} pr={pr}{'' if head is None else f' head={head}'})",
         "event": event,
         "status": status,
         "conclusion": conclusion,
@@ -701,7 +704,7 @@ def test_the_run_listing_follows_every_page(monkeypatch: pytest.MonkeyPatch) -> 
         return json.dumps(pages)
 
     monkeypatch.setattr(github, "_gh", fake_gh)
-    assert github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [
+    assert github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [
         {"id": 0},
         {"id": 1},
         {"id": 2},
@@ -828,7 +831,7 @@ def test_a_timeout_run_counts_as_a_failure_without_a_result(monkeypatch: pytest.
     assert fake.dispatched == []
     assert len(fake.posted) == 1
     posted = fake.posted[0][1]
-    assert posted["head_sha"] == HEAD and posted["state"] == "pending" and posted["context"] == "oracle-verdict"
+    assert posted["head_sha"] == HEAD and posted["state"] == "pending" and posted["context"] == "review-verdict"
     assert "Run the attempt loop" in posted["description"]
     assert len(posted["description"]) <= 140
     assert posted["target_url"].endswith(f"/actions/runs/{second['id']}")
@@ -869,7 +872,7 @@ def test_a_second_failure_with_no_step_listed_still_posts_a_status(
     assert "an earlier step" in fake.posted[0][1]["description"]
 
 
-APP = {"login": "benchbox-oracle[bot]", "type": "Bot"}
+APP = {"login": "benchbox-review[bot]", "type": "Bot"}
 
 
 def _twice_failed() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -882,7 +885,7 @@ def _twice_failed() -> tuple[dict[str, Any], dict[str, Any]]:
 def _expected(second: dict[str, Any], steps: list[str]) -> dict[str, Any]:
     description = sweep.surface_description(steps)
     return {
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": "pending",
         "description": description,
         "target_url": f"https://github.com/{REPO}/actions/runs/{second['id']}",
@@ -899,7 +902,7 @@ def test_an_in_progress_claim_is_replaced_with_the_failed_step_status(
     fake.failed = {second["id"]: ["Verify Linux process isolation"]}
     fake.statuses = [
         {
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "state": "pending",
             "description": "verdict in progress",
             "target_url": f"https://github.com/{REPO}/actions/runs/1",
@@ -921,9 +924,9 @@ def test_a_non_app_pending_status_cannot_suppress_the_failure_status(
     fake = _stateless_fake(second, first)
     fake.statuses = [
         {
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "state": "pending",
-            "description": "oracle-verdict failed twice without a result at: an earlier step. Rerun",
+            "description": "review-verdict failed twice without a result at: an earlier step. Rerun",
             "target_url": f"https://github.com/{REPO}/actions/runs/{second['id']}",
             "creator": {"login": "someone", "type": "User"},
         }
@@ -946,7 +949,7 @@ def test_a_recorded_verdict_is_never_overwritten_by_the_failure_status(
     second, first = _twice_failed()
     fake = _stateless_fake(second, first)
     expected = _expected(second, [])
-    fake.statuses = [{**expected, "state": "success", "description": "oracle-verdict: success"}]
+    fake.statuses = [{**expected, "state": "success", "description": "review-verdict: success"}]
     assert _surfaced_sweep(monkeypatch, tmp_path, fake) == 0
     assert fake.dispatched == [] and fake.posted == []
 
@@ -1010,7 +1013,7 @@ def test_an_owner_reset_covers_one_run_then_expires_on_a_failure_without_a_resul
 
 
 def test_an_owner_reset_is_spent_by_the_first_later_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     first = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     first.comments = _reset_comments()
     _, values, _ = _plan(monkeypatch, tmp_path, first, event_name="issue_comment", event=event)
@@ -1024,7 +1027,7 @@ def test_an_owner_reset_is_spent_by_the_first_later_run(monkeypatch: pytest.Monk
 
 
 def test_a_skipped_run_after_the_reset_does_not_spend_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, conclusion="skipped", age=timedelta(minutes=10))]
@@ -1038,7 +1041,7 @@ def _decisive_state(outcome: str = "success") -> State:
 
 
 def test_an_owner_reset_never_rerolls_a_decisive_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _decisive_state())
     fake.comments = _reset_comments()
     _, values, plan = _plan(monkeypatch, tmp_path, fake, event_name="issue_comment", event=event)
@@ -1051,7 +1054,7 @@ USER = {"login": "someone", "type": "User"}
 
 def _verdict_status(state: str, creator: dict[str, Any] = APP, description: str = "d") -> dict[str, Any]:
     return {
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": description,
         "target_url": "u",
@@ -1188,7 +1191,7 @@ def _reset_comments(head: str = HEAD, *, edited: bool = False) -> list[dict[str,
         },
         {
             "user": owner,
-            "body": f"Oracle backoff reset: {head}\nReason: the gateway was down",
+            "body": f"Review backoff reset: {head}\nReason: the gateway was down",
             "created_at": (start + timedelta(minutes=5)).isoformat(),
             "updated_at": (start + timedelta(minutes=9 if edited else 5)).isoformat(),
         },
@@ -1221,7 +1224,7 @@ def test_the_sweep_dispatches_a_pending_head_after_the_owner_resets_its_backoff(
 def test_a_manual_retry_inside_backoff_runs_once_after_the_owner_reset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     _, values, plan = _plan(monkeypatch, tmp_path, fake, event_name="issue_comment", event=event)
@@ -1304,13 +1307,13 @@ def _record(diff: str, decision: str, **over: Any) -> dict[str, Any]:
 
 
 def _review(record: dict[str, Any] | None, **over: Any) -> dict[str, Any]:
-    body = f"### oracle-verdict: failure for `{OLD_HEAD}`\n\nDecision text.\n"
+    body = f"### review-verdict: failure for `{OLD_HEAD}`\n\nDecision text.\n"
     if record is not None:
         patches = record.get("patch_map")
         body += "\n" + protocol.encode_marker({k: v for k, v in record.items() if k != "patch_map"}, patches)
     review = {
         "id": 1,
-        "login": "benchbox-oracle[bot]",
+        "login": "benchbox-review[bot]",
         "user_type": "Bot",
         "state": "COMMENTED",
         "body": body,
@@ -1451,7 +1454,7 @@ def test_a_code_change_outside_soundness_paths_is_followed_up(monkeypatch: pytes
 
 
 def test_a_follow_up_changing_only_a_gate_template_reviews_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    template = "_project/scripts/oracle_reviewers/templates/gate.md"
+    template = "_project/scripts/reviewers/templates/gate.md"
     files = [*TWO_FILES, {"filename": template, "additions": 1, "deletions": 1, "sha": "7" * 40}]
     section = f"diff --git a/{template} b/{template}\n--- a/{template}\n+++ b/{template}\n@@ -1,1 +1,2 @@\n a\n+gate\n"
     record = _record(TWO_FILE_DIFF + section, "SHIP")
@@ -1624,13 +1627,13 @@ def test_a_reopen_does_not_reset_the_history(monkeypatch: pytest.MonkeyPatch, tm
     [
         _review(_record(TWO_FILE_DIFF, "DO_NOT_SHIP"), state="DISMISSED"),
         _review(_record(TWO_FILE_DIFF, "DO_NOT_SHIP"), login="someone", user_type="User"),
-        _review(_record(TWO_FILE_DIFF, "DO_NOT_SHIP"), login="benchbox-oracle", user_type="User"),
+        _review(_record(TWO_FILE_DIFF, "DO_NOT_SHIP"), login="benchbox-review", user_type="User"),
         _review(_record(TWO_FILE_DIFF, "DO_NOT_SHIP"), user_type="User"),
         _review(None),
     ],
     ids=["dismissed", "other-author", "not-a-bot", "bot-login-user-type", "legacy-without-marker"],
 )
-def test_reviews_that_are_not_live_oracle_markers_are_ignored(
+def test_reviews_that_are_not_live_review_markers_are_ignored(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, review: dict[str, Any]
 ) -> None:
     _, values, plan = _plan(monkeypatch, tmp_path, _fake(review))
@@ -1713,7 +1716,7 @@ def test_a_text_data_file_is_tracked_like_code(monkeypatch: pytest.MonkeyPatch, 
 def test_open_threads_are_recorded_as_open_findings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     threads = [
         {
-            "author": "benchbox-oracle[bot]",
+            "author": "benchbox-review[bot]",
             "author_type": "Bot",
             "resolved": False,
             "path": CAPTURE,
@@ -1737,7 +1740,7 @@ def test_unreadable_threads_are_noted_not_fatal(
 
 def test_an_oversize_head_is_not_retried_until_a_new_push(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     oversize = State(7, HEAD, "pending", datetime.now(UTC) - timedelta(hours=3), pending_cause="oversize")
-    comment = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    comment = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     _, values, plan = _plan(
         monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, oversize), event_name="issue_comment", event=comment
     )
@@ -1760,9 +1763,9 @@ def _decided_head(open_defects: list[dict[str, Any]] | None = None) -> dict[str,
 def _disputed_thread(association: str | None = "OWNER", *, marker: bool = True) -> dict[str, Any]:
     body = "**High**: Drops a row"
     if marker:
-        body += "\n<!-- oracle-defect: c1-D1 -->"
+        body += "\n<!-- review-defect: c1-D1 -->"
     return {
-        "author": "benchbox-oracle[bot]",
+        "author": "benchbox-review[bot]",
         "author_type": "Bot",
         "resolved": False,
         "path": CAPTURE,
@@ -1780,7 +1783,7 @@ def _disputed_thread(association: str | None = "OWNER", *, marker: bool = True) 
 
 def _acked_thread() -> dict[str, Any]:
     return {
-        "author": "benchbox-oracle[bot]",
+        "author": "benchbox-review[bot]",
         "author_type": "Bot",
         "resolved": False,
         "path": CAPTURE,
@@ -1796,7 +1799,7 @@ def _thread_fake(record: dict[str, Any], threads: list[dict[str, Any]]) -> FakeG
 
 
 def test_comment_on_a_decided_head_forces_a_same_head_rereview(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     _, values, plan = _plan(
         monkeypatch,
         tmp_path,
@@ -1812,7 +1815,7 @@ def test_comment_on_a_decided_head_forces_a_same_head_rereview(monkeypatch: pyte
 def test_comment_without_a_dispute_leaves_the_decided_head_in_place(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     _, values, plan = _plan(
         monkeypatch, tmp_path, _thread_fake(_decided_head(), [_acked_thread()]), event_name="issue_comment", event=event
     )
@@ -1882,7 +1885,7 @@ def test_a_changed_patch_with_a_dispute_takes_the_ordinary_follow_up_path(
     [
         {"body": "Not a defect.", "user": {"login": "joe", "type": "User"}, "in_reply_to_id": 11},
         {"body": "Not a defect.", "user": {"login": "joe", "type": "User"}},
-        {"body": "Noted.", "user": {"login": "benchbox-oracle[bot]", "type": "Bot"}, "in_reply_to_id": 11},
+        {"body": "Noted.", "user": {"login": "benchbox-review[bot]", "type": "Bot"}, "in_reply_to_id": 11},
     ],
     ids=["thread-reply", "top-level", "bot-reply"],
 )
@@ -1903,7 +1906,7 @@ def test_review_comment_events_never_plan(
 def test_guard_posts_a_forced_follow_up_once_and_skips_the_duplicate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = _thread_fake(_decided_head(), [_disputed_thread()])
     _, values, plan = _plan(monkeypatch, tmp_path, fake, event_name="issue_comment", event=event)
     assert values["decision"] == "review" and plan["protocol"]["forced"] is True
@@ -2191,10 +2194,10 @@ def test_a_degraded_sweep_does_not_redispatch_an_already_surfaced_failure(
     fake = _degraded(FakeGitHub(_pull(), SOUNDNESS, _held_state()))
     fake.statuses = [
         {
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "state": "pending",
             "description": f"{github.SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun",
-            "creator": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+            "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
             "created_at": datetime.now(UTC).isoformat(),
         }
     ]

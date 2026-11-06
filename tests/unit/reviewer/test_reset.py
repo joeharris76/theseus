@@ -55,9 +55,9 @@ def test_the_latest_valid_reset_wins() -> None:
         [_instruction(), _reset(user={"login": "someone", "type": "User"})],
         [_instruction(), _reset(user={"login": "joeharris76", "type": "Bot"})],
         [_instruction(user={"login": "someone", "type": "User"}), _reset()],
-        [_instruction(), _comment(f"Oracle backoff reset: {HEAD}", 5)],
-        [_instruction(), _comment(f"Oracle backoff reset: {HEAD}\nReason: why\nmore", 5)],
-        [_instruction(), _comment(f"> Oracle backoff reset: {HEAD}\nReason: why", 5)],
+        [_instruction(), _comment(f"Review backoff reset: {HEAD}", 5)],
+        [_instruction(), _comment(f"Review backoff reset: {HEAD}\nReason: why\nmore", 5)],
+        [_instruction(), _comment(f"> Review backoff reset: {HEAD}\nReason: why", 5)],
     ],
 )
 def test_anything_short_of_an_owner_reset_with_a_prior_instruction_is_ignored(comments: list[dict[str, Any]]) -> None:
@@ -98,7 +98,7 @@ class Console:
 def test_the_owner_resets_a_backoff_with_the_reason_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     console = Console(monkeypatch, [_instruction()])
     assert console.run() == 0
-    assert console.posted == [(7, f"Oracle backoff reset: {HEAD}\nReason: the gateway was down")]
+    assert console.posted == [(7, f"Review backoff reset: {HEAD}\nReason: the gateway was down")]
     posted = _comment(console.posted[0][1], 5)
     assert reset.reset_moment([_instruction(), posted], HEAD, ATTESTERS) == START + timedelta(minutes=5)
 
@@ -141,7 +141,7 @@ def test_a_malformed_head_or_reason_is_refused(monkeypatch: pytest.MonkeyPatch, 
 def test_the_consumer_policy_names_who_may_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     console = Console(monkeypatch, [_instruction(user=BETA_OWNER)], login="beta-deputy")
     assert console.run(policy=BETA_POLICY) == 0
-    assert console.posted == [(7, f"Oracle backoff reset: {HEAD}\nReason: the gateway was down")]
+    assert console.posted == [(7, f"Review backoff reset: {HEAD}\nReason: the gateway was down")]
 
 
 def test_an_alpha_attester_cannot_reset_under_the_beta_policy(monkeypatch: pytest.MonkeyPatch) -> None:

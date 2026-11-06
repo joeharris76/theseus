@@ -149,8 +149,8 @@ class WorkflowRunner:
         self.env = {key: value for key, value in env.items() if key != omp_pin.BINARY_ENV}
         if not options.installable:
             self.env[omp_pin.CACHE_ENV] = str(harness.root / "omp-cache-empty")
-        self.attempts_dir = self.temp / "oracle-attempts"
-        self.final_dir = self.temp / "oracle-final"
+        self.attempts_dir = self.temp / "review-attempts"
+        self.final_dir = self.temp / "review-final"
         self.workspace = self.temp / "workspace"
         self.github_env: dict[str, str] = {}
         self.job_env = {key: self._expression(value) for key, value in review_job_env().items()}
@@ -168,7 +168,7 @@ class WorkflowRunner:
             return EXPRESSION.sub(lambda found: self._expression(found.group(0)), text)
         expression = _bare(text)
         known: dict[str, str] = {
-            "inputs.environment": "oracle",
+            "inputs.environment": "review",
             "github.token": JOB_TOKEN,
             "github.workspace": str(self.temp),
             "runner.temp": str(self.temp),
@@ -176,10 +176,10 @@ class WorkflowRunner:
             "secrets.TYPESAFE_API_KEY": JEV_KEY,
             "secrets.TS_OAUTH_CI_SECRET": HELD_SECRET,
             "secrets.TS_OAUTH_CI_CLIENT_ID": OAUTH_CLIENT_ID,
-            "secrets.ORACLE_GATEWAY_TOKEN": GATEWAY_TOKEN,
-            "secrets.ORACLE_GATEWAY_URL": GATEWAY_URL,
+            "secrets.REVIEW_GATEWAY_TOKEN": GATEWAY_TOKEN,
+            "secrets.REVIEW_GATEWAY_URL": GATEWAY_URL,
             "github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr": str(self.pr),
-            "secrets.ORACLE_APP_ID != ''": "true" if self.options.app else "false",
+            "secrets.REVIEW_APP_ID != ''": "true" if self.options.app else "false",
             "secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != ''": "true",
         }
         if expression == "github.sha":
@@ -221,7 +221,7 @@ class WorkflowRunner:
     def _step_env(self, step: dict[str, Any], key: str) -> dict[str, str]:
         scoped = {name: self._expression(value) for name, value in step.get("env", {}).items()}
         if key in DECOYED_STEPS:
-            scoped["ORACLE_APP_PRIVATE_KEY"] = APP_PRIVATE_KEY
+            scoped["REVIEW_APP_PRIVATE_KEY"] = APP_PRIVATE_KEY
         if key == "prepare":
             scoped.update(self.options.plan_env or {})
         self.record.step_env[key] = scoped
@@ -295,7 +295,7 @@ class WorkflowRunner:
             "GITHUB_WORKSPACE": str(self.temp),
             "GITHUB_OUTPUT": str(github_output),
             "GITHUB_PATH": str(github_path),
-            "ORACLE_PROMOTION_MIRROR": pins.mirror,
+            "REVIEW_PROMOTION_MIRROR": pins.mirror,
             "PATH": os.pathsep.join([str(Path(sys.executable).parent), self.env["PATH"]]),
             **{name: self._expression(value) for name, value in step.get("env", {}).items()},
         }
@@ -378,7 +378,7 @@ class WorkflowRunner:
                 "app_refusal", command, {"PATH": self.env["PATH"], **scoped}, cwd=self.temp
             )
         elif name == GATE_FAILURE:
-            self.record.steps["gate_failure"] = Step("gate_failure", 1, "", "oracle-gate was not posted", {})
+            self.record.steps["gate_failure"] = Step("gate_failure", 1, "", "review-gate was not posted", {})
         elif str(step.get("uses", "")).startswith("actions/upload-artifact"):
             self._upload(step)
         else:

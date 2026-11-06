@@ -5,6 +5,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from . import legacy
+
 BATCH_SIZE = 100
 REVIEW_EDITS_QUERY = """
 query($ids: [ID!]!) {
@@ -21,7 +23,7 @@ SHIP = "SHIP"
 SUCCESS = "success"
 FAILURE = "failure"
 DECISIVE = (SUCCESS, FAILURE)
-EDITED_REASON = "an oracle review was edited"
+EDITED_REASON = "a review was edited"
 _RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 
 
@@ -35,7 +37,7 @@ def is_edited(last_edited_at: Any, includes_created_edit: Any) -> bool:
 
 def node_edited(node: Any) -> bool:
     if not isinstance(node, Mapping) or "lastEditedAt" not in node or "includesCreatedEdit" not in node:
-        raise EditStateError("GitHub returned no edit state for an oracle object")
+        raise EditStateError("GitHub returned no edit state for a review object")
     return is_edited(node["lastEditedAt"], node["includesCreatedEdit"])
 
 
@@ -88,7 +90,7 @@ def app_verdict_statuses(
             status
             for status in statuses
             if isinstance(status, Mapping)
-            and status.get("context") == context
+            and status.get("context") in legacy.context_aliases(context)
             and status.get("state") in DECISIVE
             and status.get("created_at")
             and _is_app(status.get("creator"), bot_login)

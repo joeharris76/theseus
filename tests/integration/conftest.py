@@ -15,9 +15,9 @@ HAS_FCNTL = importlib.util.find_spec("fcntl") is not None
 @pytest.fixture
 def harness(tmp_path: Path) -> Iterator[Harness]:
     if not HAS_FCNTL:
-        pytest.skip("the oracle scenario harness is POSIX-only")
+        pytest.skip("the review scenario harness is POSIX-only")
     if shutil.which("gh") is None or shutil.which("git") is None:
-        pytest.fail("the oracle scenario harness needs the gh and git executables on PATH")
+        pytest.fail("the review scenario harness needs the gh and git executables on PATH")
     built = Harness(tmp_path)
     try:
         yield built

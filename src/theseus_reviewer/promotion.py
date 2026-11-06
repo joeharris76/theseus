@@ -32,11 +32,11 @@ if TYPE_CHECKING:
 
 LOCK_PATH = ".github/theseus-lock.json"
 WORKFLOW_DIR = ".github/workflows"
-STAGED_PROMOTION_DIR = ".oracle-promotion"
+STAGED_PROMOTION_DIR = ".review-promotion"
 PROMOTION_PLAN_DIR = "promotion"
 UPSTREAM_DIFF_NAME = "upstream.diff"
-SOURCES_ENV = "ORACLE_PROMOTION_SOURCES"
-ARTIFACT_MIRROR_ENV = "ORACLE_PROMOTION_MIRROR"
+SOURCES_ENV = "REVIEW_PROMOTION_SOURCES"
+ARTIFACT_MIRROR_ENV = "REVIEW_PROMOTION_MIRROR"
 BOOTSTRAP_ARTIFACT_SHA256 = "0" * 64
 RECORD_VERSION = 1
 MAX_TREE_FILES = 5000
@@ -1494,7 +1494,7 @@ def _head_app_records(
     reviews: Iterable[Mapping[str, Any]],
     *,
     head_sha: str,
-    oracle_login: str,
+    review_login: str,
     base_time: datetime | None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     from . import protocol
@@ -1503,7 +1503,7 @@ def _head_app_records(
     own: list[Mapping[str, Any]] = []
     for review in reviews:
         login = str(review.get("login") or "").removesuffix("[bot]")
-        if login != oracle_login or review.get("user_type") != "Bot":
+        if login != review_login or review.get("user_type") != "Bot":
             continue
         if review.get("state") in {"PENDING", "DISMISSED"}:
             continue
@@ -1513,9 +1513,9 @@ def _head_app_records(
         if review.get("commit_id") != head_sha:
             continue
         if "last_edited_at" not in review or "includes_created_edit" not in review:
-            return [], f"an oracle review on {head_sha[:12]} has no readable edit state"
+            return [], f"a review on {head_sha[:12]} has no readable edit state"
         if review.get("last_edited_at") is not None or review.get("includes_created_edit"):
-            return [], f"an oracle review on {head_sha[:12]} was edited after submission"
+            return [], f"a review on {head_sha[:12]} was edited after submission"
         own.append(review)
     ordered = sorted(
         own, key=lambda item: (_parse_review_time(item.get("submitted_at")) or datetime.min, item.get("id") or 0)
@@ -1525,7 +1525,7 @@ def _head_app_records(
         try:
             record = protocol.decode_marker(str(candidate.get("body") or ""))
         except protocol.MarkerError as exc:
-            return [], f"an oracle review on {head_sha[:12]} has an invalid protocol marker: {exc}"
+            return [], f"a review on {head_sha[:12]} has an invalid protocol marker: {exc}"
         if record is not None:
             decoded.append(record)
     return decoded, None
@@ -1580,7 +1580,7 @@ def _record_refusals(
 
     if not decoded_records:
         return [
-            f"theseus promotion to {head_lock.version} has no unedited oracle promotion review for head {head_sha[:12]}"
+            f"theseus promotion to {head_lock.version} has no unedited review promotion review for head {head_sha[:12]}"
         ]
     latest = decoded_records[-1]
     if latest.get("open_defects") or latest.get("decision") != protocol.SHIP:
@@ -1593,7 +1593,7 @@ def _record_refusals(
     promo = latest.get("promotion")
     if not valid_promotion_record(promo):
         return [
-            f"theseus promotion to {head_lock.version} has no oracle promotion evidence record for head {head_sha[:12]}"
+            f"theseus promotion to {head_lock.version} has no review promotion evidence record for head {head_sha[:12]}"
         ]
     assert isinstance(promo, Mapping)
     reasons: list[str] = []
@@ -1625,7 +1625,7 @@ def refusals(
     repo: str,
     complete: bool = True,
     base_time: datetime | None = None,
-    oracle_login: str,
+    review_login: str,
     rules: PromotionRules,
     comments: Sequence[Mapping[str, Any]] = (),
     is_ancestor: AncestorCheck | None = None,
@@ -1666,7 +1666,7 @@ def refusals(
     if head_lock.matcher is not None and matcher_sha256_at_head != head_lock.matcher.sha256:
         reasons.append(f"vendored matcher {head_lock.matcher.path} does not match the sha256 in {LOCK_PATH}")
     decoded, history_error = _head_app_records(
-        reviews, head_sha=head_sha, oracle_login=oracle_login, base_time=base_time
+        reviews, head_sha=head_sha, review_login=review_login, base_time=base_time
     )
     if history_error is not None:
         reasons.append(history_error)
@@ -1683,5 +1683,5 @@ def refusals(
         )
     )
     if not reasons and expected_run_uuid is not None and decoded and decoded[-1].get("run_uuid") != expected_run_uuid:
-        reasons.append("promotion review run_uuid does not match the latest oracle-verdict status")
+        reasons.append("promotion review run_uuid does not match the latest review-verdict status")
     return True, reasons

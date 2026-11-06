@@ -366,7 +366,7 @@ def test_cli_select_finalize_and_ensure_attempt(
     )
     assert out == {"state": "failure", "comment": "true", "review": "false", "has_state": "true"}
     status = json.loads((final_dir / "status.json").read_text(encoding="utf-8"))
-    assert status["context"] == "oracle-verdict"
+    assert status["context"] == "review-verdict"
     assert status["state"] == "failure"
     assert status["target_url"].endswith(f"/actions/runs/{RUN_ID}")
     state = json.loads((final_dir / "state" / "state.json").read_text(encoding="utf-8"))
@@ -473,7 +473,7 @@ def test_a_finalized_exempt_success_never_satisfies_a_gate_whose_rules_require_a
     assert code == review_check.WAITING and "reports only exempt paths changed" in message
     assert review_check.decide(HEAD, ["notes.md"], [posted], rules, binding=binding) == (
         review_check.PASS,
-        "oracle-review: only exempt paths changed",
+        "review: only exempt paths changed",
     )
 
 
@@ -594,7 +594,7 @@ def test_review_threads_carry_a_fingerprint_marker(policy: Policy, tmp_path: Pat
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert final.review is not None
-    assert f"<!-- oracle-finding: {fingerprint(CHECKER, 'High issue')} -->" in final.review["comments"][0]["body"]
+    assert f"<!-- review-finding: {fingerprint(CHECKER, 'High issue')} -->" in final.review["comments"][0]["body"]
 
 
 def test_findings_already_open_are_not_posted_again_but_still_block(policy: Policy, tmp_path: Path) -> None:
@@ -646,7 +646,7 @@ def test_a_pending_run_posts_its_diagnostics_as_a_review(
     )
     assert out["state"] == "pending" and out["review"] == "true" and out["comment"] == "false"
     review = json.loads((tmp_path / "o" / "review.json").read_text(encoding="utf-8"))
-    assert review["body"].startswith(f"### oracle-verdict: pending for `{HEAD}`")
+    assert review["body"].startswith(f"### review-verdict: pending for `{HEAD}`")
     assert review["comments"] == [] and "small (attempt 1): absent (auth)" in review["body"]
 
 
@@ -656,7 +656,7 @@ def test_withheld_result_is_posted_as_a_pending_review(policy: Policy, tmp_path:
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "pending" and final.review is not None
-    assert final.review["body"].startswith(f"### oracle-verdict: pending for `{HEAD}`")
+    assert final.review["body"].startswith(f"### review-verdict: pending for `{HEAD}`")
 
 
 def test_an_oversize_plan_finalizes_pending_for_its_size_and_names_the_ways_forward(
@@ -712,7 +712,7 @@ def test_an_inline_plan_with_every_reviewer_absent_stays_retryable(policy: Polic
 def test_a_held_plan_finalizes_to_a_pending_status_with_no_decision_or_marker(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reason = "the oracle's review history could not be read: down"
+    reason = "the review's review history could not be read: down"
     plan = {**_plan(policy), "findings_delivery": "review", "decision": "hold", "decision_reason": reason}
     plan_path = tmp_path / "plan.json"
     plan_path.write_text(json.dumps(plan), encoding="utf-8")
@@ -752,7 +752,7 @@ def test_a_long_status_description_is_cut_to_the_status_limit(policy: Policy, tm
 def test_a_success_status_carries_the_run_id_for_direct_equality(monkeypatch: pytest.MonkeyPatch) -> None:
     from theseus_reviewer import report
 
-    plan = {"status_context": "oracle-verdict", "run_id": "a" * 32}
+    plan = {"status_context": "review-verdict", "run_id": "a" * 32}
     final = report.fixed(report.SUCCESS, "large: SHIP")
     payload = report.status_payload(plan, final, "u")
     assert payload["description"] == f"large: SHIP [run {'a' * 32}]"
@@ -762,7 +762,7 @@ def test_a_success_status_carries_the_run_id_for_direct_equality(monkeypatch: py
 def test_a_long_success_description_still_fits_with_the_run_id() -> None:
     from theseus_reviewer import report
 
-    plan = {"status_context": "oracle-verdict", "run_id": "a" * 32}
+    plan = {"status_context": "review-verdict", "run_id": "a" * 32}
     final = report.fixed(report.SUCCESS, "x" * 200)
     payload = report.status_payload(plan, final, "u")
     assert payload["description"].endswith(f"[run {'a' * 32}]")
@@ -772,7 +772,7 @@ def test_a_long_success_description_still_fits_with_the_run_id() -> None:
 def test_a_status_without_a_plan_run_id_is_unchanged() -> None:
     from theseus_reviewer import report
 
-    plan = {"status_context": "oracle-verdict"}
+    plan = {"status_context": "review-verdict"}
     final = report.fixed(report.SUCCESS, "large: SHIP")
     assert report.status_payload(plan, final, "u")["description"] == "large: SHIP"
 
@@ -796,7 +796,7 @@ def test_a_follow_up_into_a_larger_bucket_starts_at_that_bucket(policy: Policy) 
         capability="routine",
         template="gate",
         confidence=0.9,
-        gate_flags=("_project/scripts/oracle_reviewers/*",),
+        gate_flags=("_project/scripts/reviewers/*",),
         files=(),
     )
     assert [reviewer.name for reviewer in cli._selection(plan, gated).chain] == ["large"]

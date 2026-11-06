@@ -42,7 +42,7 @@ def _write(path: Path, data: Any) -> None:
 
 
 def _final(root: Path, *, comment: bool = False, review: bool = False, state: bool = True) -> None:
-    _write(root / "status.json", {"state": "success", "context": "oracle-verdict"})
+    _write(root / "status.json", {"state": "success", "context": "review-verdict"})
     if comment:
         _write(root / "comment.json", {"body": "comment"})
     if review:
@@ -111,10 +111,10 @@ def test_every_phase_is_a_drive_subcommand() -> None:
 def test_the_ci_environment_derives_its_layout_and_scan_roots_from_the_runner(tmp_path: Path) -> None:
     environment = _environment(tmp_path, TMPDIR="/custom/scratch")
 
-    assert environment.layout.plan == tmp_path / "oracle-plan"
+    assert environment.layout.plan == tmp_path / "review-plan"
     assert environment.layout.workspace == tmp_path / "workspace"
-    assert environment.layout.classification == tmp_path / "oracle-classification" / "classification.json"
-    assert environment.layout.final == tmp_path / "oracle-final"
+    assert environment.layout.classification == tmp_path / "review-classification" / "classification.json"
+    assert environment.layout.final == tmp_path / "review-final"
     assert Path("/custom/scratch") in environment.scan_roots
     assert tmp_path / "trusted" in environment.scan_roots and tmp_path / "workspace" in environment.scan_roots
 
@@ -155,7 +155,7 @@ def test_the_harness_phase_records_the_installed_binary_and_version(
 
     assert driver.harness(environment, argparse.Namespace()) == 0
 
-    assert env_file.read_text(encoding="utf-8") == f"ORACLE_OMP_BINARY={binary}\n"
+    assert env_file.read_text(encoding="utf-8") == f"REVIEW_OMP_BINARY={binary}\n"
     assert "state=installed" in outputs.read_text(encoding="utf-8")
     assert "18.12.1" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
@@ -313,7 +313,7 @@ def test_a_refused_gate_post_leaves_the_published_result_and_warns(
     written = outputs.read_text(encoding="utf-8")
     assert "state_recorded=true" in written
     assert "gate_failed=true" in written
-    assert "::warning::oracle-gate was not posted from this run: the gate was refused" in capsys.readouterr().err
+    assert "::warning::review-gate was not posted from this run: the gate was refused" in capsys.readouterr().err
 
 
 def test_a_refused_review_leaves_no_verdict_status_and_no_gate(
@@ -405,6 +405,7 @@ def test_the_github_sink_posts_each_payload_with_the_app_token(tmp_path: Path, m
     posted: list[tuple[str, str]] = []
     monkeypatch.setattr(github, "post_file", lambda path, payload, token: posted.append((path, token)))
     payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"state": "success", "context": "review-verdict", "description": "d"}), "utf-8")
 
     sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
     sink.status(REPO, HEAD, payload)
@@ -412,6 +413,7 @@ def test_the_github_sink_posts_each_payload_with_the_app_token(tmp_path: Path, m
     sink.review(REPO, 7, payload)
 
     assert posted == [
+        (f"repos/{REPO}/statuses/{HEAD}", "app-token"),
         (f"repos/{REPO}/statuses/{HEAD}", "app-token"),
         (f"repos/{REPO}/issues/7/comments", "app-token"),
         (f"repos/{REPO}/pulls/7/reviews", "app-token"),

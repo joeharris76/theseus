@@ -52,8 +52,8 @@ def _cloud_review(harness: Harness, branch: str, proxy: str | None) -> Step:
         )
     env = {
         **harness.base_env(),
-        "ORACLE_GATEWAY_URL": UNROUTABLE_GATEWAY,
-        "ORACLE_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
+        "REVIEW_GATEWAY_URL": UNROUTABLE_GATEWAY,
+        "REVIEW_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
         "GH_TOKEN": OWNER_TOKEN,
         "GH_ENTERPRISE_TOKEN": OWNER_TOKEN,
         "TYPESAFE_BASE_URL": harness.jev.url,
@@ -77,7 +77,7 @@ def test_a_cloud_review_reaches_a_tailnet_only_gateway_through_the_recorded_prox
         proxy.close()
 
     assert review.code == 0, review.stdout + review.stderr
-    assert "Local oracle review: no Critical or High findings; pr-open may proceed." in review.stdout
+    assert "Local review: no Critical or High findings; pr-open may proceed." in review.stdout
     assert proxy.requests == [f"{UNROUTABLE_GATEWAY}/healthz"]
     assert harness.omp_calls() >= 1
     assert UNROUTABLE_GATEWAY not in review.stdout + review.stderr and GATEWAY_TOKEN not in json.dumps(

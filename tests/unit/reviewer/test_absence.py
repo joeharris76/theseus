@@ -197,7 +197,7 @@ def test_unparsed_redacts_a_secret_split_by_the_tail_limit(secret: str, cut: int
 
 
 QUOTED_DIFF = (
-    '{"type":"message_end","message":{"content":[{"type":"text","text":"+| 401 | `ORACLE_GATEWAY_TOKEN` does not '
+    '{"type":"message_end","message":{"content":[{"type":"text","text":"+| 401 | `REVIEW_GATEWAY_TOKEN` does not '
     'match `client.token`. Run `secrets`. | and rate_limit_error, invalid_grant, Unauthorized, 429 Too Many Requests"}]}}\n'
 )
 

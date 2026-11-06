@@ -20,8 +20,8 @@ REVIEWER_COMMIT = "a" * 40
 GATE_COMMIT = "b" * 40
 REVIEWER_VERSION = "0.1.0"
 GATE_VERSION = "0.2.0"
-HOLD_DESCRIPTION = "oracle-review: held by gate pin B"
-PASS_DESCRIPTION = "oracle-review: passed by gate pin B"
+HOLD_DESCRIPTION = "review: held by gate pin B"
+PASS_DESCRIPTION = "review: passed by gate pin B"
 
 _spec = importlib.util.spec_from_file_location("bootstrap_support", SUPPORT)
 assert _spec is not None and _spec.loader is not None
@@ -59,7 +59,7 @@ def run():
     head = argv[argv.index("--head-sha") + 1]
     repo = argv[argv.index("--repo") + 1]
     state, description = ("failure", {hold!r}) if mode == "hold" else ("success", {passed!r})
-    body = json.dumps({{"state": state, "context": "oracle-gate", "description": description}}).encode()
+    body = json.dumps({{"state": state, "context": "review-gate", "description": description}}).encode()
     request = urllib.request.Request(
         os.environ["GITHUB_API_URL"] + "/repos/" + repo + "/statuses/" + head,
         data=body,

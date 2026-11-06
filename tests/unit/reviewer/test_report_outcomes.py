@@ -115,7 +115,7 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     body = final.body
     _assert_shape(body)
     lines = body.split("\n")
-    assert lines[0] == f"### oracle-verdict: failure for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
     for line in (
         f"- **Medium** `{CHECKER}:2`: D7: Inline problem",
         "  inline detail",
@@ -192,7 +192,7 @@ def test_a_plan_without_protocol_or_delivery_uses_the_documented_defaults(policy
     assert protocol.MARKER_OPEN not in final.body
     review = _finalize(policy, {**plan, "findings_delivery": "review"}, _v("s", [_finding("Medium")]))
     assert review.review is not None
-    assert "<!-- oracle-defect: c1-D1 -->" in review.review["comments"][0]["body"]
+    assert "<!-- review-defect: c1-D1 -->" in review.review["comments"][0]["body"]
 
 
 def test_a_protocol_without_counters_starts_them_at_their_defaults(policy: Policy) -> None:
@@ -222,7 +222,7 @@ def test_a_clean_ship_posts_an_empty_body_but_every_other_result_posts_one(polic
     plan = _protocol_plan(policy)
     ship = _finalize(policy, plan, _v("fine"))
     assert ship.state == "success" and ship.body == "" and ship.reviewer == "small"
-    assert ship.review is not None and ship.review["body"].startswith("### oracle-verdict: success")
+    assert ship.review is not None and ship.review["body"].startswith("### review-verdict: success")
     fixes = _finalize(policy, plan, _v("s", [_defect("Problem")]), kind=selection.FAIL)
     assert fixes.body != "" and fixes.state == "failure"
     refused = _v("no", [], decision="DO_NOT_SHIP")
@@ -308,7 +308,7 @@ def test_an_oversize_plan_keeps_its_header_before_the_size_note(policy: Policy) 
     final = _finalize(policy, plan, None, kind=selection.PENDING, reviewer=None)
     assert final.pending_cause == OVERSIZE and final.description == report.OVERSIZE_DESCRIPTION
     lines = final.body.split("\n")
-    assert lines[0] == f"### oracle-verdict: pending for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
     assert report.OVERSIZE_NOTE in lines
     _assert_shape(final.body)
 
@@ -319,7 +319,7 @@ def test_withheld_artifacts_are_listed_in_a_pending_review(policy: Policy) -> No
     assert final.state == "pending" and final.pending_cause == INTEGRITY and final.reviewer is None
     assert final.strikes is None and final.description
     lines = final.body.split("\n")
-    assert lines[0] == f"### oracle-verdict: pending for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
     assert all(error in lines for error in errors)
     assert final.review is not None and final.review["body"] == final.body
     assert set(final.review) == {"commit_id", "event", "body", "comments"}
@@ -334,11 +334,11 @@ def test_review_threads_carry_the_defect_and_fingerprint_markers_in_order(policy
     assert set(final.review) == {"commit_id", "event", "body", "comments"} and final.review["event"] == "COMMENT"
     finding = Finding("Medium", CHECKER, 2, "No detail", "")
     assert final.review["comments"][0]["body"] == (
-        f"**Medium**: No detail\n\n<!-- oracle-defect: c1-D1 -->\n\n{dedup.marker(finding)}"
+        f"**Medium**: No detail\n\n<!-- review-defect: c1-D1 -->\n\n{dedup.marker(finding)}"
     )
     detailed = _finalize(policy, _protocol_plan(policy), _v("s", [_defect("With detail", 2, "more")]))
     assert detailed.review is not None
-    assert detailed.review["comments"][0]["body"].startswith("**Medium**: With detail\n\nmore\n\n<!-- oracle-defect")
+    assert detailed.review["comments"][0]["body"].startswith("**Medium**: With detail\n\nmore\n\n<!-- review-defect")
 
 
 def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
@@ -353,12 +353,12 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     assert final.description == report.MARKER_LIMIT_DESCRIPTION
     assert final.review is not None
     lines = final.review["body"].split("\n")
-    assert lines[0] == f"### oracle-verdict: pending for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
     assert report.MARKER_LIMIT_NOTE in lines and protocol.MARKER_OPEN not in final.review["body"]
     assert f"- **Medium** `{CHECKER}`: Already open problem" in lines
     assert f"- **Medium** `{CHECKER}:40`: Far" in lines
     assert any("DO NOT SHIP decisions on this pull request: 1 of 3." in line for line in lines)
-    assert not any("oracle-defect" in item["body"] for item in final.review["comments"])
+    assert not any("review-defect" in item["body"] for item in final.review["comments"])
     thread = Finding("Medium", CHECKER, 2, "New problem", "d")
     assert final.review["comments"][0]["body"] == f"**Medium**: New problem\n\nd\n\n{dedup.marker(thread)}"
     _assert_shape(final.review["body"])
@@ -636,7 +636,7 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     final = report.carried(_carry_plan(policy, _previous(summary="Rework it"), findings_delivery="comment"))
     lines = final.body.split("\n")
     _assert_shape(final.body)
-    assert lines[0] == f"### oracle-verdict: failure for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
     assert f"Decision: **SHIP WITH FIXES**, carried from head `{OLD}`." in lines
     assert f"- **High** `{CHECKER}:1-2`: D4: Old" in lines and f"- **High** `{CHECKER}:2`: D5: Old" in lines
     assert sum("D4: Old" in line for line in lines) == 1
@@ -658,7 +658,7 @@ def test_a_carried_decision_in_review_mode_posts_an_empty_review_with_the_record
     assert record["summary"] == "Rework it" and record["carried"] is True and record["kind"] == "carry"
     assert record["reviewer"] == "small" and record["strikes_after"] == 2 and record["next_id"] == 6
     ship = report.carried(_carry_plan(policy, _previous("SHIP"), findings_delivery="review"))
-    assert ship.state == "success" and ship.body.startswith(f"### oracle-verdict: success for `{HEAD}`")
+    assert ship.state == "success" and ship.body.startswith(f"### review-verdict: success for `{HEAD}`")
 
 
 def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Policy) -> None:
@@ -667,7 +667,7 @@ def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Polic
     final = report.refused(plan)
     lines = final.body.split("\n")
     _assert_shape(final.body)
-    assert lines[0] == f"### oracle-verdict: failure for `{HEAD}`"
+    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
     assert any("3 of 3" in line and "DO NOT SHIP" in line for line in lines)
     assert (final.state, final.strikes, final.reviewer, final.pending_cause) == ("failure", 3, None, None)
     assert "refused" in final.description and "3" in final.description
@@ -681,7 +681,7 @@ def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Polic
 
 
 def test_the_success_status_carries_the_run_identity_inside_the_description_limit() -> None:
-    plan = {"status_context": "oracle-verdict", "run_id": "a" * 32}
+    plan = {"status_context": "review-verdict", "run_id": "a" * 32}
     suffix = f" [run {'a' * 32}]"
     room = report.DESCRIPTION_LIMIT - len(suffix)
     exact = report.Final("success", "d" * room, "", None, None)
@@ -739,7 +739,7 @@ def test_a_withheld_review_lists_its_errors_under_a_real_title(policy: Policy) -
 def test_the_thread_markers_carry_the_cycle_of_the_plan(policy: Policy) -> None:
     final = _finalize(policy, _protocol_plan(policy, cycle=4), _v("s", [_defect("Problem")]), kind=selection.FAIL)
     assert final.review is not None
-    assert "<!-- oracle-defect: c4-D1 -->" in final.review["comments"][0]["body"]
+    assert "<!-- review-defect: c4-D1 -->" in final.review["comments"][0]["body"]
     assert _record(final)["cycle"] == 4
 
 

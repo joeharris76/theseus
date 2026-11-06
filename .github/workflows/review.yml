@@ -24,7 +24,7 @@ on:
         description: Repository-relative path of the consumer review policy in the trusted checkout
         required: false
         type: string
-        default: .github/oracle-reviewers.yml
+        default: .github/review.yml
       trusted_paths:
         description: Sparse-checkout patterns that cover the policy, manifests and omp config
         required: false
@@ -34,23 +34,22 @@ on:
         description: File name of the caller workflow that runs this one
         required: false
         type: string
-        default: oracle-verdict.yml
+        default: review-verdict.yml
       tailscale_tag:
         description: Tailscale tag the runner joins the tailnet under; must match tag:[a-z0-9-]+
-        required: false
+        required: true
         type: string
-        default: tag:oracle-ci
     secrets:
-      ORACLE_APP_ID:
+      REVIEW_APP_ID:
         description: Id of the GitHub App that posts the review, status and gate
         required: true
-      ORACLE_APP_PRIVATE_KEY:
+      REVIEW_APP_PRIVATE_KEY:
         description: Private key of that GitHub App
         required: true
-      ORACLE_GATEWAY_TOKEN:
+      REVIEW_GATEWAY_TOKEN:
         description: Token for the credential gateway the reviewers reach over the tailnet
         required: true
-      ORACLE_GATEWAY_URL:
+      REVIEW_GATEWAY_URL:
         description: Address of the credential gateway
         required: true
       TS_OAUTH_CI_CLIENT_ID:
@@ -166,7 +165,7 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' }}
+      HAS_APP: ${{ secrets.REVIEW_APP_ID != '' }}
       POLICY_PATH: ${{ inputs.policy_path }}
     steps:
       - name: Refuse a caller that did not pass the App secrets
@@ -174,7 +173,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          echo "::error::ORACLE_APP_ID is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (ORACLE_APP_ID, ORACLE_APP_PRIVATE_KEY, ORACLE_GATEWAY_TOKEN, ORACLE_GATEWAY_URL, TS_OAUTH_CI_CLIENT_ID, TS_OAUTH_CI_SECRET, TYPESAFE_API_KEY) and the environment must hold non-empty values for them"
+          echo "::error::REVIEW_APP_ID is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (REVIEW_APP_ID, REVIEW_APP_PRIVATE_KEY, REVIEW_GATEWAY_TOKEN, REVIEW_GATEWAY_URL, TS_OAUTH_CI_CLIENT_ID, TS_OAUTH_CI_SECRET, TYPESAFE_API_KEY) and the environment must hold non-empty values for them"
           exit 1
 
       - name: Check out the trusted gated-branch copy
@@ -210,8 +209,8 @@ jobs:
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.ORACLE_APP_ID }}
-          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.REVIEW_APP_ID }}
+          private-key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
           permission-statuses: write
 
       - name: Dispatch due retries
@@ -229,7 +228,7 @@ jobs:
       github.ref == format('refs/heads/{0}', inputs.gated_base) &&
       (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base)) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/oracle-review') || startsWith(github.event.comment.body, 'Oracle adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/oracle-review') || startsWith(github.event.comment.body, 'Review adjudication:') || startsWith(github.event.comment.body, 'Oracle adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ubuntu-latest
     timeout-minutes: 255
     environment: ${{ inputs.environment }}
@@ -239,7 +238,7 @@ jobs:
       pull-requests: read
     env:
       HAS_TAILNET: ${{ secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != '' }}
-      HAS_APP: ${{ secrets.ORACLE_APP_ID != '' }}
+      HAS_APP: ${{ secrets.REVIEW_APP_ID != '' }}
       POLICY_PATH: ${{ inputs.policy_path }}
     steps:
       - name: Refuse a caller that did not pass the App secrets
@@ -247,7 +246,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          echo "::error::ORACLE_APP_ID is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (ORACLE_APP_ID, ORACLE_APP_PRIVATE_KEY, ORACLE_GATEWAY_TOKEN, ORACLE_GATEWAY_URL, TS_OAUTH_CI_CLIENT_ID, TS_OAUTH_CI_SECRET, TYPESAFE_API_KEY) and the environment must hold non-empty values for them"
+          echo "::error::REVIEW_APP_ID is empty for environment $ENVIRONMENT; the caller job must map each secret by name in its secrets: block (REVIEW_APP_ID, REVIEW_APP_PRIVATE_KEY, REVIEW_GATEWAY_TOKEN, REVIEW_GATEWAY_URL, TS_OAUTH_CI_CLIENT_ID, TS_OAUTH_CI_SECRET, TYPESAFE_API_KEY) and the environment must hold non-empty values for them"
           exit 1
 
       - name: Check out the trusted gated-branch copy
@@ -346,8 +345,8 @@ jobs:
         timeout-minutes: 225
         working-directory: trusted
         env:
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
         run: theseus drive --policy "$POLICY_PATH" attempts
 
       - name: Classify the invalid attempt after attempt 1
@@ -363,8 +362,8 @@ jobs:
         timeout-minutes: 225
         working-directory: trusted
         env:
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
         run: theseus drive --policy "$POLICY_PATH" attempts
 
       - name: Classify the invalid attempt after attempt 2
@@ -380,8 +379,8 @@ jobs:
         timeout-minutes: 225
         working-directory: trusted
         env:
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
         run: theseus drive --policy "$POLICY_PATH" attempts
 
       - name: Classify the invalid attempt after attempt 3
@@ -397,8 +396,8 @@ jobs:
         timeout-minutes: 225
         working-directory: trusted
         env:
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
         run: theseus drive --policy "$POLICY_PATH" attempts
 
       - name: Classify the invalid attempt after attempt 4
@@ -414,8 +413,8 @@ jobs:
         timeout-minutes: 225
         working-directory: trusted
         env:
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
         run: theseus drive --policy "$POLICY_PATH" attempts
 
       - name: Scan the disk for secret values after the reviewer exits
@@ -435,9 +434,9 @@ jobs:
         working-directory: trusted
         env:
           OMP_INSTALL_STATE: ${{ steps.harness.outputs.state }}
-          OMP_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          ORACLE_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
           TS_OAUTH_CI_CLIENT_ID: ${{ secrets.TS_OAUTH_CI_CLIENT_ID }}
           TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
           JOB_TOKEN: ${{ github.token }}
@@ -448,8 +447,8 @@ jobs:
         if: steps.prepare.outputs.post == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.ORACLE_APP_ID }}
-          private-key: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.REVIEW_APP_ID }}
+          private-key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
           permission-statuses: write
           permission-pull-requests: write
           permission-contents: read
@@ -495,8 +494,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           overwrite: true
-          name: oracle-verdict-state-attempt-${{ steps.prepare.outputs.pr }}
-          path: ${{ runner.temp }}/oracle-final/attempt/state.json
+          name: review-verdict-state-attempt-${{ steps.prepare.outputs.pr }}
+          path: ${{ runner.temp }}/review-final/attempt/state.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -505,8 +504,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           overwrite: true
-          name: oracle-verdict-state-${{ steps.prepare.outputs.pr }}
-          path: ${{ runner.temp }}/oracle-final/state/state.json
+          name: review-verdict-state-${{ steps.prepare.outputs.pr }}
+          path: ${{ runner.temp }}/review-final/state/state.json
           if-no-files-found: error
           retention-days: 7
 
@@ -514,8 +513,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 1 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-attempt-1
-          path: ${{ runner.temp }}/oracle-attempts/attempt-1.json
+          name: review-verdict-attempt-1
+          path: ${{ runner.temp }}/review-attempts/attempt-1.json
           if-no-files-found: error
           retention-days: 30
 
@@ -523,8 +522,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 2 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-attempt-2
-          path: ${{ runner.temp }}/oracle-attempts/attempt-2.json
+          name: review-verdict-attempt-2
+          path: ${{ runner.temp }}/review-attempts/attempt-2.json
           if-no-files-found: error
           retention-days: 30
 
@@ -532,8 +531,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 3 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-attempt-3
-          path: ${{ runner.temp }}/oracle-attempts/attempt-3.json
+          name: review-verdict-attempt-3
+          path: ${{ runner.temp }}/review-attempts/attempt-3.json
           if-no-files-found: error
           retention-days: 30
 
@@ -541,8 +540,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 4 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-attempt-4
-          path: ${{ runner.temp }}/oracle-attempts/attempt-4.json
+          name: review-verdict-attempt-4
+          path: ${{ runner.temp }}/review-attempts/attempt-4.json
           if-no-files-found: error
           retention-days: 30
 
@@ -550,8 +549,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 5 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-attempt-5
-          path: ${{ runner.temp }}/oracle-attempts/attempt-5.json
+          name: review-verdict-attempt-5
+          path: ${{ runner.temp }}/review-attempts/attempt-5.json
           if-no-files-found: error
           retention-days: 30
 
@@ -559,8 +558,8 @@ jobs:
         if: ${{ always() && steps.finalize.outcome == 'success' && steps.finalize.outputs.attempts >= 1 }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: oracle-verdict-capture
-          path: ${{ runner.temp }}/oracle-attempts/captures/
+          name: review-verdict-capture
+          path: ${{ runner.temp }}/review-attempts/captures/
           if-no-files-found: ignore
           retention-days: 30
 
@@ -576,5 +575,5 @@ jobs:
       - name: Fail the run when the gate was not posted from it
         if: always() && steps.publish.outputs.gate_failed == 'true'
         run: |
-          echo "::error::oracle-gate was not posted from this run; the dispatched gate retries it"
+          echo "::error::review-gate was not posted from this run; the dispatched gate retries it"
           exit 1

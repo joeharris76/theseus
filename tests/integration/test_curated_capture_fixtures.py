@@ -14,7 +14,7 @@ from .harness import REPO_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
-FIXTURES = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers"
+FIXTURES = REPO_ROOT / "tests" / "fixtures" / "reviewers"
 PROVENANCE = json.loads((FIXTURES / "provenance.json").read_text(encoding="utf-8"))["fixtures"]
 CI_CAPTURE = "captures/ci_attempt.json"
 LOCAL_CAPTURE = "captures/local_review.json"

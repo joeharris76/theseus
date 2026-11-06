@@ -59,10 +59,10 @@ def test_the_gate_decision_follows_the_tip_pin_b_while_the_reviewer_ran_pin_a(
 
     assert run.steps["reviewer_pin"].code == 0, run.steps["reviewer_pin"].stderr
     assert run.steps["gate_pin"].code == 0, run.steps["gate_pin"].stderr
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
     gate = harness.github.gate_statuses(head)
     assert [(item["state"], item["description"]) for item in gate] == [("failure", HOLD_DESCRIPTION)]
-    assert gate[0]["creator"]["login"] == "benchbox-oracle[bot]"
+    assert gate[0]["creator"]["login"] == "benchbox-review[bot]"
     assert run.steps["publish"].code == 0, run.steps["publish"].stderr
     assert "gate_failed" not in run.steps["publish"].outputs
     assert "gate_failure" not in run.steps
@@ -127,17 +127,17 @@ def test_a_failing_gate_subprocess_records_the_failure_posts_no_gate_and_retries
 
     publish = run.steps["publish"]
     assert publish.code == 0
-    assert "::warning::oracle-gate was not posted from this run: could not post oracle-gate for #41" in publish.stderr
+    assert "::warning::review-gate was not posted from this run: could not post review-gate for #41" in publish.stderr
     assert "exit 1: gate pin B crashed" in publish.stderr
     assert publish.outputs["gate_failed"] == "true"
     assert publish.outputs["state_recorded"] == "true"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
     assert harness.github.gate_statuses(head) == []
     assert run.steps["gate_failure"].code == 1
     assert harness.github.dispatches == [
-        {"workflow": "oracle-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
+        {"workflow": "review-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
     ]
-    assert any(item["name"] == "oracle-verdict-state-41" for item in harness.github.artifacts)
+    assert any(item["name"] == "review-verdict-state-41" for item in harness.github.artifacts)
 
 
 def test_an_unresolvable_gate_pin_fails_closed_instead_of_falling_back_to_the_reviewer_interpreter(
@@ -151,7 +151,7 @@ def test_an_unresolvable_gate_pin_fails_closed_instead_of_falling_back_to_the_re
     assert publish.code == 0
     assert "THESEUS_GATE_COMMAND is set but empty" in publish.stderr
     assert publish.outputs["gate_failed"] == "true"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
     assert harness.github.gate_statuses(head) == []
     assert world.recorded() is None
     assert run.steps["gate_failure"].code == 1

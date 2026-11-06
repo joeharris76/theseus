@@ -238,7 +238,7 @@ def test_an_owner_reset_ignores_the_daily_budget_in_the_sweep_as_in_the_plan(
     ]
     assert _sweep(monkeypatch, tmp_path, swept) == 0
     assert swept.dispatched == [7]
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     planned = FakeGitHub(_pull(), SOUNDNESS, exhausted)
     planned.comments = _reset_comments()
     _, values, plan = _plan(monkeypatch, tmp_path, planned, event_name="issue_comment", event=event)
@@ -246,7 +246,7 @@ def test_an_owner_reset_ignores_the_daily_budget_in_the_sweep_as_in_the_plan(
 
 
 def test_a_queued_run_does_not_spend_the_owner_reset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, status="queued", conclusion=None, age=timedelta(minutes=10))]
@@ -255,7 +255,7 @@ def test_a_queued_run_does_not_spend_the_owner_reset(monkeypatch: pytest.MonkeyP
 
 
 def test_a_cancelled_run_does_not_spend_the_owner_reset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, conclusion="cancelled", age=timedelta(minutes=10))]
@@ -266,7 +266,7 @@ def test_a_cancelled_run_does_not_spend_the_owner_reset(monkeypatch: pytest.Monk
 def test_a_later_run_with_no_recorded_head_spends_the_owner_reset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, conclusion="failure", head=None, age=timedelta(minutes=10))]
@@ -277,7 +277,7 @@ def test_a_later_run_with_no_recorded_head_spends_the_owner_reset(
 def test_a_later_run_on_another_head_does_not_spend_the_owner_reset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, conclusion="failure", head=OTHER_HEAD, age=timedelta(minutes=10))]
@@ -350,7 +350,7 @@ def test_a_cancelled_run_that_hit_its_job_timeout_is_a_failure_without_a_result(
 def test_a_cancelled_run_that_hit_its_job_timeout_spends_the_owner_reset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
+    event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     run = _verdict_run(7, conclusion="cancelled", age=timedelta(minutes=10))
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
@@ -367,11 +367,11 @@ def test_a_failure_already_surfaced_as_pending_is_not_redispatched_after_the_run
     fake = FakeGitHub(_pull(), SOUNDNESS, state)
     fake.statuses = [
         {
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "state": "pending",
-            "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /oracle-review",
+            "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
             "target_url": "u",
-            "creator": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+            "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
             "updated_at": (datetime.now(UTC) - timedelta(days=3)).isoformat(),
         }
     ]
@@ -381,11 +381,11 @@ def test_a_failure_already_surfaced_as_pending_is_not_redispatched_after_the_run
 
 def _surfaced_status() -> dict[str, Any]:
     return {
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": "pending",
-        "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /oracle-review",
+        "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
         "target_url": "u",
-        "creator": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+        "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
         "updated_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
     }
 

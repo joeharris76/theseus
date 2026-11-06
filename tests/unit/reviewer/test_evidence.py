@@ -39,7 +39,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 CONSUMER = load_policy(POLICY_PATH).consumer
 MATCHERS = load_matchers(CONSUMER, POLICY_PATH.parents[1])
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers"
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers"
 SHIP_WITH_FIXES = "SHIP_WITH_FIXES"
 
 

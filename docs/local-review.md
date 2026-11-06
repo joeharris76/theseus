@@ -8,7 +8,7 @@ Run it through the consumer-owned first stage, so the bytes that execute are the
 
 ```
 theseus="$(python3 -I -S .github/theseus-bootstrap.py install --repo . --commit "$(git rev-parse origin/main)")"
-"$theseus" local-review --policy .github/oracle-reviewers.yml [--repo OWNER/NAME] [--base-ref REF] [--head REF] \
+"$theseus" local-review --policy .github/review.yml [--repo OWNER/NAME] [--base-ref REF] [--head REF] \
   [--rebuttals FILE | --adjudicate TEXT]
 ```
 
@@ -16,7 +16,7 @@ theseus="$(python3 -I -S .github/theseus-bootstrap.py install --repo . --commit 
 - Any failure to resolve the commit, read or parse the lock, fetch bytes or match a hash refuses before anything executes. There is no fallback to an older install, an export directory or a `theseus` on `PATH`. A warm install is re-verified on every call and is reused only when it matches the lock's artifact, dependencies, interpreter and platform.
 - `install` re-verifies a warm install on every call, so running it before each review is the supported pattern; the printed executable is the only thing to run.
 
-The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. Without `--base-ref`, pass `--trusted-ref REF`: the base is `origin/<consumer.gated_base>` read from the policy at that commit, never from the working tree (a branch could otherwise pick the ref that supplies its own rules); with neither flag the review refuses. `--repo` falls back to `ORACLE_LOCAL_REPOSITORY`, then the origin remote.
+The working directory must be the consumer checkout (a git repository). `--policy` is a path inside it; the policy and every manifest it names are read from the base ref, not from the working tree, so a branch cannot change its own review rules. Without `--base-ref`, pass `--trusted-ref REF`: the base is `origin/<consumer.gated_base>` read from the policy at that commit, never from the working tree (a branch could otherwise pick the ref that supplies its own rules); with neither flag the review refuses. `--repo` falls back to `REVIEW_LOCAL_REPOSITORY`, then the origin remote.
 
 The diff under review is built by `git diff` with `--attr-source` pointing at the empty tree, so a `.gitattributes` in the reviewed branch (`-diff`, `binary`, `diff=<driver>`, `eol` and the like) can never hide or reshape hunks. That flag needs git 2.40 or newer. When `git --version` reports an older release, or output that cannot be parsed, the review is unavailable (exit 2) with a message naming the requirement; it never drops the flag and falls back.
 
@@ -34,32 +34,32 @@ Each review phase runs as a child of the verified install: the same interpreter 
 
 ## Findings, disputes and the record
 
-Findings carry the identifiers and fingerprints CI assigns to the same patch. A refused review lists them (`[High] c1-D1 path:line title`). To dispute one, write the rebuttals file (a JSON object from finding id to a line starting `Dispute:` that cites `path:line`) and rerun with `--rebuttals FILE`; the same reviewer rejudges it under the evidence rules. A second maintained finding escalates, and only then may the owner pass `--adjudicate`. A withdrawal with a cited disposition clears the finding and is recorded. Set `ORACLE_LOCAL_RECORD_OUT=FILE` to have a passing run write its record for the pull request body; CI ingests it as claims, never as a verdict.
+Findings carry the identifiers and fingerprints CI assigns to the same patch. A refused review lists them (`[High] c1-D1 path:line title`). To dispute one, write the rebuttals file (a JSON object from finding id to a line starting `Dispute:` that cites `path:line`) and rerun with `--rebuttals FILE`; the same reviewer rejudges it under the evidence rules. A second maintained finding escalates, and only then may the owner pass `--adjudicate`. A withdrawal with a cited disposition clears the finding and is recorded. Set `REVIEW_LOCAL_RECORD_OUT=FILE` to have a passing run write its record for the pull request body; CI ingests it as claims, never as a verdict.
 
-State lives under `~/.cache/theseus/local-oracle` (`THESEUS_LOCAL_STATE` overrides it): `records/`, `captures/`, `cache/` and the pool-block file. A consumer that already holds local findings and dispute state keeps them by pointing `THESEUS_LOCAL_STATE` at the existing directory (for example `~/.cache/<consumer>/local-oracle`); formats and finding identifiers are unchanged and nothing is copied or deleted. The review cache key covers the plan, the head tree and a digest of the trusted policy, manifests, omp config and the installed package bytes, so a different package or policy never reuses a result.
+State lives under `~/.cache/theseus/local-review` (`THESEUS_LOCAL_STATE` overrides it): `records/`, `captures/`, `cache/` and the pool-block file. A consumer that already holds local findings and dispute state keeps them by pointing `THESEUS_LOCAL_STATE` at the existing directory (for example `~/.cache/<consumer>/local-review`); formats and finding identifiers are unchanged and nothing is copied or deleted. The review cache key covers the plan, the head tree and a digest of the trusted policy, manifests, omp config and the installed package bytes, so a different package or policy never reuses a result.
 
 ## Credentials
 
 - Classifier key: `TYPESAFE_API_KEY` from the environment, or on macOS the keychain item of the same name (`security add-generic-password -s TYPESAFE_API_KEY -a "$USER" -w`).
-- Gateway client: `~/.omp/oracle-gateway/local-client.token` against `http://127.0.0.1:4000`, or in a cloud session (`THESEUS_EPHEMERAL_CLONE=1` or a set `ORACLE_CLOUD_GATEWAY_TOKEN`) `ORACLE_GATEWAY_URL` plus `ORACLE_CLOUD_GATEWAY_TOKEN`, reaching a tailnet-only gateway through the loopback proxy recorded in the status file.
+- Gateway client: `~/.omp/review-gateway/local-client.token` against `http://127.0.0.1:4000`, or in a cloud session (`THESEUS_EPHEMERAL_CLONE=1` or a set `REVIEW_CLOUD_GATEWAY_TOKEN`) `REVIEW_GATEWAY_URL` plus `REVIEW_CLOUD_GATEWAY_TOKEN`, reaching a tailnet-only gateway through the loopback proxy recorded in the status file.
 - GitHub access: `GH_TOKEN`, `GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN`, used only for the pull-request lookup.
 
 Every secret above is withheld from the reviewer: at start the process hands them over a pipe to a re-executed copy of itself with the secrets removed from its environment, gives each phase only the grants it needs, scans the work area and redacts captures. Captures keep a redacted excerpt only.
 
 ## What changed from the BenchBox launcher
 
-`scripts/oracle_local_review.py` exported `origin/develop` into a cache directory and ran `python -m _project.scripts.oracle_reviewers.cli` from it. The installed command replaces that:
+The BenchBox launcher script exported `origin/develop` into a cache directory and ran the BenchBox reviewer CLI module from it. The installed command replaces that:
 
 | BenchBox launcher | Installed |
 |---|---|
 | `--reviewer-ref` (export source) | the lock at `--commit` names the exact artifact |
-| `--record-out FILE` | `ORACLE_LOCAL_RECORD_OUT=FILE` |
+| `--record-out FILE` | `REVIEW_LOCAL_RECORD_OUT=FILE` |
 | implicit `origin/develop` base | `origin/<consumer.gated_base>` from the policy at `--trusted-ref` |
-| `~/.cache/benchbox/local-oracle` | `~/.cache/theseus/local-oracle`, or the old directory through `THESEUS_LOCAL_STATE` |
+| the BenchBox launcher's cache directory | `~/.cache/theseus/local-review`, or the old directory through `THESEUS_LOCAL_STATE` |
 | `BENCHBOX_EPHEMERAL_CLONE=1` (cloud session marker) | `THESEUS_EPHEMERAL_CLONE=1` |
 | `.git/benchbox-cloud-gateway.status` (cloud gateway proxy record) | `.git/theseus-cloud-gateway.status`, same `gateway_proxy=` line |
 | `BENCHBOX_OMP_CACHE`, `BENCHBOX_OMP_DOWNLOAD_MIRROR` | `THESEUS_OMP_CACHE`, `THESEUS_OMP_DOWNLOAD_MIRROR` |
-| export directories under `~/.cache/benchbox/local-oracle/export` | inert; never read or executed, and nothing deletes the findings beside them |
+| export directories under the launcher's cache directory | inert; never read or executed, and nothing deletes the findings beside them |
 
 The consumer's launcher change, which switches `make` targets and `pr_arm` to the installed command, belongs to the consumer cutover, not to this repository.
 

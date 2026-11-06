@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from theseus_reviewer import legacy
+
 from .fake_github import ACCOUNTS, APP_TOKEN, JOB_TOKEN
 from .harness import CHECKER, GATEWAY_TOKEN, RECORDED_STREAM, Harness
 
@@ -12,7 +14,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
 FIXED_CHECKER = "def checker(a, b):\n    if a is None or b is None:\n        return False\n    return a == b\n"
 
-ORACLE_BOT = ACCOUNTS[APP_TOKEN]
+REVIEW_BOT = ACCOUNTS[APP_TOKEN]
 
 
 def _ship(summary: str = "The change keeps checker semantics; no defects.") -> dict:
@@ -28,22 +30,42 @@ def test_first_review_ships_posts_success_and_the_gate_passes(harness: Harness) 
 
     assert run.steps["prepare"].outputs["decision"] == "review"
     assert [item["outcome"] for item in run.attempts()] == ["verdict"]
-    verdicts = harness.github.oracle_statuses(head)
-    assert [(item["state"], item["creator"]["login"]) for item in verdicts] == [("success", "benchbox-oracle[bot]")]
+    verdicts = harness.github.review_statuses(head)
+    assert [(item["state"], item["creator"]["login"]) for item in verdicts] == [("success", "benchbox-review[bot]")]
     review = harness.github.reviews[41][-1]
-    assert review["commit_id"] == head and f"### oracle-verdict: success for `{head}`" in review["body"]
+    assert review["commit_id"] == head and f"### review-verdict: success for `{head}`" in review["body"]
     assert harness.github.dispatches == [
-        {"workflow": "oracle-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
+        {"workflow": "review-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
     ]
     assert [(item["state"], item["description"]) for item in harness.github.gate_statuses(head)] == [
-        ("success", f"oracle-review: pass (oracle verdict for {head})")
+        ("success", f"review: pass (review verdict for {head})")
     ]
-    assert harness.github.gate_statuses(head)[0]["creator"]["login"] == "benchbox-oracle[bot]"
+    assert harness.github.gate_statuses(head)[0]["creator"]["login"] == "benchbox-review[bot]"
 
     gate = harness.gate(41, head)
 
     assert gate.code == 0, gate.stderr
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["success", "success"]
+
+
+def test_every_status_is_also_posted_under_its_legacy_context_with_the_same_state_and_description(
+    harness: Harness,
+) -> None:
+    head = harness.branch("feat/checker", {CHECKER: FIXED_CHECKER}, "guard None operands")
+    harness.github.open_pull(41, "feat/checker")
+    harness.script_omp([_ship()], leak_env="OMP_GATEWAY_TOKEN")
+
+    harness.review(41)
+    harness.gate(41, head)
+
+    for context, old in legacy.STATUS_CONTEXT_PAIRS.items():
+        posted = [item for item in harness.github.statuses[head] if item["context"] == context]
+        mirrored = [item for item in harness.github.statuses[head] if item["context"] == old]
+        assert posted and [(item["state"], item["description"]) for item in mirrored] == [
+            (item["state"], item["description"]) for item in posted
+        ]
+    contexts = {item["context"] for item in harness.github.statuses[head]}
+    assert contexts == set(legacy.STATUS_CONTEXT_PAIRS) | set(legacy.STATUS_CONTEXT_PAIRS.values())
 
 
 def test_the_verdict_run_posts_a_failing_gate_for_a_held_head(harness: Harness) -> None:
@@ -70,12 +92,12 @@ def test_the_verdict_run_posts_a_failing_gate_for_a_held_head(harness: Harness) 
 
     harness.review(42)
 
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["failure"]
     assert "latest verdict" in harness.github.gate_statuses(head)[0]["description"]
 
 
-def test_an_open_oracle_thread_does_not_hold_the_gate_the_verdict_run_posts(harness: Harness) -> None:
+def test_an_open_review_thread_does_not_hold_the_gate_the_verdict_run_posts(harness: Harness) -> None:
     head = harness.branch("feat/checker", {CHECKER: FIXED_CHECKER}, "guard None operands")
     harness.github.open_pull(43, "feat/checker")
     harness.github.threads[43].append(
@@ -83,7 +105,7 @@ def test_an_open_oracle_thread_does_not_hold_the_gate_the_verdict_run_posts(harn
             "id": "PRRT_open",
             "resolved": False,
             "path": CHECKER,
-            "comments": [{"author": ORACLE_BOT, "association": "NONE", "body": "An earlier finding."}],
+            "comments": [{"author": REVIEW_BOT, "association": "NONE", "body": "An earlier finding."}],
         }
     )
     harness.script_omp([_ship()])
@@ -102,7 +124,9 @@ def test_a_head_change_marks_the_gate_pending_before_it_is_evaluated(harness: Ha
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["success"]
     if held:
         harness.github.statuses[head] = [
-            item for item in harness.github.statuses[head] if item["context"] != "oracle-verdict"
+            item
+            for item in harness.github.statuses[head]
+            if item["context"] not in legacy.context_aliases("review-verdict")
         ]
 
     gate = harness.gate(44, head, pending_first=True)
@@ -125,7 +149,7 @@ def test_a_failed_review_post_leaves_no_verdict_status_so_the_sweep_retries_the_
     harness.github.failures.clear()
 
     assert run.steps["publish"].code == 1
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
     assert harness.github.gate_statuses(head) == []
     assert harness.github.reviews[45] == []
     harness.github.complete_run(run.run, "failure", ("Post the result",))
@@ -136,7 +160,7 @@ def test_a_failed_review_post_leaves_no_verdict_status_so_the_sweep_retries_the_
     assert sweep.code == 0, sweep.stderr
     assert harness.github.dispatches[-1:] == [
         {
-            "workflow": "oracle-verdict.yml",
+            "workflow": "review-verdict.yml",
             "ref": "develop",
             "inputs": {"pr": "45", "head": head, "reason": "stateless-retry"},
         }
@@ -151,7 +175,7 @@ def test_the_verdict_status_is_posted_after_the_review_it_is_a_receipt_for(harne
     harness.review(46)
 
     review = harness.github.reviews[46][-1]
-    status = harness.github.oracle_statuses(head)[-1]
+    status = harness.github.review_statuses(head)[-1]
     assert review["submitted_at"] <= status["created_at"]
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["success"]
 
@@ -178,7 +202,7 @@ def test_attempt_capture_keeps_the_redacted_event_stream(harness: Harness) -> No
     tool_results = [event["result"] for event in capture["events"] if event["type"] == "tool_execution_end"]
     assert tool_results and all(item.startswith("[tool output withheld: ") for item in tool_results)
     uploaded = [item["name"] for item in harness.github.artifacts if item["workflow_run"]["id"] == run.run["id"]]
-    assert "oracle-verdict-capture" in uploaded
+    assert "review-verdict-capture" in uploaded
 
 
 @pytest.mark.parametrize("damage", [b"{}", b"[]"], ids=["empty-object", "array"])
@@ -196,8 +220,8 @@ def test_an_unreadable_attempt_artifact_finalizes_pending_for_integrity(harness:
     finalize = run.steps["finalize"]
     assert finalize.code == 0, finalize.stderr
     assert finalize.outputs["state"] == "pending"
-    assert harness.github.artifact_json("oracle-verdict-state-43", "state.json")["pending_cause"] == "integrity"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
+    assert harness.github.artifact_json("review-verdict-state-43", "state.json")["pending_cause"] == "integrity"
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]
 
 
 def test_a_second_pull_request_at_the_same_head_does_not_strand_the_first(harness: Harness) -> None:
@@ -210,7 +234,7 @@ def test_a_second_pull_request_at_the_same_head_does_not_strand_the_first(harnes
     harness.script_omp([_ship()])
     harness.review(62)
 
-    assert len(harness.github.oracle_statuses(head)) == 2
+    assert len(harness.github.review_statuses(head)) == 2
     first = harness.gate(61, head)
     second = harness.gate(62, head)
 
@@ -246,4 +270,4 @@ def test_an_attempt_artifact_that_cannot_be_redaction_checked_fails_the_finalize
 
     assert run.steps["finalize"].code == 1
     assert "publish" not in run.steps
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []

@@ -12,7 +12,7 @@ from theseus_reviewer.policy import ClassifierRules, Policy
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 RULES = ClassifierRules(
-    gate_paths=("gate/*", ".github/oracle-reviewers.yml", "_project/scripts/oracle_reviewers/*"),
+    gate_paths=("gate/*", ".github/review.yml", "_project/scripts/reviewers/*"),
     logic_paths=("logic/*", "*validation*"),
     data_paths=("data/*",),
     exempt_paths=("docs/*", "*.md"),
@@ -66,10 +66,10 @@ def test_soundness_list_hits_are_noted_in_the_fallback_reason() -> None:
 
 
 def test_gate_template_matching_the_markdown_exemption_still_needs_review() -> None:
-    result = _scope(_file("_project/scripts/oracle_reviewers/templates/gate.md"), pred=False)
+    result = _scope(_file("_project/scripts/reviewers/templates/gate.md"), pred=False)
     assert result.soundness is True
-    assert result.gate_paths == ("_project/scripts/oracle_reviewers/templates/gate.md",)
-    assert result.reasons == ("changes the gate: _project/scripts/oracle_reviewers/templates/gate.md",)
+    assert result.gate_paths == ("_project/scripts/reviewers/templates/gate.md",)
+    assert result.reasons == ("changes the gate: _project/scripts/reviewers/templates/gate.md",)
 
 
 def test_soundness_manifest_beats_the_markdown_exemption() -> None:

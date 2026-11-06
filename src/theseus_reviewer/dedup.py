@@ -5,10 +5,14 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from . import legacy
 from .policy import SEVERITIES
 from .verdict import Finding
 
-_MARKER = re.compile(r"<!-- oracle-finding: (?P<print>[0-9a-f]{16}) -->\s*\Z")
+MARKER_OPEN = "<!-- review-finding:"
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.FINDING_MARKER_OPEN)}) (?P<print>[0-9a-f]{{16}}) -->\s*\Z"
+)
 _TITLE = re.compile(r"^\*\*(?P<severity>Critical|High|Medium|Low)\*\*: (?P<title>.+)$", re.MULTILINE)
 _NOT_WORD = re.compile(r"[^a-z0-9]+")
 
@@ -19,7 +23,7 @@ def fingerprint(path: str, title: str) -> str:
 
 
 def marker(finding: Finding) -> str:
-    return f"<!-- oracle-finding: {fingerprint(finding.file, finding.title)} -->"
+    return f"{MARKER_OPEN} {fingerprint(finding.file, finding.title)} -->"
 
 
 def thread_fingerprint(path: str | None, body: str) -> str | None:

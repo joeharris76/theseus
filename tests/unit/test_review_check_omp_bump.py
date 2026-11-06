@@ -8,13 +8,13 @@ from conftest import CONSUMER_ALPHA, CONSUMER_BETA
 from theseus_reviewer import gate, omp_pin
 from theseus_reviewer import review_check as check
 
-ALPHA = gate.load_gate_config(".github/oracle-reviewers.yml", CONSUMER_ALPHA)
-BETA = gate.load_gate_config(".github/oracle-reviewers.yml", CONSUMER_BETA)
+ALPHA = gate.load_gate_config(".github/review.yml", CONSUMER_ALPHA)
+BETA = gate.load_gate_config(".github/review.yml", CONSUMER_BETA)
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 HEAD = "a" * 40
-POLICY_PATH = ".github/oracle-reviewers.yml"
+POLICY_PATH = ".github/review.yml"
 POLICY = (
     "retry: 1\nomp:\n  version: {version}\n  builds:\n    darwin-arm64:\n      url: https://b.example/mac\n"
     "      sha256: {mac}\n    linux-x64:\n      url: https://b.example/linux\n      sha256: {linux}\n"
@@ -108,7 +108,7 @@ def test_evidence_that_is_wrong_edited_or_not_the_owners_does_not_release_the_bu
 def test_matching_unedited_owner_evidence_releases_the_bump(texts: dict[str, str]) -> None:
     status, message = _gate([_evidence()])
     assert status == check.WAITING
-    assert "omp pin bump refused" not in message and "waiting for the oracle's verdict" in message
+    assert "omp pin bump refused" not in message and "waiting for the review's verdict" in message
 
 
 def test_a_bump_that_changes_other_files_is_held_even_with_evidence(texts: dict[str, str]) -> None:

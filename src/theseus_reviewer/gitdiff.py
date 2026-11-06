@@ -137,7 +137,7 @@ def build(
     secret = token if token is not None else next((os.environ[name] for name in TOKEN_ENV if os.environ.get(name)), "")
     env = _git_environment(server, secret)
     parent = os.environ.get("RUNNER_TEMP") or None
-    workdir = Path(tempfile.mkdtemp(prefix="oracle-git-diff-", dir=parent))
+    workdir = Path(tempfile.mkdtemp(prefix="review-git-diff-", dir=parent))
     try:
         _run(runner, ["init", "--bare", "--quiet"], workdir, env)
         _run(runner, ["remote", "add", "origin", url], workdir, env)

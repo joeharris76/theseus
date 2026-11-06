@@ -469,7 +469,7 @@ def test_specifier_evaluation(version, specifier, expected):
 def test_cli_install_and_verify_from_a_trusted_commit(world, repo, cache, tmp_path):
     commit = commit_lock(repo, world.lock)
     mirror = _serve(world.net, tmp_path)
-    env = {**os.environ, "ORACLE_PROMOTION_MIRROR": mirror, "THESEUS_INSTALL_CACHE": str(cache)}
+    env = {**os.environ, "REVIEW_PROMOTION_MIRROR": mirror, "THESEUS_INSTALL_CACHE": str(cache)}
     base = [sys.executable, "-m", "theseus_reviewer", "bootstrap"]
     flags = ["--repo", str(repo), "--commit", commit]
     installed = subprocess.run([*base, "install", *flags], capture_output=True, text=True, env=env, check=False)
@@ -493,7 +493,7 @@ def test_cli_refuses_when_the_mirror_serves_wrong_bytes(world, repo, cache, tmp_
     commit = commit_lock(repo, world.lock)
     poisoned = Net()
     poisoned.blobs = {url: b"poison" for url in world.net.blobs}
-    env = {**os.environ, "ORACLE_PROMOTION_MIRROR": _serve(poisoned, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
+    env = {**os.environ, "REVIEW_PROMOTION_MIRROR": _serve(poisoned, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
     result = subprocess.run(
         [sys.executable, "-m", "theseus_reviewer", "bootstrap", "install", "--repo", str(repo), "--commit", commit],
         capture_output=True,
@@ -512,7 +512,7 @@ def test_the_installer_runs_standalone_without_the_package(world, repo, cache, t
     env = {
         "PATH": os.environ.get("PATH", ""),
         **({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if "SYSTEMROOT" in os.environ else {}),
-        "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path),
+        "REVIEW_PROMOTION_MIRROR": _serve(world.net, tmp_path),
         "THESEUS_INSTALL_CACHE": str(cache),
     }
     result = subprocess.run(
@@ -583,7 +583,7 @@ def test_a_lock_text_edit_that_keeps_the_same_artifacts_reuses_the_warm_install(
 
 def test_cli_install_accepts_reinstall_and_discards_a_mismatched_warm_install(world, repo, cache, tmp_path):
     commit = commit_lock(repo, world.lock)
-    env = {**os.environ, "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
+    env = {**os.environ, "REVIEW_PROMOTION_MIRROR": _serve(world.net, tmp_path), "THESEUS_INSTALL_CACHE": str(cache)}
     flags = ["--repo", str(repo), "--commit", commit]
     base = [sys.executable, "-m", "theseus_reviewer", "bootstrap"]
     first = subprocess.run([*base, "install", *flags], capture_output=True, text=True, env=env, check=False)
@@ -794,7 +794,7 @@ def test_print_argv_emits_the_isolated_launch_argv(world, repo, cache, tmp_path)
     commit = commit_lock(repo, world.lock)
     env = {
         **os.environ,
-        "ORACLE_PROMOTION_MIRROR": _serve(world.net, tmp_path),
+        "REVIEW_PROMOTION_MIRROR": _serve(world.net, tmp_path),
         "THESEUS_INSTALL_CACHE": str(cache),
     }
     result = subprocess.run(

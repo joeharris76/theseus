@@ -4,17 +4,17 @@ Theseus ships two reusable workflows, `.github/workflows/review.yml` and `.githu
 
 | Caller file (consumer) | Workflow name | Calls | Check it produces |
 |---|---|---|---|
-| `oracle-verdict.yml` | `oracle-verdict` | `review.yml` | `oracle-verdict` status, reviews and comments from the App |
-| `oracle-gate.yml` | `oracle-gate` | `gate.yml` | `oracle-gate` status from the App |
-| `oracle-review.yml` | `oracle-review` | none (a no-op job) | its completion is the bridge trigger |
+| `review-verdict.yml` | `review-verdict` | `review.yml` | `review-verdict` status, reviews and comments from the App |
+| `review-gate.yml` | `review-gate` | `gate.yml` | `review-gate` status from the App |
+| `review-request.yml` | `review-request` | none (a no-op job) | its completion is the bridge trigger |
 
-The `oracle-verdict` and `oracle-gate` contexts, the caller workflow names and file names, and the `oracle-verdict-*` artifact names are protocol identities. They stay as they are so an existing branch protection that requires `oracle-gate` keeps matching. The reviewer finds retry state by the caller workflow path `.github/workflows/oracle-verdict.yml` and the gate dispatch targets `oracle-gate.yml`, so the caller files keep those names.
+The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. During the 0.2.x transition each status is also posted under its 0.1.x context; see "Migrating from 0.1.x".
 
 ## Caller context
 
 A called workflow sees the caller's `github` context: `github.event_name`, `github.event.*`, `github.sha`, `github.ref`, `github.repository`, `github.workflow_ref` (the caller's), `github.token`. `workflow_dispatch` inputs are read as `github.event.inputs.*`; `inputs.*` inside a callee is only its own `workflow_call` inputs. Consequences:
 
-- Triggers, `run-name`, `concurrency` and the job-level `permissions` ceiling belong to the caller. The callees declare no workflow-level `concurrency` and no `run-name`, so a callee can never share a group with its caller. The example callers use groups prefixed `oracle-verdict-` and `oracle-gate-`; the two never collide with each other or with CI groups.
+- Triggers, `run-name`, `concurrency` and the job-level `permissions` ceiling belong to the caller. The callees declare no workflow-level `concurrency` and no `run-name`, so a callee can never share a group with its caller. The example callers use groups prefixed `review-verdict-` and `review-gate-`; the two never collide with each other or with CI groups.
 - `github.sha` is the tip of the branch the event ran against. The review runs only when `github.ref` is `refs/heads/<gated_base>`; a pull request against any other base skips the jobs. A `workflow_dispatch` from any other ref is refused by the guard job.
 - The guard job (`contents: read` only, no secrets, no environment) refuses before any secret job starts: a `theseus_ref` that is not a full 40-hex commit, an empty `gated_base`, a caller whose `github.workflow_ref` is not `<repository>/.github/workflows/<caller_workflow>@...`, and a `theseus_ref` that is not the pin recorded in the trusted consumer lock (below).
 
@@ -26,11 +26,11 @@ A called workflow sees the caller's `github` context: `github.event_name`, `gith
 | `theseus_ref` | yes | | Full commit SHA of the Theseus repository that holds the callee and its bootstrap installer; must equal the SHA on the caller's `uses:` line |
 | `theseus_repository` | no | `joeharris76/theseus` | Repository checked out at `theseus_ref` |
 | `gated_base` | yes | | Branch the review and gate apply to; its tip supplies the trusted policy and lock |
-| `policy_path` | no | `.github/oracle-reviewers.yml` | Consumer policy, read from the trusted checkout |
+| `policy_path` | no | `.github/review.yml` | Consumer policy, read from the trusted checkout |
 | `trusted_paths` | no | `.github` | Sparse-checkout patterns for the trusted checkout; add the directories of any `consumer` manifest outside `.github`. The example gate caller reruns on every push to the gated branch (no `paths:` filter), so a manifest change outside `.github` re-evaluates standing gate statuses immediately rather than at the next hourly sweep |
-| `caller_workflow` | no | `oracle-verdict.yml` / `oracle-gate.yml` | File name of the caller; the guard compares it with `github.workflow_ref`, and the bridge dispatches it |
-| `tailscale_tag` | no (`review.yml`) | `tag:oracle-ci` | Tailscale tag the review job's runner joins the tailnet under to reach the credential gateway; the guard refuses a value that does not match `^tag:[a-z0-9-]+$`. Set it when more than one consumer shares a tailnet so each caller has its own runner identity |
-| `review_workflow_name` | no (`gate.yml`) | `oracle-review` | `name:` of the workflow whose completion bridges into the gate |
+| `caller_workflow` | no | `review-verdict.yml` / `review-gate.yml` | File name of the caller; the guard compares it with `github.workflow_ref`, and the bridge dispatches it |
+| `tailscale_tag` | yes (`review.yml`) | | Tailscale tag the review job's runner joins the tailnet under to reach the credential gateway; the guard refuses a value that does not match `^tag:[a-z0-9-]+$` |
+| `review_workflow_name` | no (`gate.yml`) | `review-request` | `name:` of the workflow whose completion bridges into the gate |
 
 ## Pinned workflow ref
 
@@ -69,14 +69,14 @@ A pull request can edit the caller files, so the pin has two halves and the call
 
    def test_theseus_pin_is_one_commit():
        lock = json.loads(Path(".github/theseus-lock.json").read_text())["workflow_sha"]
-       for name in ("oracle-verdict.yml", "oracle-gate.yml"):
+       for name in ("review-verdict.yml", "review-gate.yml"):
            text = Path(".github/workflows", name).read_text()
            uses = re.search(r"joeharris76/theseus/\.github/workflows/\S+@([0-9a-f]{40})", text).group(1)
            ref = re.search(r"theseus_ref:\s*([0-9a-f]{40})", text).group(1)
            assert uses == ref == lock
    ```
 
-2. List the caller files (`.github/workflows/oracle-verdict.yml`, `.github/workflows/oracle-gate.yml`, `.github/workflows/oracle-review.yml`), `.github/theseus-lock.json` and the file that holds the check in the consumer's soundness manifest (`consumer.soundness_manifest`), so changing any of them requires the full review and gate.
+2. List the caller files (`.github/workflows/review-verdict.yml`, `.github/workflows/review-gate.yml`, `.github/workflows/review-request.yml`), `.github/theseus-lock.json` and the file that holds the check in the consumer's soundness manifest (`consumer.soundness_manifest`), so changing any of them requires the full review and gate.
 
 The runtime guard and the CI check together give the binding. Neither alone does.
 
@@ -93,8 +93,8 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 `theseus_reviewer.github.post_gate` runs the gate subprocess and raises `GitHubError` for a spawn failure, any exit other than 0 (posted) or 3 (posted, waiting), and a `THESEUS_GATE_COMMAND` that is set but empty. `drive publish` then:
 
 - keeps the verdict it already posted and the retry-state artifact (`state_recorded`),
-- prints `::warning::oracle-gate was not posted from this run: <reason>` and sets the step output `gate_failed=true`,
-- lets the later steps run: the state and attempt uploads, and the dispatch of the consumer's `oracle-gate.yml` for the reviewed head, which resolves a fresh pin B and retries (the hourly gate sweep is the backstop),
+- prints `::warning::review-gate was not posted from this run: <reason>` and sets the step output `gate_failed=true`,
+- lets the later steps run: the state and attempt uploads, and the dispatch of the consumer's `review-gate.yml` for the reviewed head, which resolves a fresh pin B and retries (the hourly gate sweep is the backstop),
 - ends the run with a failing step, so a failed gate post is never a green run.
 
 A failing subprocess posts no status of its own, so no success is published on its behalf.
@@ -120,14 +120,14 @@ The secret-bearing jobs (`review`, `sweep`, `gate`) name the caller's environmen
 
 Do not use `secrets: inherit`. It does not carry secrets to a callee owned by a different account than the caller's organization or enterprise, and it would also expose every repository and organization secret of the caller to the callee. A probe with an organization caller, a user-owned callee and a secret that exists only in the caller's environment showed: passing nothing, or `inherit` to a callee that declares no secrets, leaves the secret empty and the job green; `inherit` to a callee that declares the secret `required: true` fails at startup with `Secret NAME is required, but not provided while calling`; passing the secret by name to a declared callee delivers it. Because the callees declare their secrets as required, both `inherit` and a caller that omits a mapping fail when the workflow starts, and a caller that passes an empty value makes the jobs fail with an `::error::` annotation instead of passing quietly. A test requires every `secrets.NAME` the callees reference to be declared, and every declared secret to be referenced, so an undeclared reference (which would resolve empty) cannot be added.
 
-An environment's branch policy is checked against the default branch for `pull_request_target` runs, so it does not keep pull request runs away from the secrets. What does is the structure above: the callee runs only the trusted base copy, and candidate code is never executed. `review.yml` needs the seven secrets below; `gate.yml` needs only `ORACLE_APP_ID` and `ORACLE_APP_PRIVATE_KEY`.
+An environment's branch policy is checked against the default branch for `pull_request_target` runs, so it does not keep pull request runs away from the secrets. What does is the structure above: the callee runs only the trusted base copy, and candidate code is never executed. `review.yml` needs the seven secrets below; `gate.yml` needs only `REVIEW_APP_ID` and `REVIEW_APP_PRIVATE_KEY`.
 
 | Secret | Used by |
 |---|---|
 | `TYPESAFE_API_KEY` | `prepare`, `recover`, `finalize`, the scans |
-| `ORACLE_GATEWAY_TOKEN`, `ORACLE_GATEWAY_URL` | the attempt steps and `finalize` only |
+| `REVIEW_GATEWAY_TOKEN`, `REVIEW_GATEWAY_URL` | the attempt steps and `finalize` only |
 | `TS_OAUTH_CI_CLIENT_ID`, `TS_OAUTH_CI_SECRET` | the tailnet join, the scans, `finalize` |
-| `ORACLE_APP_ID`, `ORACLE_APP_PRIVATE_KEY` | the token-mint steps only |
+| `REVIEW_APP_ID`, `REVIEW_APP_PRIVATE_KEY` | the token-mint steps only |
 
 Each step names exactly the secrets it needs in its own `env:`; the job-level `env:` holds only booleans derived from them and the policy path. The App private key never reaches an environment variable. The App token is minted only after `finalize` has run and the reviewer has exited, and is passed only to `publish` and `dispatch`.
 
@@ -135,7 +135,7 @@ Candidate code never meets a credential: the pull request head is checked out wi
 
 ## The `workflow_run` bridge
 
-The caller `oracle-gate.yml` triggers on `workflow_run: workflows: [oracle-review]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `oracle-review.yml` therefore must keep `name: oracle-review`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` on `gated_base` for the open pull request whose head matches. The bridge runs no candidate code and holds no secrets.
+The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-request]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `review-request.yml` therefore must keep `name: review-request`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` on `gated_base` for the open pull request whose head matches. The bridge runs no candidate code and holds no secrets.
 
 ## Local pre-submission review
 
@@ -146,3 +146,44 @@ Hosted workflows do not change the local flow: `theseus local-review --policy PA
 `tests/integration/runs.py` executes `jobs.review.steps` of the shipped `review.yml` against the fake GitHub, fake OMP and fake gateway: every phase step runs the command text from the workflow, with exactly the environment the step names. `tests/integration/test_hosted_pins.py` installs two synthetic locked artifacts (reviewer pin A built from this source, gate pin B with a different gate) through the shipped installer and the shipped install steps, advances the gated branch between the review start and the publish step, and asserts that the posted gate decision comes from pin B in a separate process, that a failing pin B records `gate_failed` and posts no gate status, and that an unresolvable pin B does the same. `tests/unit/test_hosted_workflows.py` pins the structure: SHA-pinned actions, permissions, secret scoping, the guard conditions and the bridge name match.
 
 Not provable offline: environment-secret resolution inside a called workflow, the organisation allow-list, `GITHUB_TOKEN` ceiling enforcement by GitHub, the `workflow_run` delivery itself, the tailnet and gateway, and the App token mint. The offline suite pins the by-name secret mapping (each example caller's `secrets:` equals the callee's declared names, and `inherit` is forbidden) and covers the empty-App refusal step (`test_hosted_workflows.py` runs its script, and `runs.py` executes it as the first step of the review job); the rest is verified at the first live run of each consumer.
+
+## Migrating from 0.1.x
+
+0.2.0 renames every `oracle` name to `review` and collapses doubled words. It is a transitional release: Theseus writes only the new names, except that each status is also posted under its 0.1.x context, and it still reads the 0.1.x forms of everything persisted or typed by humans. A later release deletes both the mirrored contexts and the reading of the old forms (`src/theseus_reviewer/legacy.py`).
+
+| 0.1.x | 0.2.0 |
+|---|---|
+| status context `oracle-verdict` | `review-verdict` (`oracle-verdict` is still posted with the same state and description) |
+| policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; the mirror is keyed on the new name, so a policy left at `oracle-verdict` never writes `review-verdict` |
+| status context `oracle-gate` | `review-gate` (`oracle-gate` is still posted with the same state and description) |
+| callee secret `ORACLE_APP_ID` | `REVIEW_APP_ID` |
+| callee secret `ORACLE_APP_PRIVATE_KEY` | `REVIEW_APP_PRIVATE_KEY` |
+| callee secret `ORACLE_GATEWAY_TOKEN` | `REVIEW_GATEWAY_TOKEN` |
+| callee secret `ORACLE_GATEWAY_URL` | `REVIEW_GATEWAY_URL` |
+| input `tailscale_tag` default `tag:oracle-ci` | no default; the caller must pass it |
+| input `policy_path` default `.github/oracle-reviewers.yml` | `.github/review.yml` |
+| omp config `.github/oracle-omp-config.yml` | `.github/review-omp-config.yml` |
+| input `caller_workflow` default `oracle-verdict.yml` / `oracle-gate.yml` | `review-verdict.yml` / `review-gate.yml` |
+| input `review_workflow_name` default `oracle-review` | `review-request` (caller file `review-request.yml`) |
+| every `ORACLE_*` environment variable (`ORACLE_LOCAL_ROOT`, `ORACLE_OMP_BINARY`, `ORACLE_PROMOTION_MIRROR`, ...) | the same name with `REVIEW_` in place of `ORACLE_`; the old names are not read |
+| the local state root override `THESEUS_LOCAL_STATE` | unchanged; neither version reads a `THESEUS_LOCAL_*_DIR` variable |
+| local cache `~/.cache/theseus/local-oracle`, gateway directory `~/.omp/oracle-gateway` | `~/.cache/theseus/local-review`, `~/.omp/review-gateway` |
+| gateway clients `oracle-ci`, `oracle-<name>` | `review-ci`, `review-<name>` |
+| artifacts `oracle-verdict-state-*`, `oracle-verdict-attempt-*`, `oracle-attempts`, `oracle-verdict-capture` | `review-verdict-state-*`, `review-verdict-attempt-*`, `review-attempts`, `review-verdict-capture` (state is read under either name) |
+| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (both forms are read) |
+| `Stand-in oracle review: APPROVE <sha>` | `Stand-in review: APPROVE <sha>` (both are read) |
+| `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (both are read) |
+| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (both are read) |
+| owner command `/oracle-review` | `/review` (both trigger a run) |
+
+The caller's secrets block must map the new names onto the secrets it already holds, by name:
+
+```yaml
+secrets:
+  REVIEW_APP_ID: ${{ secrets.ORACLE_APP_ID }}
+  REVIEW_APP_PRIVATE_KEY: ${{ secrets.ORACLE_APP_PRIVATE_KEY }}
+  REVIEW_GATEWAY_TOKEN: ${{ secrets.ORACLE_GATEWAY_TOKEN }}
+  REVIEW_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
+```
+
+The callee `if:` conditions and the example callers' concurrency groups match owner commands and attester comments by exact, case-insensitive prefix (`/review`, `Review adjudication:`, `Stand-in review: APPROVE` and their 0.1.x spellings), so only a real command shares the `pr-<n>` group and a quoted or mid-body mention cannot cancel a pending run. The reviewer then parses the exact forms and refuses any other comment.

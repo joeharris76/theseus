@@ -47,7 +47,7 @@ def recording_review(journal: str, workspace: str) -> None:
                 "tmpdir": os.environ["TMPDIR"],
                 "earlier_home_exists": any(Path(entry["home"]).exists() for entry in log.items()),
                 "models_name_the_gateway": models.is_file()
-                and os.environ["ORACLE_GATEWAY_URL"] in models.read_text(encoding="utf-8"),
+                and os.environ["REVIEW_GATEWAY_URL"] in models.read_text(encoding="utf-8"),
                 "staged_diff_present": staged.exists(),
             }
         )

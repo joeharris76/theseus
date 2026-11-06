@@ -388,7 +388,7 @@ def _prior(data: Any, *, trusted: bool = False) -> PriorDefect:
     demoted = data.get("demoted")
     _require(
         demoted is None or (trusted and demoted in DEMOTED_STATUSES),
-        "prior defect demoted is set by the oracle, not the reviewer",
+        "prior defect demoted is set by the review, not the reviewer",
     )
     return PriorDefect(
         identifier,
@@ -404,7 +404,7 @@ def validate(data: Any, *, trusted: bool = False) -> Verdict:
     _require(isinstance(data, dict), "the verdict must be a JSON object")
     _reject_structural_credentials(data)
     _reject_placeholders(data)
-    _require(trusted or "defect_count" not in data, "defect_count is set by the oracle, not the reviewer")
+    _require(trusted or "defect_count" not in data, "defect_count is set by the review, not the reviewer")
     keys = set(data) - {"defect_count"}
     _require(
         keys == set(VERDICT_KEYS),

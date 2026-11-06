@@ -30,13 +30,13 @@ from .test_render import _values
 
 pytestmark = [pytest.mark.unit, pytest.mark.medium]
 
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers"
-TEMPLATES = "_project/scripts/oracle_reviewers/templates"
-TESTS = "tests/unit/scripts/oracle_reviewers"
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers"
+TEMPLATES = "_project/scripts/reviewers/templates"
+TESTS = "tests/unit/scripts/reviewers"
 READ_ALREADY = (
-    "_project/scripts/oracle_reviewers/protocol.py",
-    "_project/scripts/oracle_reviewers/render.py",
-    "_project/scripts/oracle_reviewers/verdict.py",
+    "_project/scripts/reviewers/protocol.py",
+    "_project/scripts/reviewers/render.py",
+    "_project/scripts/reviewers/verdict.py",
 )
 UNREAD = (
     f"{TEMPLATES}/README.md",
@@ -47,7 +47,7 @@ UNREAD = (
     f"{TESTS}/test_cli_plan.py",
 )
 REQUIRED = sorted((*READ_ALREADY, *UNREAD))
-INERT = "internal/oracle-review-notes.md"
+INERT = "internal/review-notes.md"
 DELETED = f"{TESTS}/test_gone.py"
 FEEDBACK = "Earlier attempt feedback: "
 

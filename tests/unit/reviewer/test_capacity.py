@@ -421,7 +421,7 @@ def test_local_and_hosted_capacity_agree_for_the_same_plan(
     driver._record_capacity(environment, gated_omp)
     hosted = json.loads(environment.layout.plan_file.read_text(encoding="utf-8"))[capacity.CAPACITY_KEY]
 
-    monkeypatch.setenv("ORACLE_OMP_BINARY", str(gated_omp))
+    monkeypatch.setenv("REVIEW_OMP_BINARY", str(gated_omp))
     plan = {"chain": chain, "omp_config": "omp.yml"}
     trusted = local.Trusted(policy="", files=(("omp.yml", config.read_text(encoding="utf-8")),))
     local_held = preflight._catalog(trusted, capacity.read_catalog, plan)
@@ -448,7 +448,7 @@ def test_an_unreadable_catalog_gives_the_same_assumption_locally_and_hosted(
     driver._record_capacity(environment, broken)
     hosted = capsys.readouterr().out
 
-    monkeypatch.setenv("ORACLE_OMP_BINARY", str(broken))
+    monkeypatch.setenv("REVIEW_OMP_BINARY", str(broken))
     trusted = local.Trusted(policy="", files=(("omp.yml", config.read_text(encoding="utf-8")),))
     with pytest.raises(preflight.Undetermined) as raised:
         preflight._catalog(trusted, capacity.read_catalog, {"chain": chain, "omp_config": "omp.yml"})

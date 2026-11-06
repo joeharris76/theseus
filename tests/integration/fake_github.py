@@ -22,14 +22,14 @@ APP_TOKEN = "ghs_apptoken" + "A" * 28
 OWNER_TOKEN = "gho_ownertoken" + "O" * 26
 ACCOUNTS = {
     JOB_TOKEN: {"login": "github-actions[bot]", "type": "Bot"},
-    APP_TOKEN: {"login": "benchbox-oracle[bot]", "type": "Bot"},
+    APP_TOKEN: {"login": "benchbox-review[bot]", "type": "Bot"},
     OWNER_TOKEN: {"login": "joeharris76", "type": "User"},
 }
 GH_HOST = "github.localhost"
 API_HOST = f"api.{GH_HOST}"
 COMMENT_PAGE = 50
 COMMENT_PAGE_AFTER = 100
-WORKFLOWS = {"oracle-verdict.yml": 7001, "oracle-gate.yml": 7002, "ci.yml": 7003}
+WORKFLOWS = {"review-verdict.yml": 7001, "review-gate.yml": 7002, "ci.yml": 7003}
 
 
 def now_text() -> str:
@@ -292,11 +292,11 @@ class FakeGitHub:
                     files["state.json"] = json.dumps(state).encode("utf-8")
                 item["data"] = _zip(files)
 
-    def oracle_statuses(self, sha: str) -> list[dict[str, Any]]:
-        return [status for status in self.statuses[sha] if status["context"] == "oracle-verdict"]
+    def review_statuses(self, sha: str) -> list[dict[str, Any]]:
+        return [status for status in self.statuses[sha] if status["context"] == "review-verdict"]
 
     def gate_statuses(self, sha: str) -> list[dict[str, Any]]:
-        return [status for status in self.statuses[sha] if status["context"] == "oracle-gate"]
+        return [status for status in self.statuses[sha] if status["context"] == "review-gate"]
 
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         fake = self

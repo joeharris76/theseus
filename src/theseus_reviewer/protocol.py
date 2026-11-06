@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import adjudication, promotion
+from . import adjudication, legacy, promotion
 from .coverage import Returned
 from .edits import EDITED_REASON, EditStateError, is_edited
 from .evidence import withdrawal_cited
@@ -54,8 +54,10 @@ UNREAD_DIGEST = "unread-"
 MARKER_VERSION = 1
 MARKER_LIMIT = 4096
 MARKER_TRIMS = ((120, 120), (80, 80), (50, 60), (32, 40), (24, 24))
-MARKER_OPEN = "<!-- oracle-protocol:"
-_MARKER = re.compile(r"<!-- oracle-protocol: v1 (?P<data>[A-Za-z0-9_-]+) -->\s*\Z")
+MARKER_OPEN = "<!-- review-protocol:"
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.PROTOCOL_MARKER_OPEN)}) v1 (?P<data>[A-Za-z0-9_-]+) -->\s*\Z"
+)
 MARKER_INFLATE_LIMIT = 64 << 20
 DEFECT_ID = re.compile(r"D([1-9][0-9]{0,3})")
 NOT_COUNTED_LIMIT = 5
@@ -310,7 +312,7 @@ def _clamped(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def decode_marker(body: str) -> dict[str, Any] | None:
-    count = body.count(MARKER_OPEN)
+    count = body.count(MARKER_OPEN) + body.count(legacy.PROTOCOL_MARKER_OPEN)
     if count == 0:
         return None
     match = _MARKER.search(body)
@@ -366,7 +368,7 @@ def history(reviews: Iterable[Mapping[str, Any]], bot_login: str) -> History:
     own = [review for review in reviews if is_app_review(review, bot_login)]
     for review in own:
         if "last_edited_at" not in review or "includes_created_edit" not in review:
-            raise EditStateError(f"oracle review {review.get('id')} has no readable edit state")
+            raise EditStateError(f"review {review.get('id')} has no readable edit state")
         if is_edited(review["last_edited_at"], review["includes_created_edit"]):
             return History([], EDITED_REASON)
     found = History()
@@ -764,8 +766,13 @@ def judge_planned(
     )
 
 
-THREAD_MARKER = re.compile(r"<!--\s*oracle-defect:\s*c([0-9]+)-(D[1-9][0-9]{0,3})\s*-->")
-MARKER_LINE = re.compile(r"^\s*(?:<!--\s*oracle-[\s\S]*?-->\s*|oracle-defect\s*:.*)$")
+THREAD_MARKER = re.compile(
+    rf"<!--\s*(?:review-defect|{re.escape(legacy.DEFECT_MARKER_NAME)}):\s*c([0-9]+)-(D[1-9][0-9]{{0,3}})\s*-->"
+)
+MARKER_LINE = re.compile(
+    rf"^\s*(?:<!--\s*(?:review-|{re.escape(legacy.MARKER_PREFIX)})[\s\S]*?-->\s*"
+    rf"|(?:review-defect|{re.escape(legacy.DEFECT_MARKER_NAME)})\s*:.*)$"
+)
 REPLY_LIMIT = 1000
 DISPUTE_MARKER = "Dispute:"
 

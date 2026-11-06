@@ -30,10 +30,10 @@ def test_a_failed_install_posts_a_distinct_pending_status_runs_no_attempt_and_is
     assert run.steps["harness"].outputs["env"] == ""
     assert "attempts" not in run.steps
     assert run.attempts() == [] and harness.omp_calls() == 0
-    [status] = harness.github.oracle_statuses(head)
+    [status] = harness.github.review_statuses(head)
     assert status["state"] == "pending"
     assert status["description"] == "the pinned omp build could not be installed; no reviewer ran"
-    assert harness.github.artifact_json("oracle-verdict-state-71", "state.json")["pending_cause"] == "omp-install"
+    assert harness.github.artifact_json("review-verdict-state-71", "state.json")["pending_cause"] == "omp-install"
 
     harness.github.age(run.run, 600)
     before = list(harness.github.dispatches)
@@ -56,7 +56,7 @@ def test_a_binary_swapped_after_the_install_is_refused_before_any_review_runs(ha
         assert attempt["outcome"] == "absent" and attempt["absence"]["kind"] == "error"
         assert "does not match the pinned sha256" in attempt["absence"]["detail"]
     assert harness.omp_calls() == 0
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]
 
 
 def test_a_pin_with_a_path_character_build_key_stops_the_plan(harness: Harness) -> None:
@@ -69,5 +69,5 @@ def test_a_pin_with_a_path_character_build_key_stops_the_plan(harness: Harness) 
 
     assert run.steps["prepare"].code != 0
     assert "not a platform name" in run.steps["prepare"].stderr
-    assert harness.github.oracle_statuses(harness.github.pulls[73]["head"]["sha"]) == []
+    assert harness.github.review_statuses(harness.github.pulls[73]["head"]["sha"]) == []
     assert harness.omp_calls() == 0

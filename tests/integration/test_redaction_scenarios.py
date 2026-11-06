@@ -71,7 +71,7 @@ def test_the_redaction_step_fails_the_job_when_a_decoded_marker_still_holds_a_se
         ]
     )
     plan_run = harness.review(62)
-    final = plan_run.temp / "oracle-final"
+    final = plan_run.temp / "review-final"
     review = json.loads((final / "review.json").read_text(encoding="utf-8"))
     record = protocol.decode_marker(review["body"])
     record["open_defects"][0]["title"] = f"see {GATEWAY_TOKEN}"
@@ -109,10 +109,10 @@ def test_no_loop_time_summary_line_reaches_the_step_summary_before_the_redaction
     run = harness.review(63)
 
     pre_loop = [line for line in run.loop_summary.splitlines() if line]
-    assert pre_loop[0].startswith("oracle-verdict plan for #63:")
+    assert pre_loop[0].startswith("review-verdict plan for #63:")
     assert all(LOOP_TIME_LINE.fullmatch(line) for line in pre_loop[1:])
     assert "slot 1:" in run.step_summary()
-    assert "oracle-verdict #63" in run.step_summary()
+    assert "review-verdict #63" in run.step_summary()
 
 
 def test_an_oauth_secret_quoted_by_the_reviewer_fails_the_scan_after_it_exits_and_posts_nothing(
@@ -137,4 +137,4 @@ def test_an_oauth_secret_quoted_by_the_reviewer_fails_the_scan_after_it_exits_an
     assert HELD_SECRET not in run.steps["scan-after-exit"].stdout + run.steps["scan-after-exit"].stderr
     assert "finalize" not in run.steps and "publish" not in run.steps
     assert harness.github.reviews.get(64, []) == []
-    assert harness.github.oracle_statuses(run.plan["head_sha"]) == []
+    assert harness.github.review_statuses(run.plan["head_sha"]) == []

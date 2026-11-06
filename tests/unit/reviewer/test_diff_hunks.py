@@ -326,7 +326,7 @@ def test_evaluate_matches_reads_by_canonical_path(tmp_path: Path) -> None:
     (tmp_path / "pkg" / "link.py").symlink_to("real.py")
     _put(tmp_path, STAGED_DIFF_NAME, "diff\n")
     found = {"pkg/link.py": _target("pkg/link.py", (MODIFIED,))}
-    returned = {"./.oracle-pull-request.diff": ((5, 9),), "pkg/real.py": ((1, 1),)}
+    returned = {"./.review-pull-request.diff": ((5, 9),), "pkg/real.py": ((1, 1),)}
     assert coverage.evaluate(found, ["pkg/link.py"], returned, tmp_path).complete
 
 

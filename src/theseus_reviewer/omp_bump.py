@@ -178,7 +178,7 @@ def render_body(
     return (
         f"## Description\n\nBumps the pinned omp build from {previous.version} to {release.version} "
         f"(build `{release.build_id}`). Only the `omp:` section of the reviewer policy changes.\n\n"
-        "The compatibility suite carries the behavioural evidence; the oracle reviewing this pull request runs the "
+        "The compatibility suite carries the behavioural evidence; the reviewer reviewing this pull request runs the "
         "previous build and reads only the YAML.\n\n"
         "## Per-platform builds\n\nEach build was downloaded twice over TLS; both downloads and the checksum the build "
         "host publishes agree.\n\n| Platform | SHA-256 | Execution |\n| --- | --- | --- |\n"

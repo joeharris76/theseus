@@ -15,7 +15,7 @@ from theseus_reviewer.soundness_paths import Matcher, parse_rules
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 MANIFEST = CONSUMER_ALPHA / ".github" / "inert-paths.txt"
-POLICY = CONSUMER_ALPHA / ".github" / "oracle-reviewers.yml"
+POLICY = CONSUMER_ALPHA / ".github" / "review.yml"
 EMPTY_RULES = ClassifierRules(gate_paths=(), logic_paths=(), data_paths=(), exempt_paths=())
 MACHINE_READ_SAMPLE = [
     "AGENTS.md",
@@ -146,12 +146,10 @@ def test_machine_read_change_is_in_scope_without_policy_exemptions() -> None:
 
 
 def test_gate_template_still_wins_over_the_manifest_exception() -> None:
-    gate = "_project/scripts/oracle_reviewers/templates/gate.md"
+    gate = "_project/scripts/reviewers/templates/gate.md"
     scope = soundness_scope(
         [_review_file(gate)],
-        ClassifierRules(
-            gate_paths=("_project/scripts/oracle_reviewers/*",), logic_paths=(), data_paths=(), exempt_paths=()
-        ),
+        ClassifierRules(gate_paths=("_project/scripts/reviewers/*",), logic_paths=(), data_paths=(), exempt_paths=()),
         matchers,
     )
     assert scope.soundness is True

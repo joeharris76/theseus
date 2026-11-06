@@ -138,7 +138,7 @@ def evaluate(args: argparse.Namespace, reader: CatalogReader = capacity.read_cat
     if _promoted([path for item in files for path in item.paths]):
         return refused(PROMOTION_REASON)
     trusted = local.Trusted.read(root, args.trusted_ref or args.base_ref, args.policy)
-    work = Path(tempfile.mkdtemp(prefix="oracle-preflight-"))
+    work = Path(tempfile.mkdtemp(prefix="review-preflight-"))
     try:
         policy = trusted.write(work / "trusted")
         run = local.Run(

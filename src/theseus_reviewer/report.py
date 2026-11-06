@@ -36,9 +36,9 @@ DESCRIPTION_LIMIT = 140
 BODY_LIMIT = 65536
 BODY_CUT_NOTICE = "Size limit: the rest of this review was cut to stay under GitHub's character limit."
 TRUNCATED = "… [truncated]"
-OVERSIZE_DESCRIPTION = "pending: too large for the oracle; split the pull request or ask the owner for a stand-in"
+OVERSIZE_DESCRIPTION = "pending: too large for the review; split the pull request or ask the owner for a stand-in"
 OVERSIZE_NOTE = (
-    "This pull request is too large for the oracle: the reading it needs is more than any reviewer can hold, "
+    "This pull request is too large for the review: the reading it needs is more than any reviewer can hold, "
     "so no reviewer can run and this head is not retried. Split it into smaller pull requests, or ask the "
     "owner for a stand-in review of this head."
 )
@@ -194,7 +194,7 @@ def _header(plan: Mapping[str, Any], state: str) -> list[str]:
     lines = [f"### {plan['status_context']}: {state} for `{plan['head_sha']}`", ""]
     if plan.get("mode") == "shadow":
         lines += [
-            "Shadow mode: this result is advisory and does not replace the required oracle checks.",
+            "Shadow mode: this result is advisory and does not replace the required review checks.",
             "",
         ]
     lines += ["This result supersedes those for earlier heads; their open review threads still apply.", ""]
@@ -425,7 +425,7 @@ def finalize(
     next_id = int(rules.get("next_id", 1))
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
-    markers = {finding: f"<!-- oracle-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
+    markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
     fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
     placement = place(fresh, commentable)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
@@ -632,7 +632,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
 REPOST_NOTE = (
     "No reviewer ran: this head already has a decision, so it is posted again unchanged. A rerun does not "
     "re-judge an unchanged head. To get a new judgement, push a change, or reply `Dispute:` with file:line "
-    "counter-evidence on the finding's review thread and then comment `/oracle-review`."
+    "counter-evidence on the finding's review thread and then comment `/review`."
 )
 
 
@@ -642,7 +642,7 @@ RUN_SUFFIX_RESERVE = 45
 
 def reposted(plan: Mapping[str, Any]) -> Final:
     repost = plan["repost"]
-    body = f"oracle-verdict for `{plan['head_sha']}`: **{repost['label']}** ({repost['state']}).\n\n{REPOST_NOTE}\n"
+    body = f"review-verdict for `{plan['head_sha']}`: **{repost['label']}** ({repost['state']}).\n\n{REPOST_NOTE}\n"
     base = repost["description"].removesuffix(REPOSTED_MARK)
     reserve = RUN_SUFFIX_RESERVE if repost["state"] == SUCCESS else 0
     description = _clip(base, DESCRIPTION_LIMIT - len(REPOSTED_MARK) - reserve) + REPOSTED_MARK
@@ -656,7 +656,7 @@ def refused(plan: Mapping[str, Any]) -> Final:
         *_header(plan, FAILURE),
         "Decision: **REFUSED**.",
         "",
-        f"This pull request has received {strikes} DO NOT SHIP decisions, so the oracle will not review it again."
+        f"This pull request has received {strikes} DO NOT SHIP decisions, so the review will not review it again."
         " Close this pull request and open a new one with the reworked change. The limit stops review loops; it is"
         " not a security control, and a new pull request starts a new count.",
         "",

@@ -22,7 +22,7 @@ from theseus_reviewer import gate, review_check
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 POLICY = ALPHA_POLICY
-POLICY_REL = ".github/oracle-reviewers.yml"
+POLICY_REL = ".github/review.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
 BINDING = CONFIG.binding
 POLICY_ARGS = ["--policy", POLICY_REL, "--root", str(CONSUMER_ALPHA)]
@@ -64,16 +64,16 @@ def _receipt_body(run_uuid: str = RUN_UUID) -> str:
         "summary": "",
         "run_uuid": run_uuid,
     }
-    return f"### oracle-verdict: success for `{HEAD}`\n\n{protocol.encode_marker(record)}"
+    return f"### review-verdict: success for `{HEAD}`\n\n{protocol.encode_marker(record)}"
 
 
 def _success_status(**over: Any) -> dict[str, Any]:
     status = {
         "id": 1,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": "success",
         "description": f"large: SHIP [run {RUN_UUID}]",
-        "login": "benchbox-oracle[bot]",
+        "login": "benchbox-review[bot]",
         "user_type": "Bot",
         "created_at": AFTER_HEAD,
     }
@@ -82,7 +82,7 @@ def _success_status(**over: Any) -> dict[str, Any]:
 
 def _receipt(**over: Any) -> dict[str, Any]:
     review = {
-        "login": "benchbox-oracle[bot]",
+        "login": "benchbox-review[bot]",
         "user_type": "Bot",
         "commit_id": HEAD,
         "state": "COMMENTED",
@@ -100,7 +100,7 @@ def _attestation(body: str | None = None) -> dict[str, Any]:
         "user_type": "User",
         "created_at": AFTER_HEAD,
         "updated_at": AFTER_HEAD,
-        "body": body if body is not None else f"Stand-in oracle review: APPROVE {HEAD}",
+        "body": body if body is not None else f"Stand-in review: APPROVE {HEAD}",
     }
 
 
@@ -131,7 +131,7 @@ def test_gate_config_carries_the_binding_and_matchers_of_the_policy() -> None:
 
 def test_gate_config_follows_the_consumer_not_a_default(beta_root: Path) -> None:
     config = gate.load_gate_config(POLICY_REL, beta_root)
-    assert config.binding.bot_login == "beta-oracle"
+    assert config.binding.bot_login == "beta-review"
     assert config.binding.attesters == frozenset({"beta-owner", "beta-deputy"})
     assert config.binding.gated_base == "main"
 
@@ -144,7 +144,7 @@ def test_gate_config_fails_when_the_policy_file_is_missing(tmp_path: Path) -> No
 def test_gate_config_fails_when_a_manifest_is_missing(tmp_path: Path) -> None:
     github = tmp_path / ".github"
     github.mkdir()
-    (github / "oracle-reviewers.yml").write_text(POLICY.read_text(encoding="utf-8"), encoding="utf-8")
+    (github / "review.yml").write_text(POLICY.read_text(encoding="utf-8"), encoding="utf-8")
     with pytest.raises(gate.CheckError):
         gate.load_gate_config(POLICY_REL, tmp_path)
 
@@ -153,6 +153,7 @@ class GateApi:
     def __init__(self, head: str) -> None:
         self.head = head
         self.statuses: list[tuple[str, str]] = []
+        self.contexts: list[str] = []
 
     def latest(self, sha: str) -> str | None:
         states = [state for posted, state in self.statuses if posted == sha]
@@ -170,7 +171,9 @@ def gate_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[GateApi]:
             if self.path == "/graphql":
                 reply: dict[str, Any] = {"data": {"repository": {"pullRequest": {"headRefOid": api.head}}}}
             else:
-                api.statuses.append((self.path.rsplit("/", 1)[-1], body["state"]))
+                if body["context"] == gate.GATE_CONTEXT:
+                    api.statuses.append((self.path.rsplit("/", 1)[-1], body["state"]))
+                api.contexts.append(body["context"])
                 reply = {}
             self.send_response(201)
             self.send_header("Content-Type", "application/json")
@@ -198,11 +201,11 @@ def _unloadable_root(tmp_path: Path, kind: str) -> Path:
     github = tmp_path / ".github"
     shutil.copytree(CONSUMER_ALPHA / ".github", github)
     if kind == "policy":
-        (github / "oracle-reviewers.yml").write_text("promotion: [unterminated", encoding="utf-8")
+        (github / "review.yml").write_text("promotion: [unterminated", encoding="utf-8")
     elif kind == "missing-policy":
-        (github / "oracle-reviewers.yml").unlink()
+        (github / "review.yml").unlink()
     elif kind in SHAPE_BREAKS:
-        with (github / "oracle-reviewers.yml").open("a", encoding="utf-8") as handle:
+        with (github / "review.yml").open("a", encoding="utf-8") as handle:
             handle.write(SHAPE_BREAKS[kind])
     else:
         (github / "soundness-paths.txt").unlink()
@@ -268,7 +271,7 @@ def test_an_unloadable_config_posts_nothing_when_the_head_cannot_be_read(
 
 def test_exempt_only_change_passes() -> None:
     expected = review_check.decide(HEAD, OTHER_FILES, [], _matcher(), binding=BINDING)
-    assert expected == (review_check.PASS, "oracle-review: only exempt paths changed")
+    assert expected == (review_check.PASS, "review: only exempt paths changed")
     assert gate.decide(HEAD, OTHER_FILES, [], _matcher(), binding=BINDING) == expected
 
 
@@ -283,7 +286,7 @@ def test_ship_without_a_same_pr_receipt_waits() -> None:
     statuses = [_success_status()]
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, statuses, _matcher(), binding=BINDING)
     assert expected[0] == review_check.WAITING
-    assert "no unedited oracle review" in expected[1]
+    assert "no unedited review" in expected[1]
     assert gate.decide(HEAD, SOUNDNESS_FILES, statuses, _matcher(), binding=BINDING) == expected
 
 
@@ -301,7 +304,7 @@ def test_exact_standin_for_the_head_passes() -> None:
 
 
 def test_standin_with_extra_text_waits() -> None:
-    comments = [_attestation(f"note: Stand-in oracle review: APPROVE {HEAD} thanks")]
+    comments = [_attestation(f"note: Stand-in review: APPROVE {HEAD} thanks")]
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING)
     assert expected[0] == review_check.WAITING
     assert gate.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING) == expected
@@ -320,18 +323,18 @@ def test_gate_state_maps_pass_to_success_and_everything_else_to_failure() -> Non
 
 
 def test_status_payload_posts_the_gate_context() -> None:
-    payload = gate.status_payload(gate.PASS, "oracle-review: pass (oracle verdict for " + HEAD + ")")
+    payload = gate.status_payload(gate.PASS, "review: pass (review verdict for " + HEAD + ")")
     assert payload == {
         "state": "success",
-        "context": "oracle-gate",
-        "description": "oracle-review: pass (oracle verdict for " + HEAD + ")",
+        "context": "review-gate",
+        "description": "review: pass (review verdict for " + HEAD + ")",
     }
 
 
 def test_status_payload_clips_long_descriptions_to_the_api_limit() -> None:
     payload = gate.status_payload(gate.WAITING, "x" * 200, "https://example.invalid/run")
     assert payload["state"] == "failure"
-    assert payload["context"] == "oracle-gate"
+    assert payload["context"] == "review-gate"
     assert len(payload["description"]) == gate.DESCRIPTION_LIMIT
     assert payload["target_url"] == "https://example.invalid/run"
 
@@ -371,10 +374,12 @@ def status_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]
 
 
 def test_post_status_writes_the_gate_context_to_the_head(status_api: list[dict[str, Any]]) -> None:
-    gate.post_status("token", "o/r", HEAD, gate.PASS, "oracle-review: pass")
-    assert [(item["path"], item["auth"]) for item in status_api] == [(f"/repos/o/r/statuses/{HEAD}", "Bearer token")]
-    assert status_api[0]["body"]["context"] == "oracle-gate"
-    assert status_api[0]["body"]["state"] == "success"
+    gate.post_status("token", "o/r", HEAD, gate.PASS, "review: pass")
+    assert [(item["path"], item["auth"]) for item in status_api] == [
+        (f"/repos/o/r/statuses/{HEAD}", "Bearer token")
+    ] * 2
+    assert [item["body"]["context"] for item in status_api] == ["oracle-gate", "review-gate"]
+    assert {item["body"]["state"] for item in status_api} == {"success"}
 
 
 def test_post_status_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,14 +414,14 @@ def _stub_evaluate(monkeypatch: pytest.MonkeyPatch, status: int, message: str) -
 
 
 def test_main_posts_success_and_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    posted = _stub_evaluate(monkeypatch, gate.PASS, "oracle-review: pass")
+    posted = _stub_evaluate(monkeypatch, gate.PASS, "review: pass")
     assert gate.main([*BASE_ARGS]) == 0
     assert (posted["repo"], posted["pr"], posted["token"]) == ("o/r", 7, "token")
     assert posted["state"] == "success" and posted["head"] == HEAD
 
 
 def test_main_posts_failure_and_exits_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_evaluate(monkeypatch, gate.WAITING, "oracle-review: waiting")
+    _stub_evaluate(monkeypatch, gate.WAITING, "review: waiting")
     assert gate.main([*BASE_ARGS]) == gate.WAITING
 
 
@@ -998,7 +1003,7 @@ def test_pending_first_cannot_be_combined_with_no_post(monkeypatch: pytest.Monke
 def test_the_pending_payload_is_a_pending_gate_status() -> None:
     assert gate.pending_payload("https://example.invalid/run") == {
         "state": "pending",
-        "context": "oracle-gate",
+        "context": "review-gate",
         "description": gate.PENDING_DESCRIPTION,
         "target_url": "https://example.invalid/run",
     }

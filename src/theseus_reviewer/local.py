@@ -45,17 +45,17 @@ from .verdict import DO_NOT_SHIP, Finding
 BLOCKING_SEVERITIES = ("Critical", "High")
 KEYCHAIN_SERVICE = "TYPESAFE_API_KEY"
 KEYCHAIN_STEP = f'security add-generic-password -s {KEYCHAIN_SERVICE} -a "$USER" -w'
-LOCAL_CLIENT = "oracle-local"
-CLOUD_CLIENT = "oracle-cloud"
+LOCAL_CLIENT = "review-local"
+CLOUD_CLIENT = "review-cloud"
 LOCAL_GATEWAY_URL = "http://127.0.0.1:4000"
-GATEWAY_DIRECTORY = Path(".omp") / "oracle-gateway"
+GATEWAY_DIRECTORY = Path(".omp") / "review-gateway"
 LOCAL_TOKEN_PATH = GATEWAY_DIRECTORY / "local-client.token"
 HOST_TOKEN_FILES = {
-    "ORACLE_HOST_TOKEN_LOCAL": GATEWAY_DIRECTORY / "local-client.token",
-    "ORACLE_HOST_TOKEN_CLOUD": GATEWAY_DIRECTORY / "cloud-client.token",
-    "ORACLE_HOST_TOKEN_CLIENT": GATEWAY_DIRECTORY / "client.token",
+    "REVIEW_HOST_TOKEN_LOCAL": GATEWAY_DIRECTORY / "local-client.token",
+    "REVIEW_HOST_TOKEN_CLOUD": GATEWAY_DIRECTORY / "cloud-client.token",
+    "REVIEW_HOST_TOKEN_CLIENT": GATEWAY_DIRECTORY / "client.token",
 }
-CLOUD_TOKEN_ENV = "ORACLE_CLOUD_GATEWAY_TOKEN"
+CLOUD_TOKEN_ENV = "REVIEW_CLOUD_GATEWAY_TOKEN"
 CLOUD_SESSION_ENV = "THESEUS_EPHEMERAL_CLONE"
 CLOUD_STATUS_FILE = "theseus-cloud-gateway.status"
 TRUSTED_POLICY_FILE = "policy.yml"
@@ -80,25 +80,25 @@ MEMBER_FINDINGS = "findings"
 MEMBER_NOT_REVIEWED = "not-reviewed"
 MEMBER_OVERRIDE = "override"
 FULL_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
-ADVISORY = "Local oracle review (advisory; it may differ from the CI oracle and posts nothing to GitHub)"
+ADVISORY = "Local review (advisory; it may differ from the CI review and posts nothing to GitHub)"
 WITHHELD_FROM_PHASES = frozenset(
     {*credentials.NAMES, "TS_AUTHKEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", *HOST_TOKEN_FILES}
 )
-HANDOVER_ENV = "ORACLE_LOCAL_HANDOVER_FD"
-ROOT_ENV = "ORACLE_LOCAL_ROOT"
-WORK_ENV = "ORACLE_LOCAL_WORK"
-BASE_ENV = "ORACLE_LOCAL_BASE"
-HEAD_ENV = "ORACLE_LOCAL_HEAD"
-PR_ENV = "ORACLE_LOCAL_PR"
-REPOSITORY_ENV = "ORACLE_LOCAL_REPOSITORY"
-STATE_ENV = "ORACLE_LOCAL_STATE"
-PROXY_ENV = "ORACLE_LOCAL_PROXY"
-SCAN_ENV = "ORACLE_LOCAL_SCAN"
-REBUTTALS_ENV = "ORACLE_LOCAL_REBUTTALS"
-RECORD_OUT_ENV = "ORACLE_LOCAL_RECORD_OUT"
-ADJUDICATE_ENV = "ORACLE_LOCAL_ADJUDICATE"
-EXCLUDE_ENV = "ORACLE_LOCAL_EXCLUDE"
-TRUSTED_ENV = "ORACLE_LOCAL_TRUSTED"
+HANDOVER_ENV = "REVIEW_LOCAL_HANDOVER_FD"
+ROOT_ENV = "REVIEW_LOCAL_ROOT"
+WORK_ENV = "REVIEW_LOCAL_WORK"
+BASE_ENV = "REVIEW_LOCAL_BASE"
+HEAD_ENV = "REVIEW_LOCAL_HEAD"
+PR_ENV = "REVIEW_LOCAL_PR"
+REPOSITORY_ENV = "REVIEW_LOCAL_REPOSITORY"
+STATE_ENV = "REVIEW_LOCAL_STATE"
+PROXY_ENV = "REVIEW_LOCAL_PROXY"
+SCAN_ENV = "REVIEW_LOCAL_SCAN"
+REBUTTALS_ENV = "REVIEW_LOCAL_REBUTTALS"
+RECORD_OUT_ENV = "REVIEW_LOCAL_RECORD_OUT"
+ADJUDICATE_ENV = "REVIEW_LOCAL_ADJUDICATE"
+EXCLUDE_ENV = "REVIEW_LOCAL_EXCLUDE"
+TRUSTED_ENV = "REVIEW_LOCAL_TRUSTED"
 STATUS_NAMES = {"A": "added", "C": "added", "D": "removed", "R": "renamed"}
 GITHUB_ACCESS_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
 SCRUBBED_AT_START = frozenset({*credentials.NAMES, "TS_AUTHKEY", *GITHUB_ACCESS_ENV})
@@ -139,7 +139,7 @@ class Reporter:
 
 def state_dir() -> Path:
     configured = os.environ.get(LOCAL_STATE_OVERRIDE_ENV, "").strip()
-    return Path(configured) if configured else Path.home() / ".cache" / "theseus" / "local-oracle"
+    return Path(configured) if configured else Path.home() / ".cache" / "theseus" / "local-review"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -296,14 +296,14 @@ class LocalEnvironment:
 
     def isolation(self) -> int:
         if not sys.platform.startswith("linux"):
-            print("oracle-local: process isolation checks need Linux and were skipped on this machine")
+            print("review-local: process isolation checks need Linux and were skipped on this machine")
             return 0
         try:
             isolation.require_isolation()
         except (OSError, ValueError, KeyError) as exc:
-            print(f"oracle-local: isolation prerequisite not met, the review runs without it: {exc}")
+            print(f"review-local: isolation prerequisite not met, the review runs without it: {exc}")
             return 0
-        print("oracle-local: Linux non-root UID, ptrace capabilities and Yama prerequisite passed")
+        print("review-local: Linux non-root UID, ptrace capabilities and Yama prerequisite passed")
         return 0
 
     def plan(self) -> int:
@@ -314,7 +314,7 @@ class LocalEnvironment:
         try:
             return self._plan(policy, out_dir, pr)
         except Unavailable as exc:
-            print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+            print(f"review-verdict: error: {exc}", file=sys.stderr)
             return 2
 
     def _plan(self, policy: Policy, out_dir: Path, pr: int | None) -> int:
@@ -342,7 +342,7 @@ class LocalEnvironment:
             try:
                 found = cli._plan_history(self.repo, pr, policy.bot_login)
             except edits.EditStateError as exc:
-                print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+                print(f"review-verdict: error: {exc}", file=sys.stderr)
                 return 2
             if found.error is not None:
                 plan.update({"decision": cli.HOLD, "decision_reason": found.error})
@@ -433,10 +433,10 @@ def cloud_gateway_proxy() -> str:
 def resolve_credentials(environ: Mapping[str, str] | None = None) -> Credentials:
     env = {**os.environ, **_handed_over} if environ is None else environ
     if env.get(CLOUD_TOKEN_ENV) or env.get(CLOUD_SESSION_ENV) == "1":
-        url = env.get("ORACLE_GATEWAY_URL", "").strip()
+        url = env.get("REVIEW_GATEWAY_URL", "").strip()
         token = env.get(CLOUD_TOKEN_ENV, "").strip()
         if not url or not token:
-            raise Unavailable(f"the {CLOUD_CLIENT} client needs ORACLE_GATEWAY_URL and {CLOUD_TOKEN_ENV}")
+            raise Unavailable(f"the {CLOUD_CLIENT} client needs REVIEW_GATEWAY_URL and {CLOUD_TOKEN_ENV}")
         return Credentials(CLOUD_CLIENT, url, token, cloud_gateway_proxy())
     path = Path.home() / LOCAL_TOKEN_PATH
     try:
@@ -704,11 +704,9 @@ def exclusive(lock_path: Path, reporter: Reporter, holder: str = "") -> Iterator
                 break
             except OSError:
                 if time.monotonic() >= deadline:
-                    raise Unavailable("another local oracle review of this patch kept running") from None
+                    raise Unavailable("another local review of this patch kept running") from None
                 if not announced:
-                    reporter.say(
-                        f"Waiting for another local oracle review of this patch to finish{_held_by(lock_path)}."
-                    )
+                    reporter.say(f"Waiting for another local review of this patch to finish{_held_by(lock_path)}.")
                     announced = True
                 time.sleep(LOCK_POLL_SECONDS)
         try:
@@ -832,7 +830,7 @@ class Run:
         gateway = (
             {}
             if self.access is None
-            else {"OMP_GATEWAY_TOKEN": self.access.token, "ORACLE_GATEWAY_URL": self.access.url}
+            else {"OMP_GATEWAY_TOKEN": self.access.token, "REVIEW_GATEWAY_URL": self.access.url}
         )
         key = {"TYPESAFE_API_KEY": self.key} if self.key else {}
         hosts = host_token_values()
@@ -880,7 +878,7 @@ class Run:
 
     def _relay(self, phase: str, result: subprocess.CompletedProcess[str]) -> None:
         for line in result.stdout.splitlines():
-            if line.startswith(("slot ", "oracle-verdict:", "oracle-local:")) and line not in self.relayed:
+            if line.startswith(("slot ", "review-verdict:", "review-local:")) and line not in self.relayed:
                 self.relayed.add(line)
                 self.reporter.say(line)
         if result.returncode != 0:
@@ -948,7 +946,7 @@ def _persist_pool_blocks(run: Run) -> None:
 def _attempt_loop(run: Run, plan: Mapping[str, Any]) -> None:
     previous = -1
     for _ in range(int(plan["max_attempts"])):
-        code, values = run.phase("attempts", {"ORACLE_OMP_BINARY": run.omp_binary})
+        code, values = run.phase("attempts", {"REVIEW_OMP_BINARY": run.omp_binary})
         if code != 0:
             raise Unavailable("the reviewer's exit could not be confirmed clean")
         recovered, _ = run.phase("recover")
@@ -968,7 +966,7 @@ def _install_harness(run: Run) -> None:
         raise Unavailable("the pinned omp build could not be installed")
     for line in env_file.read_text(encoding="utf-8").splitlines():
         name, _, value = line.partition("=")
-        if name == "ORACLE_OMP_BINARY":
+        if name == "REVIEW_OMP_BINARY":
             run.omp_binary = value
 
 
@@ -1022,10 +1020,10 @@ class Refused(Exception):
 
 def _decide(outcome: Outcome, reporter: Reporter) -> int:
     if not outcome.blocked:
-        reporter.say("Local oracle review: no Critical or High findings; pr-open may proceed.")
+        reporter.say("Local review: no Critical or High findings; pr-open may proceed.")
         return EXIT_PROCEED
     reporter.say(
-        f"Refusing to open the PR: the local oracle review decided {outcome.label} with Critical or High findings "
+        f"Refusing to open the PR: the local review decided {outcome.label} with Critical or High findings "
         "or too many open defects. Fix them, or dispute a finding with a keyed rebuttal "
         "(REBUTTALS_FILE=<JSON object of finding id to a rebuttal with a line that starts 'Dispute:'>); "
         "the reviewer that raised it re-judges it.",
@@ -1093,7 +1091,7 @@ def _planned(run: Run, previous: Mapping[str, Any] | None) -> tuple[dict[str, An
             return plan, Outcome(False, "SHIP", "", "", (), skipped=str(plan["decision_reason"]))
         run.reporter.say(f"{ADVISORY}: the recorded review stands ({plan['decision_reason']}).")
         return plan, known
-    raise Unavailable(f"the oracle holds this change ({decision}): {plan['decision_reason']}")
+    raise Unavailable(f"the review holds this change ({decision}): {plan['decision_reason']}")
 
 
 def _reviewed(run: Run, trusted: Trusted, previous: Mapping[str, Any] | None) -> Outcome:
@@ -1164,7 +1162,7 @@ def _run_review(
     if not member:
         with _github_access():
             pr = open_pull(repository, _current_branch(root))
-    work = Path(tempfile.mkdtemp(prefix="oracle-local-"))
+    work = Path(tempfile.mkdtemp(prefix="review-local-"))
     try:
         trusted_root = work / "trusted"
         policy = trusted.write(trusted_root)
@@ -1322,5 +1320,5 @@ def command_review(args: argparse.Namespace) -> int:
         reporter.say(f"Refusing {subject}: {exc}", error=True)
         return EXIT_REFUSED
     except Unavailable as exc:
-        reporter.say(f"Refusing {subject}: the local oracle review is unavailable: {exc}", error=True)
+        reporter.say(f"Refusing {subject}: the local review is unavailable: {exc}", error=True)
         return EXIT_UNAVAILABLE

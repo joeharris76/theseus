@@ -13,7 +13,7 @@ Theseus is a merge gate: issues that let a pull request author bypass review or 
 - Candidate code (fork PRs, unmerged heads, candidate builds) is untrusted and never receives App, tailnet, trusted-publisher or other secret-bearing environment access.
 - Gate identity, attesters, gated branch and policy paths come from trusted consumer policy on the gated branch; the package carries no defaults.
 - Installers verify artifact and dependency hashes before executing any bytes.
-- Until a separately authenticated Theseus oracle gate is live, merges require owner full-diff review.
+- Until a separately authenticated Theseus review gate is live, merges require owner full-diff review.
 
 ## Supported versions
 

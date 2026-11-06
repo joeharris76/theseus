@@ -9,19 +9,19 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import protocol
+from theseus_reviewer import legacy, protocol
 from theseus_reviewer.policy import load_policy
 
 from .harness import PINNED_OMP, REPO_ROOT, Harness, ReviewRun, Step
 
-GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "oracle_golden"
-UPDATE_ENV = "ORACLE_GOLDEN_UPDATE"
+GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "review_golden"
+UPDATE_ENV = "REVIEW_GOLDEN_UPDATE"
 FINAL_FILES = ("status.json", "comment.json", "review.json", "state/state.json", "attempt/state.json")
 SHA = re.compile(r"\b[0-9a-f]{40}\b")
 MOMENT = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)")
 RUN_URL = re.compile(r"/actions/runs/\d+")
 RUN_REF = re.compile(r"\[run \d+\]")
-MARKER = re.compile(r"<!-- oracle-protocol: v1 [A-Za-z0-9_-]+ -->")
+MARKER = re.compile(r"<!-- review-protocol: v1 [A-Za-z0-9_-]+ -->")
 FENCE = re.compile(r"(?<![0-9a-f])[0-9a-f]{16}-(BEGIN|END) ")
 RUN_UUID = re.compile(r'\\"run_uuid\\": \\"\d+\\"')
 VOLATILE_KEYS = frozenset({"run_id", "run_uuid", "created_at", "omp_sha256"})
@@ -29,7 +29,7 @@ VOLATILE_KEYS = frozenset({"run_id", "run_uuid", "created_at", "omp_sha256"})
 
 def _attempts(run: ReviewRun) -> list[Any]:
     found: list[Any] = []
-    for path in sorted((run.temp / "oracle-attempts").glob("attempt-*.json")):
+    for path in sorted((run.temp / "review-attempts").glob("attempt-*.json")):
         try:
             found.append(json.loads(path.read_text(encoding="utf-8")))
         except ValueError:
@@ -43,7 +43,7 @@ def _json(path: Path) -> Any:
 
 PLAN_OUTPUTS = ("decision", "post", "pr", "head_sha")
 FINALIZE_OUTPUTS = ("state", "comment", "review", "has_state")
-ATTEMPT_PREFIX = "oracle-verdict-attempt-"
+ATTEMPT_PREFIX = "review-verdict-attempt-"
 
 
 def _picked(step: Step | None, keys: tuple[str, ...]) -> dict[str, Any] | None:
@@ -83,6 +83,7 @@ def posted(harness: Harness, pr: int, head: str) -> dict[str, Any]:
                 "creator": item["creator"]["login"],
             }
             for item in github.statuses.get(head, [])
+            if item["context"] not in legacy.STATUS_CONTEXT_PAIRS.values()
         ],
         "reviews": [
             {"body": item["body"], "commit_id": item["commit_id"], "creator": item["user"]["login"]}
@@ -108,7 +109,7 @@ def _plan(harness: Harness, run: ReviewRun) -> dict[str, Any]:
 
 
 def run_capture(harness: Harness, run: ReviewRun, pr: int, head: str) -> dict[str, Any]:
-    final = run.temp / "oracle-final"
+    final = run.temp / "review-final"
     return {
         "steps": logical_steps(run),
         "plan": _plan(harness, run),
@@ -122,7 +123,7 @@ def run_capture(harness: Harness, run: ReviewRun, pr: int, head: str) -> dict[st
 
 def _marker(match: re.Match[str]) -> str:
     decoded = protocol.decode_marker(match.group(0))
-    return f"<!-- oracle-protocol: {json.dumps(decoded, sort_keys=True)} -->"
+    return f"<!-- review-protocol: {json.dumps(decoded, sort_keys=True)} -->"
 
 
 def _scrub_keys(value: Any) -> Any:

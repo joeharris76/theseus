@@ -108,7 +108,7 @@ def recent_dispatches(runs: Iterable[Run], now: datetime) -> int:
 
 def surface_description(steps: Iterable[str]) -> str:
     named = "; ".join(steps) if steps else "an earlier step"
-    description = f"{SWEEP_FAILURE_SURFACE_PREFIX}{named}. Rerun with /oracle-review or push a fix"
+    description = f"{SWEEP_FAILURE_SURFACE_PREFIX}{named}. Rerun with /review or push a fix"
     if len(description) > STATUS_DESCRIPTION_LIMIT:
         description = description[: STATUS_DESCRIPTION_LIMIT - 1] + "…"
     return description

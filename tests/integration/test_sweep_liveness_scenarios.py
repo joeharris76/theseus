@@ -26,15 +26,15 @@ def test_a_due_pending_head_whose_dispatches_keep_failing_is_surfaced_instead_of
     harness.github.age(run, 600)
     _failed_dispatch(harness, 71, head, 90, "Run the attempt loop")
     last = _failed_dispatch(harness, 71, head, 30, "Run the attempt loop")
-    posted = len(harness.github.oracle_statuses(head))
+    posted = len(harness.github.review_statuses(head))
 
     first = harness.sweep()
     second = harness.sweep()
 
     assert (first.code, second.code) == (0, 0)
     assert _verdict_dispatches(harness) == []
-    surfaced = harness.github.oracle_statuses(head)[posted:]
-    assert [(item["state"], item["creator"]["login"]) for item in surfaced] == [("pending", "benchbox-oracle[bot]")]
+    surfaced = harness.github.review_statuses(head)[posted:]
+    assert [(item["state"], item["creator"]["login"]) for item in surfaced] == [("pending", "benchbox-review[bot]")]
     assert surfaced[0]["target_url"].endswith(f"/actions/runs/{last['id']}")
 
 
@@ -42,7 +42,7 @@ def test_a_due_pending_head_with_one_failed_dispatch_is_dispatched_once_more(har
     head, run = _pending_review(harness, 72, "feat/once-more")
     harness.github.age(run, 600)
     _failed_dispatch(harness, 72, head, 30, "Run the attempt loop")
-    posted = len(harness.github.oracle_statuses(head))
+    posted = len(harness.github.review_statuses(head))
 
     sweep = harness.sweep()
 
@@ -50,7 +50,7 @@ def test_a_due_pending_head_with_one_failed_dispatch_is_dispatched_once_more(har
     assert _verdict_dispatches(harness) == [
         {"workflow": VERDICT, "ref": "develop", "inputs": {"pr": "72", "head": head}}
     ]
-    assert harness.github.oracle_statuses(head)[posted:] == []
+    assert harness.github.review_statuses(head)[posted:] == []
 
 
 def test_a_cancelled_run_is_not_counted_as_a_failure_without_a_result(harness: Harness) -> None:
@@ -67,7 +67,7 @@ def test_a_cancelled_run_is_not_counted_as_a_failure_without_a_result(harness: H
     assert _verdict_dispatches(harness) == [
         {"workflow": VERDICT, "ref": "develop", "inputs": {"pr": "73", "head": head, "reason": "stateless-retry"}}
     ]
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
 
 
 def test_a_failure_recorded_for_another_head_does_not_redispatch_the_current_head(harness: Harness) -> None:
@@ -79,7 +79,7 @@ def test_a_failure_recorded_for_another_head_does_not_redispatch_the_current_hea
 
     assert sweep.code == 0, sweep.stderr
     assert _verdict_dispatches(harness) == []
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
 
 
 def test_a_runs_listing_capped_at_every_window_fails_the_sweep_and_holds_the_due_retry(harness: Harness) -> None:
@@ -93,7 +93,7 @@ def test_a_runs_listing_capped_at_every_window_fails_the_sweep_and_holds_the_due
 
     assert sweep.code == 1
     assert _verdict_dispatches(harness) == []
-    assert harness.github.oracle_statuses(head)[-1]["state"] == "pending"
+    assert harness.github.review_statuses(head)[-1]["state"] == "pending"
 
 
 def test_a_marked_retry_the_plan_refuses_fails_its_run(harness: Harness) -> None:
@@ -116,7 +116,7 @@ def test_a_dispatch_for_a_superseded_head_reviews_nothing_and_succeeds(harness: 
 
 
 TIMEOUT = "The job has exceeded the maximum execution time of 255m0s"
-CONCURRENCY = "Canceling since a higher priority waiting request for oracle-verdict-pr-78 exists"
+CONCURRENCY = "Canceling since a higher priority waiting request for review-verdict-pr-78 exists"
 
 
 def _cancelled(harness: Harness, pr: int, head: str, minutes: int, annotation: str) -> dict:
@@ -136,7 +136,7 @@ def test_a_run_cancelled_by_the_job_timeout_counts_as_a_failure_and_is_surfaced(
 
     assert sweep.code == 0, sweep.stderr
     assert _verdict_dispatches(harness) == []
-    surfaced = harness.github.oracle_statuses(head)
+    surfaced = harness.github.review_statuses(head)
     assert [item["state"] for item in surfaced] == ["pending"]
 
 
@@ -150,7 +150,7 @@ def test_a_run_cancelled_by_concurrency_is_not_a_failure(harness: Harness) -> No
 
     assert sweep.code == 0, sweep.stderr
     assert [item["inputs"].get("reason") for item in _verdict_dispatches(harness)] == ["stateless-retry"]
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
 
 
 def _shared_head(harness: Harness, first: int, second: int, branch: str) -> str:
@@ -165,7 +165,7 @@ def _app_status(harness: Harness, head: str, state: str, description: str, run: 
         {
             "id": run["id"] + 5,
             "state": state,
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "description": description,
             "target_url": f"https://github.com/{SLUG}/actions/runs/{run['id']}",
             "creator": ACCOUNTS[APP_TOKEN],
@@ -182,7 +182,7 @@ def test_another_pull_requests_decisive_status_on_a_shared_head_does_not_suppres
     published = harness.github.add_run(VERDICT, event="pull_request_target", pr=81, head_sha=head, title_head=head)
     harness.github.complete_run(published, "success")
     harness.github.age(published, 120)
-    _app_status(harness, head, "success", "oracle-verdict: SHIP", published)
+    _app_status(harness, head, "success", "review-verdict: SHIP", published)
     _failed_run(harness, 82, head, "pull_request_target", 40, "Run the attempt loop")
 
     sweep = harness.sweep()
@@ -198,7 +198,7 @@ def test_another_pull_requests_surfaced_hold_on_a_shared_head_does_not_suppress_
 ) -> None:
     head = _shared_head(harness, 83, 84, "feat/shared-hold")
     failed = _failed_run(harness, 83, head, "pull_request_target", 90, "Run the attempt loop")
-    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /oracle-review or push a fix"
+    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /review or push a fix"
     _app_status(harness, head, "pending", hold, failed)
     _failed_run(harness, 84, head, "pull_request_target", 40, "Run the attempt loop")
 
@@ -214,7 +214,7 @@ def test_this_pull_requests_own_surfaced_hold_from_a_run_older_than_the_listing_
     head = harness.branch("feat/own-hold", {"benchbox/core/equivalence/checker.py": "x = 1\n"}, "change")
     harness.github.open_pull(85, "feat/own-hold")
     old = _failed_run(harness, 85, head, "pull_request_target", 60 * 72, "Run the attempt loop")
-    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /oracle-review or push a fix"
+    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /review or push a fix"
     _app_status(harness, head, "pending", hold, old)
     _failed_run(harness, 85, head, "pull_request_target", 40, "Run the attempt loop")
 
@@ -242,7 +242,7 @@ def test_a_decisive_status_from_before_a_base_retarget_does_not_suppress_recover
     published = harness.github.add_run(VERDICT, event="pull_request_target", pr=86, head_sha=head, title_head=head)
     harness.github.complete_run(published, "success")
     harness.github.age(published, 180)
-    _aged_app_status(harness, head, "success", "oracle-verdict: SHIP", published, 180)
+    _aged_app_status(harness, head, "success", "review-verdict: SHIP", published, 180)
     _retarget(harness, 86, 120)
     _failed_run(harness, 86, head, "pull_request_target", 40, "Run the attempt loop")
 
@@ -260,7 +260,7 @@ def test_a_decisive_status_from_after_a_base_retarget_still_suppresses_recovery(
     _retarget(harness, 87, 180)
     published = harness.github.add_run(VERDICT, event="pull_request_target", pr=87, head_sha=head, title_head=head)
     harness.github.complete_run(published, "success")
-    _aged_app_status(harness, head, "success", "oracle-verdict: SHIP", published, 120)
+    _aged_app_status(harness, head, "success", "review-verdict: SHIP", published, 120)
     _failed_run(harness, 87, head, "pull_request_target", 40, "Run the attempt loop")
 
     sweep = harness.sweep()
@@ -277,7 +277,7 @@ def test_a_surfaced_hold_from_before_a_base_retarget_does_not_suppress_recovery_
     old = harness.github.add_run(VERDICT, event="pull_request_target", pr=88, head_sha=head, title_head=head)
     harness.github.complete_run(old, "success")
     harness.github.age(old, 200)
-    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /oracle-review or push a fix"
+    hold = f"{SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun with /review or push a fix"
     _aged_app_status(harness, head, "pending", hold, old, 180)
     _retarget(harness, 88, 120)
     _failed_run(harness, 88, head, "pull_request_target", 40, "Run the attempt loop")

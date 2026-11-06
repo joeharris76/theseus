@@ -201,28 +201,28 @@ def test_verify_wheel_matches_source_rejects_tampered_bytes_extra_files_and_pth_
 
 def test_bootstrap_path_map_and_delta_digests_are_deterministic() -> None:
     benchbox_tree = {
-        "_project/scripts/oracle_reviewers/cli.py": b"def run():\n    return 1\n",
-        "_project/scripts/oracle_gate.py": b"GATE = True\n",
+        "_project/scripts/reviewers/cli.py": b"def run():\n    return 1\n",
+        "_project/scripts/review_gate.py": b"GATE = True\n",
         "benchbox/core/unrelated.py": b"UNRELATED = 1\n",
     }
     path_map = {
-        "_project/scripts/oracle_reviewers": "src/theseus_reviewer",
-        "_project/scripts/oracle_gate.py": "src/theseus_reviewer/oracle_gate.py",
+        "_project/scripts/reviewers": "src/theseus_reviewer",
+        "_project/scripts/review_gate.py": "src/theseus_reviewer/review_gate.py",
     }
     mapped_old = promotion.apply_path_map(benchbox_tree, path_map)
     assert set(mapped_old) == {
         "src/theseus_reviewer/cli.py",
-        "src/theseus_reviewer/oracle_gate.py",
+        "src/theseus_reviewer/review_gate.py",
     }
     new_tree = {
         "src/theseus_reviewer/cli.py": b"def run():\n    return 2\n",
-        "src/theseus_reviewer/oracle_gate.py": b"GATE = True\n",
+        "src/theseus_reviewer/review_gate.py": b"GATE = True\n",
         "src/theseus_reviewer/new_mod.py": b"NEW = True\n",
     }
     changed, diff_text, delta_sha = promotion.compute_upstream_delta(mapped_old, new_tree)
     assert [item.path for item in changed] == [
-        ".oracle-promotion/new/src/theseus_reviewer/cli.py",
-        ".oracle-promotion/new/src/theseus_reviewer/new_mod.py",
+        ".review-promotion/new/src/theseus_reviewer/cli.py",
+        ".review-promotion/new/src/theseus_reviewer/new_mod.py",
     ]
     assert "+    return 2" in diff_text and "+NEW = True" in diff_text
     assert len(delta_sha) == 64
@@ -273,12 +273,12 @@ def test_baseline_archive_is_bounded_only_by_the_mapped_paths(monkeypatch: pytes
 def test_unrooted_archive_keeps_leading_dot_paths() -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name in [".github/oracle-reviewers.yml", "./.gitignore", "src/a.py"]:
+        for name in [".github/review.yml", "./.gitignore", "src/a.py"]:
             info = tarfile.TarInfo(name)
             info.size = 1
             archive.addfile(info, io.BytesIO(b"x"))
     assert set(promotion.extract_tar_tree(buffer.getvalue())) == {
-        ".github/oracle-reviewers.yml",
+        ".github/review.yml",
         ".gitignore",
         "src/a.py",
     }
@@ -329,7 +329,7 @@ def test_promotion_rounds_never_carry_across_byte_identical_rebase_while_ordinar
         base_ref="develop",
         digest="d" * 32,
         patches={"abcd1234": "0123456789abcdef"},
-        paths=[".github/theseus-lock.json", ".oracle-promotion/new/src/theseus_reviewer/cli.py"],
+        paths=[".github/theseus-lock.json", ".review-promotion/new/src/theseus_reviewer/cli.py"],
         strike_count=0,
         max_do_not_ship=3,
         is_promotion=True,
@@ -406,15 +406,15 @@ def test_stage_promotion_workspace_is_git_ignored_and_detects_tampering(tmp_path
     assert promotion.staged_tree_digest(ws) != before
 
 
-def test_planted_oracle_promotion_directory_is_refused(tmp_path: Path) -> None:
+def test_planted_review_promotion_directory_is_refused(tmp_path: Path) -> None:
     ws = tmp_path / "ws-planted"
     ws.mkdir()
     subprocess.run(["git", "-C", str(ws), "init", "--quiet"], check=True)
-    planted = ws / ".oracle-promotion" / "new"
+    planted = ws / ".review-promotion" / "new"
     planted.mkdir(parents=True)
     (planted / "a.py").write_text("benign\n", encoding="utf-8")
     subprocess.run(
-        ["git", "-C", str(ws), "-c", "user.name=t", "-c", "user.email=t@e", "add", ".oracle-promotion/new/a.py"],
+        ["git", "-C", str(ws), "-c", "user.name=t", "-c", "user.email=t@e", "add", ".review-promotion/new/a.py"],
         check=True,
     )
     subprocess.run(
@@ -447,7 +447,7 @@ def test_removed_upstream_files_stage_under_old_and_duplicate_path_map_keys_fail
         {},
     )
     assert len(changed) == 1
-    assert changed[0].path == ".oracle-promotion/old/src/guard.py"
+    assert changed[0].path == ".review-promotion/old/src/guard.py"
     assert changed[0].status == "removed"
     assert changed[0].deletions == 2
 
@@ -807,7 +807,7 @@ def test_local_lock_renames_resolve_only_canonical_base_and_head(
     head_sha = git("rev-parse", "HEAD")
     with pytest.raises(promotion.PromotionError, match="git ls-tree"):
         cli._git_lock_text(tmp_path, "f" * 40)
-    monkeypatch.setenv("ORACLE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setenv("REVIEW_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr(promotion, "default_source_loader", lambda **_kwargs: inputs["source_loader"])
     monkeypatch.setattr(promotion, "default_artifact_loader", lambda: inputs["artifact_loader"])
     monkeypatch.setattr(promotion, "local_ancestor_check", lambda _root: inputs["is_ancestor"])
@@ -888,7 +888,7 @@ STAGED_NEW = f"{promotion.STAGED_PROMOTION_DIR}/new/"
 STAGED_OLD = f"{promotion.STAGED_PROMOTION_DIR}/old/"
 THESEUS = "joeharris76/theseus"
 CONSUMER_WORKFLOWS = {
-    ".github/workflows/oracle.yml": (
+    ".github/workflows/review.yml": (
         "jobs:\n"
         "  review:\n"
         f"    uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"

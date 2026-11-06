@@ -5,13 +5,18 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
+from . import legacy
+
 OWNER_INSTRUCTION = "Owner instruction"
 REASON_LIMIT = 200
-_RESET = re.compile(r"Oracle backoff reset: (?P<sha>[0-9a-f]{40})\nReason: (?P<reason>[^\n]+)")
+RESET_PREFIX = "Review backoff reset: "
+_RESET = re.compile(
+    rf"(?:{re.escape(RESET_PREFIX)}|{re.escape(legacy.BACKOFF_RESET_PREFIX)})(?P<sha>[0-9a-f]{{40}})\nReason: (?P<reason>[^\n]+)"
+)
 
 
 def reset_body(head_sha: str, reason: str) -> str:
-    return f"Oracle backoff reset: {head_sha}\nReason: {reason}"
+    return f"{RESET_PREFIX}{head_sha}\nReason: {reason}"
 
 
 def valid_reason(reason: str) -> bool:

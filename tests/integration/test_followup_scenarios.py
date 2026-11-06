@@ -27,7 +27,7 @@ def _first_round(harness: Harness, pr: int) -> str:
     )
     run = harness.review(pr)
     head = run.plan["head_sha"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     assert [thread["path"] for thread in harness.github.threads[pr]] == [CHECKER]
     return head
 
@@ -50,8 +50,8 @@ def test_follow_up_with_a_fixed_prior_defect_ships(harness: Harness) -> None:
 
     assert run.plan["protocol"]["kind"] == "follow-up"
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
-    assert f"### oracle-verdict: success for `{head}`" in harness.github.reviews[51][-1]["body"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
+    assert f"### review-verdict: success for `{head}`" in harness.github.reviews[51][-1]["body"]
 
 
 def test_dispute_round_rejudges_the_disputed_finding_and_ships(harness: Harness) -> None:
@@ -81,7 +81,7 @@ def test_dispute_round_rejudges_the_disputed_finding_and_ships(harness: Harness)
     assert run.plan["protocol"]["kind"] == "follow-up", run.plan["decision_reason"]
     assert [(item["id"], item["path"]) for item in run.plan["disputes"]] == [("D1", CHECKER)]
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def test_dispute_round_keeps_a_blocking_verdict_whose_rebuttal_claim_is_paraphrased(harness: Harness) -> None:
@@ -123,7 +123,7 @@ def test_dispute_round_keeps_a_blocking_verdict_whose_rebuttal_claim_is_paraphra
     assert [(item["id"], item["path"]) for item in run.plan["disputes"]] == [("D1", CHECKER)]
     assert harness.omp_calls() == 1
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     assert "does not restate one of its rebuttal replies" in harness.github.reviews[53][-1]["body"]
 
 
@@ -156,7 +156,7 @@ def test_dispute_round_accepts_a_citation_to_a_hidden_path(harness: Harness, sta
     run = harness.review(54)
 
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def test_dispute_round_publishes_the_override_note_after_a_maximum_length_maintain(harness: Harness) -> None:
@@ -206,7 +206,7 @@ def test_dispute_round_accepts_a_citation_to_any_valid_filename(harness: Harness
     run = harness.review(56)
 
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 @pytest.mark.parametrize(
@@ -239,5 +239,5 @@ def test_dispute_round_replays_a_withdrawal_whose_rebuttal_needs_repeated_saniti
     run = harness.review(57)
 
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
     assert run.attempts()[0]["outcome"] == "verdict"

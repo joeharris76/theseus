@@ -131,7 +131,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     initial_delta = promotion.compute_delta_sha256({}, old_files)
     harness.write(
         {
-            ".github/oracle-reviewers.yml": dumped_policy,
+            ".github/review.yml": dumped_policy,
             promotion.LOCK_PATH: _lock_json(
                 version="0.1.0",
                 source_commit=OLD_COMMIT,
@@ -192,7 +192,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
         "feat/untrusted-dependency",
         {
             promotion.LOCK_PATH: malicious_lock,
-            ".github/oracle-reviewers.yml": yaml.safe_dump(attacker_policy, sort_keys=False),
+            ".github/review.yml": yaml.safe_dump(attacker_policy, sort_keys=False),
         },
         "attempt dependency pin self-authorization",
     )
@@ -217,11 +217,11 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
 
     required_reads = [
         promotion.LOCK_PATH,
-        ".oracle-promotion/new/src/theseus_reviewer/engine.py",
-        ".oracle-promotion/new/src/theseus_reviewer/gate.py",
-        ".oracle-promotion/new/src/theseus_reviewer/verifier.py",
+        ".review-promotion/new/src/theseus_reviewer/engine.py",
+        ".review-promotion/new/src/theseus_reviewer/gate.py",
+        ".review-promotion/new/src/theseus_reviewer/verifier.py",
     ]
-    request_diff = ".oracle-pull-request.diff:1-100000"
+    request_diff = ".review-pull-request.diff:1-100000"
     upstream_diff = f"{promotion.STAGED_PROMOTION_DIR}/upstream.diff:1-100000"
     omitted = required_reads[:-1]
     harness.script_omp(
@@ -250,7 +250,7 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     assert incomplete_run.plan["diff_inline"] is None
     assert set(required_reads) <= set(incomplete_run.plan["evidence_files"])
     classification = json.loads(
-        (incomplete_run.temp / "oracle-classification" / "classification.json").read_text(encoding="utf-8")
+        (incomplete_run.temp / "review-classification" / "classification.json").read_text(encoding="utf-8")
     )
     assert classification["template"] == "gate"
     assert classification["size_bucket"] == "large"
@@ -258,11 +258,11 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     attempts = incomplete_run.attempts()
     assert attempts[0]["outcome"] == "absent"
     assert attempts[0]["absence"]["kind"] == "incomplete"
-    assert ".oracle-promotion/new/src/theseus_reviewer/verifier.py" in attempts[0]["absence"]["unread"]
-    verdict_statuses = [item for item in harness.github.statuses[head] if item["context"] == "oracle-verdict"]
+    assert ".review-promotion/new/src/theseus_reviewer/verifier.py" in attempts[0]["absence"]["unread"]
+    verdict_statuses = [item for item in harness.github.statuses[head] if item["context"] == "review-verdict"]
     assert verdict_statuses[-1]["state"] == "pending"
-    assert harness.github.statuses[head][-1]["context"] == "oracle-gate"
-    assert harness.github.statuses[head][-1]["state"] == "failure"
+    assert harness.github.gate_statuses(head)[-1]["context"] == "review-gate"
+    assert harness.github.gate_statuses(head)[-1]["state"] == "failure"
 
     harness.gh(
         "standin",
@@ -272,15 +272,15 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
             "POST",
             f"repos/{SLUG}/issues/1/comments",
             "-f",
-            f"body=Stand-in oracle review: APPROVE {head}",
+            f"body=Stand-in review: APPROVE {head}",
         ],
         harness.base_env(),
         OWNER_TOKEN,
     )
     gate_with_standin = harness.gate(1, head)
     assert gate_with_standin.code == 3
-    assert harness.github.statuses[head][-1]["state"] == "failure"
-    assert "theseus promotion refused" in harness.github.statuses[head][-1]["description"]
+    assert harness.github.gate_statuses(head)[-1]["state"] == "failure"
+    assert "theseus promotion refused" in harness.github.gate_statuses(head)[-1]["description"]
 
     git(harness.repo, "switch", "--quiet", "feat/promote-theseus")
     git(harness.repo, "commit", "--quiet", "--amend", "-m", "bump theseus lock (retry)")
@@ -316,8 +316,8 @@ def test_one_line_lock_bump_verifies_wheel_sources_requires_every_upstream_read_
     }
     gate_after_ship = harness.gate(1, shipped_head)
     assert gate_after_ship.code == 0
-    assert harness.github.statuses[shipped_head][-1]["context"] == "oracle-gate"
-    assert harness.github.statuses[shipped_head][-1]["state"] == "success"
+    assert harness.github.gate_statuses(shipped_head)[-1]["context"] == "review-gate"
+    assert harness.github.gate_statuses(shipped_head)[-1]["state"] == "success"
 
     harness.write({"notes/develop.md": "advance develop\n"}, "advance develop")
     git(harness.repo, "switch", "--quiet", "feat/promote-theseus")
@@ -351,14 +351,14 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_
 ) -> None:
     baseline_sha = harness.write(
         {
-            "_project/scripts/oracle_reviewers/sample.py": "VALUE = 1\n",
-            "_project/scripts/oracle_reviewers/obsolete_guard.py": "GUARD = True\n",
+            "_project/scripts/reviewers/sample.py": "VALUE = 1\n",
+            "_project/scripts/reviewers/obsolete_guard.py": "GUARD = True\n",
         },
         "record benchbox baseline",
     )
     wrong_baseline_sha = harness.write({"notes/other.md": "later\n"}, "advance develop")
-    path_map = {"_project/scripts/oracle_reviewers": "src/theseus_reviewer"}
-    policy_data = yaml.safe_load((harness.repo / ".github/oracle-reviewers.yml").read_text(encoding="utf-8"))
+    path_map = {"_project/scripts/reviewers": "src/theseus_reviewer"}
+    policy_data = yaml.safe_load((harness.repo / ".github/review.yml").read_text(encoding="utf-8"))
     policy_data["promotion"] = {
         "package": "theseus-reviewer",
         "repository": "joeharris76/theseus",
@@ -379,7 +379,7 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_
     policy_data["promotion"]["dependencies"] = {"pyyaml==6.0.3": deps[0]["sha256"]}
     dumped_policy = yaml.safe_dump(policy_data, sort_keys=False)
     harness.policy_file.write_text(dumped_policy, encoding="utf-8")
-    harness.write({".github/oracle-reviewers.yml": dumped_policy}, "pin bootstrap and dependency")
+    harness.write({".github/review.yml": dumped_policy}, "pin bootstrap and dependency")
     delta_hash = promotion.compute_delta_sha256(mapped_baseline, new_files)
 
     forged_lock = _lock_json(
@@ -445,12 +445,12 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_
 
     reads_without_removed = [
         promotion.LOCK_PATH,
-        ".oracle-promotion/new/src/theseus_reviewer/sample.py",
-        ".oracle-promotion/new/src/theseus_reviewer/added.py",
+        ".review-promotion/new/src/theseus_reviewer/sample.py",
+        ".review-promotion/new/src/theseus_reviewer/added.py",
     ]
     full_reads = [
         *reads_without_removed,
-        ".oracle-promotion/old/src/theseus_reviewer/obsolete_guard.py",
+        ".review-promotion/old/src/theseus_reviewer/obsolete_guard.py",
     ]
     harness.script_omp(
         [
@@ -458,14 +458,14 @@ def test_first_promotion_enforces_policy_pinned_bootstrap_baseline_and_executed_
                 "decision": "SHIP",
                 "summary": "Read the lock bump but no upstream hunk.",
                 "files_examined": reads_without_removed,
-                "reads": [".oracle-pull-request.diff:1-100000"],
+                "reads": [".review-pull-request.diff:1-100000"],
                 "defects": [],
             },
             {
                 "decision": "SHIP",
                 "summary": "Read every executed upstream hunk.",
                 "files_examined": full_reads,
-                "reads": [".oracle-pull-request.diff:1-100000", ".oracle-promotion/upstream.diff:1-100000"],
+                "reads": [".review-pull-request.diff:1-100000", ".review-promotion/upstream.diff:1-100000"],
                 "defects": [],
             },
         ]

@@ -10,9 +10,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from theseus_reviewer import evidence  # noqa: E402
+from theseus_reviewer import evidence, legacy  # noqa: E402
 
-FIXTURE_PATH = ROOT / "tests" / "fixtures" / "reviewers" / "pr3902_compaction.json"
+FIXTURE_PATH = ROOT / "tests" / "fixtures" / "replays" / "pr3902_compaction.json"
 CAPTURE_RUN = "41696376860"
 REPOSITORY = "BenchBox-dev/benchbox"
 WORKSPACE_PREFIX = "/home/runner/work/benchbox/benchbox/workspace"
@@ -52,7 +52,7 @@ def build(capture: dict[str, Any]) -> dict[str, Any]:
                     raise CompactionError(f"tool call path {path!r} is outside the workspace")
                 relative = "" if path == WORKSPACE_PREFIX else path.removeprefix(WORKSPACE_PREFIX + "/")
                 selector = None
-                match = evidence._OMP_SELECTOR.search(relative)
+                match = evidence.OMP_SELECTOR.search(relative)
                 if match is not None:
                     relative, selector = relative[: match.start()], match.group(0)[1:]
                 position = positions.setdefault(relative, len(positions))
@@ -98,8 +98,8 @@ def dump(fixture: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Rebuild tests/fixtures/reviewers/pr3902_compaction.json from the verdict capture of run "
-            f"{CAPTURE_RUN} (gh run download {CAPTURE_RUN} -R {REPOSITORY} -n oracle-verdict-capture -D DIR): "
+            "Rebuild tests/fixtures/replays/pr3902_compaction.json from the verdict capture of run "
+            f"{CAPTURE_RUN} (gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {legacy.VERDICT_CAPTURE_ARTIFACT} -D DIR): "
             "the compaction events, the tool calls without outputs and the shape of the accepted final answer."
         )
     )
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         type=Path,
         default=FIXTURE_PATH,
-        help="fixture to write (default: tests/fixtures/reviewers/pr3902_compaction.json).",
+        help="fixture to write (default: tests/fixtures/replays/pr3902_compaction.json).",
     )
     parser.add_argument("--check", action="store_true", help="compare with the existing fixture instead of writing.")
     args = parser.parse_args(argv)

@@ -33,16 +33,16 @@ def _open(author: str, body: str, author_type: str = "Bot") -> dict[str, object]
     return {"resolved": False, "path": PATH, "author": author, "author_type": author_type, "body": body}
 
 
-def test_only_open_threads_from_the_oracle_count() -> None:
+def test_only_open_threads_from_the_review_count() -> None:
     threads = [
-        _open("benchbox-oracle[bot]", "**High**: Drops a row"),
-        _open("benchbox-oracle", "**High**: Drops a row"),
-        {**_open("benchbox-oracle", "**High**: Resolved one"), "resolved": True},
+        _open("benchbox-review[bot]", "**High**: Drops a row"),
+        _open("benchbox-review", "**High**: Drops a row"),
+        {**_open("benchbox-review", "**High**: Resolved one"), "resolved": True},
         _open("chatgpt-codex-connector", "**High**: Other bot"),
-        _open("benchbox-oracle", "free text"),
-        _open("benchbox-oracle", "**High**: Impostor", "User"),
+        _open("benchbox-review", "free text"),
+        _open("benchbox-review", "**High**: Impostor", "User"),
     ]
-    assert open_fingerprints(threads, "benchbox-oracle") == {fingerprint(PATH, "Drops a row"): "High"}
+    assert open_fingerprints(threads, "benchbox-review") == {fingerprint(PATH, "Drops a row"): "High"}
 
 
 def test_split_drops_open_and_repeated_findings() -> None:
@@ -55,7 +55,7 @@ def test_split_drops_open_and_repeated_findings() -> None:
 
 
 def test_a_marker_inside_the_detail_does_not_set_the_fingerprint() -> None:
-    forged = f"<!-- oracle-finding: {'0' * 16} -->"
+    forged = f"<!-- review-finding: {'0' * 16} -->"
     body = f"**High**: Drops a row\n\nsee {forged} here\n\n{marker(_finding('Drops a row'))}\n"
     assert thread_fingerprint(PATH, body) == fingerprint(PATH, "Drops a row")
     assert thread_fingerprint(PATH, f"**High**: Drops a row\n\n{forged} trailing") == fingerprint(PATH, "Drops a row")
@@ -70,5 +70,5 @@ def test_a_more_severe_repeat_is_posted_again() -> None:
 
 
 def test_open_fingerprints_keep_the_most_severe_thread() -> None:
-    threads = [_open("benchbox-oracle", "**Low**: Drops a row"), _open("benchbox-oracle", "**High**: Drops a row")]
-    assert open_fingerprints(threads, "benchbox-oracle") == {fingerprint(PATH, "Drops a row"): "High"}
+    threads = [_open("benchbox-review", "**Low**: Drops a row"), _open("benchbox-review", "**High**: Drops a row")]
+    assert open_fingerprints(threads, "benchbox-review") == {fingerprint(PATH, "Drops a row"): "High"}

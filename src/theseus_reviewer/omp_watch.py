@@ -9,14 +9,14 @@ import sys
 import time
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import absence, omp_bump, omp_pin
+from . import absence, legacy, omp_bump, omp_pin
 from .github import RUN_TITLE_PULL, TRUSTED_EVENTS, WORKFLOW_PATH, GitHubError, get_json, parse_time
 from .policy import PolicyError, load_policy
 
@@ -41,9 +41,11 @@ CONTRACT_SIGNATURES = (
     (absence.EMPTY, "exit code 0 with no output"),
     (absence.ERROR, "the reviewer could not be started"),
 )
-ATTEMPT_ARTIFACT_NAMES = tuple(f"oracle-verdict-attempt-{slot}" for slot in range(1, 6))
-ORACLE_WORKFLOW = WORKFLOW_PATH
-ORACLE_EVENTS = TRUSTED_EVENTS | {"push"}
+ATTEMPT_ARTIFACT_NAMES = tuple(
+    f"{prefix}{slot}" for prefix in ("review-verdict-attempt-", legacy.ATTEMPT_ARTIFACT_PREFIX) for slot in range(1, 6)
+)
+REVIEW_WORKFLOWS = frozenset({WORKFLOW_PATH, legacy.WORKFLOW_PATH})
+REVIEW_EVENTS = TRUSTED_EVENTS | {"push"}
 WATCH_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 LEDGER_ARTIFACT = "omp-watch-ledger"
 LEDGER_FILE = "ledger.json"
@@ -55,7 +57,8 @@ DOWNLOAD_ATTEMPTS = 3
 DOWNLOAD_WORKERS = 8
 PENDING, CLEAR, REVERT, IDLE = "pending", "clear", "revert", "idle"
 BOT_AUTHOR_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
-REVERT_SUBJECT_PREFIX = "revert(oracle): restore omp "
+REVERT_SUBJECT_PREFIX = "revert(review): restore omp "
+REVERT_SUBJECT_PREFIXES = (REVERT_SUBJECT_PREFIX, legacy.REVERT_SUBJECT_PREFIX)
 LEDGER_PAGES = 10
 
 JsonGetter = Callable[[str], Any]
@@ -135,7 +138,7 @@ class PinChange:
 
     @property
     def is_revert(self) -> bool:
-        return self.author_email == BOT_AUTHOR_EMAIL and self.subject.startswith(REVERT_SUBJECT_PREFIX)
+        return self.author_email == BOT_AUTHOR_EMAIL and self.subject.startswith(REVERT_SUBJECT_PREFIXES)
 
 
 @dataclass(frozen=True)
@@ -288,7 +291,7 @@ def render_revert_body(change: PinChange, assessment: Assessment) -> str:
         f"{change.merged_at.isoformat()}. Only the `omp:` section of the reviewer policy changes.\n\n"
         f"The first reviews on {change.version} tripped the post-bump watch:\n\n{reasons}\n\n"
         f"```\n{assessment.render(change)}```\n\n"
-        "## Before merge\n\nThe required `oracle-gate` holds any pull request that changes the pin until the owner "
+        "## Before merge\n\nThe required `review-gate` holds any pull request that changes the pin until the owner "
         "posts the compatibility evidence for the pin that pull request carries, here "
         f"{change.previous_version}. From this branch on the owner's Mac (darwin-arm64) run "
         f"`theseus omp-candidate-check check` for version {change.previous_version} and post the line it prints as a comment on this pull "
@@ -360,14 +363,14 @@ def _base_refs(repo: str, run: Mapping[str, Any], getter: JsonGetter) -> set[Any
 def produced_by(
     run: Mapping[str, Any],
     repo: str,
-    workflow: str,
+    workflows: Collection[str],
     events: frozenset[str],
     branch: str,
     getter: JsonGetter = get_json,
 ) -> bool:
     event = run.get("event")
     if not (
-        str(run.get("path", "")).split("@", 1)[0] == workflow
+        str(run.get("path", "")).split("@", 1)[0] in workflows
         and str((run.get("repository") or {}).get("full_name", "")).lower() == repo.lower()
         and event in events
     ):
@@ -378,14 +381,19 @@ def produced_by(
 
 
 def _trusted_runs(
-    repo: str, run_ids: Iterable[int], workflow: str, events: frozenset[str], branch: str, getter: JsonGetter
+    repo: str,
+    run_ids: Iterable[int],
+    workflows: Collection[str],
+    events: frozenset[str],
+    branch: str,
+    getter: JsonGetter,
 ) -> dict[int, Mapping[str, Any]]:
     def lookup(run_id: int) -> tuple[int, Mapping[str, Any]]:
         try:
             run = getter(f"repos/{repo}/actions/runs/{run_id}")
         except GitHubError:
             return run_id, {}
-        return run_id, run if produced_by(run, repo, workflow, events, branch, getter) else {}
+        return run_id, run if produced_by(run, repo, workflows, events, branch, getter) else {}
 
     with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as pool:
         return {run_id: run for run_id, run in pool.map(lookup, sorted(set(run_ids))) if run}
@@ -412,7 +420,7 @@ def restore_ledger(
             key=lambda item: str(item.get("created_at", "")),
             reverse=True,
         )
-        trusted = _trusted_runs(repo, (_run_id(item) for item in live), watch_workflow, WATCH_EVENTS, branch, getter)
+        trusted = _trusted_runs(repo, (_run_id(item) for item in live), (watch_workflow,), WATCH_EVENTS, branch, getter)
         for artifact in live:
             if _run_id(artifact) in trusted:
                 blob = downloader(f"repos/{repo}/actions/artifacts/{artifact['id']}/zip")
@@ -440,7 +448,7 @@ def collect(
         if not artifact.get("expired") and artifact["id"] not in seen
     ]
     runs = _trusted_runs(
-        repo, (_run_id(artifact) for artifact in wanted), ORACLE_WORKFLOW, ORACLE_EVENTS, branch, getter
+        repo, (_run_id(artifact) for artifact in wanted), REVIEW_WORKFLOWS, REVIEW_EVENTS, branch, getter
     )
     trusted = [artifact for artifact in wanted if _run_id(artifact) in runs]
 

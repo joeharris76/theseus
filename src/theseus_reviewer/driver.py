@@ -35,10 +35,10 @@ class Layout:
     @classmethod
     def ci(cls, temp: Path, workspace: Path) -> Layout:
         return cls(
-            plan=temp / "oracle-plan",
-            attempts=temp / "oracle-attempts",
-            final=temp / "oracle-final",
-            classification=temp / "oracle-classification" / cli.CLASSIFICATION_FILE,
+            plan=temp / "review-plan",
+            attempts=temp / "review-attempts",
+            final=temp / "review-final",
+            classification=temp / "review-classification" / cli.CLASSIFICATION_FILE,
             workspace=workspace,
             home_root=temp,
         )
@@ -83,7 +83,7 @@ class GitHubSink:
     policy: Path
 
     def status(self, repo: str, head: str, payload: Path) -> None:
-        github.post_file(f"repos/{repo}/statuses/{head}", payload, self.app_token)
+        github.post_status_file(repo, head, payload, self.app_token)
 
     def comment(self, repo: str, pr: int, payload: Path) -> None:
         github.post_file(f"repos/{repo}/issues/{pr}/comments", payload, self.app_token)
@@ -213,7 +213,7 @@ def prepare(env: Environment, args: argparse.Namespace) -> int:
             )
         )
     except (Exception, SystemExit) as exc:
-        cli._summary(f"oracle-verdict: classification failed: {type(exc).__name__}: {exc}")
+        cli._summary(f"review-verdict: classification failed: {type(exc).__name__}: {exc}")
     return 0
 
 
@@ -237,7 +237,7 @@ def _record_capacity(
         config_text = Path(plan["omp_config"]).read_text(encoding="utf-8")
         held = capacity.measure(plan, config_text, lambda: reader(binary, config_text))
     except (OSError, ValueError, KeyError, TypeError, capacity.CatalogError) as exc:
-        print(f"oracle-verdict: reviewer capacity is unknown ({exc}); no reviewer is selected for a sized change")
+        print(f"review-verdict: reviewer capacity is unknown ({exc}); no reviewer is selected for a sized change")
         with contextlib.suppress(OSError, ValueError):
             cli._write_json(plan_file, {**_read(plan_file), capacity.ERROR_KEY: str(exc)})
         return
@@ -255,7 +255,7 @@ def harness(env: Environment, args: argparse.Namespace) -> int:
         binary = omp_pin.install(omp_pin.pin_from_text(env.policy.read_text(encoding="utf-8")))
         version = _reported_version(binary)
     except (OSError, omp_pin.PinError, subprocess.SubprocessError) as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         version = None
     if version is None:
         print("::error::the pinned omp build could not be installed; no reviewer will run")
@@ -344,7 +344,7 @@ def _post_gate(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
     try:
         sink.gate(env.repo, int(plan["pr"]), plan["head_sha"])
     except github.GitHubError as exc:
-        print(f"::warning::oracle-gate was not posted from this run: {exc}", file=sys.stderr)
+        print(f"::warning::review-gate was not posted from this run: {exc}", file=sys.stderr)
         cli._output({"gate_failed": "true"})
 
 
@@ -352,7 +352,7 @@ def _credentialed_sink(env: Environment) -> Sink | None:
     try:
         return env.sink()
     except CredentialError as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return None
 
 
@@ -371,7 +371,7 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
     try:
         _post(env, sink, plan)
     except github.GitHubError as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 1
     _post_gate(env, sink, plan)
     if has_state:
@@ -387,7 +387,7 @@ def dispatch(env: Environment, args: argparse.Namespace) -> int:
     try:
         sink.dispatch_gate(env.repo, int(plan["pr"]), plan["head_sha"])
     except github.GitHubError as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 1
     return 0
 

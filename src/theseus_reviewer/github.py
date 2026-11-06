@@ -6,7 +6,7 @@ import re
 import shlex
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,10 +14,10 @@ from time import sleep
 from typing import Any
 from urllib.parse import quote
 
-from . import edits, reset
+from . import edits, legacy, reset
 from .retry import State
 
-STATE_ARTIFACT_PREFIX = "oracle-verdict-state-"
+STATE_ARTIFACT_PREFIX = "review-verdict-state-"
 STATE_FILE = "state.json"
 WAITING_EXIT = 3
 GATE_COMMAND_ENV = "THESEUS_GATE_COMMAND"
@@ -170,7 +170,7 @@ def review_threads(repo: str, pr: int) -> list[dict[str, Any]]:
         after = connection["pageInfo"]["endCursor"]
 
 
-def oracle_reviews(repo: str, pr: int) -> list[dict[str, Any]]:
+def reviews(repo: str, pr: int) -> list[dict[str, Any]]:
     return [
         {
             "id": item.get("id"),
@@ -195,7 +195,7 @@ def review_edit_states(node_ids: Sequence[str]) -> dict[str, tuple[Any, bool]]:
         try:
             payload = json.loads(_gh(*args))
         except (GitHubError, ValueError) as exc:
-            raise edits.EditStateError(f"the oracle reviews' edit state could not be read: {exc}") from exc
+            raise edits.EditStateError(f"the reviews' edit state could not be read: {exc}") from exc
         states.update(edits.parse_review_edits(payload, batch))
     return states
 
@@ -208,7 +208,8 @@ def attempt_state_artifact_name(pr: int, prefix: str = STATE_ARTIFACT_PREFIX) ->
     return f"{prefix}attempt-{pr}"
 
 
-WORKFLOW_PATH = ".github/workflows/oracle-verdict.yml"
+WORKFLOW_PATH = ".github/workflows/review-verdict.yml"
+WORKFLOW_PATHS = (WORKFLOW_PATH, legacy.WORKFLOW_PATH)
 TRUSTED_EVENTS = frozenset({"pull_request_target", "issue_comment", "schedule", "workflow_dispatch"})
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
@@ -301,12 +302,12 @@ def trusted_run(
     base: str,
     is_on_base: Callable[[str, str, str], bool] = on_base,
     pulls: Sequence[HeadPull] | None = None,
-    workflow_path: str = WORKFLOW_PATH,
+    workflow_paths: Collection[str] = WORKFLOW_PATHS,
 ) -> bool:
     head_sha = str(run.get("head_sha", ""))
     event = run.get("event")
     if not (
-        str(run.get("path", "")).split("@", 1)[0] == workflow_path
+        str(run.get("path", "")).split("@", 1)[0] in workflow_paths
         and str((run.get("repository") or {}).get("full_name") or "").casefold() == repo.casefold()
         and event in TRUSTED_EVENTS
         and re.fullmatch(r"[0-9a-f]{40}", head_sha) is not None
@@ -329,11 +330,16 @@ def download_state_artifact(repo: str, run_id: str, name: str, directory: str) -
 
 
 def latest_state(repo: str, pr: int, base: str) -> State | None:
-    names = (state_artifact_name(pr), attempt_state_artifact_name(pr))
-    return _latest_state(repo, pr, names, WORKFLOW_PATH, base)
+    names = (
+        state_artifact_name(pr),
+        attempt_state_artifact_name(pr),
+        state_artifact_name(pr, legacy.STATE_ARTIFACT_PREFIX),
+        attempt_state_artifact_name(pr, legacy.STATE_ARTIFACT_PREFIX),
+    )
+    return _latest_state(repo, pr, names, WORKFLOW_PATHS, base)
 
 
-def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_path: str, base: str) -> State | None:
+def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_paths: Collection[str], base: str) -> State | None:
     pairs = [
         (name, item)
         for name in names
@@ -350,7 +356,7 @@ def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_path: str, 
                 pulls = head_pulls(repo, run)
             except GitHubError:
                 continue
-        if not trusted_run(run, repo, pr, base, pulls=pulls, workflow_path=workflow_path):
+        if not trusted_run(run, repo, pr, base, pulls=pulls, workflow_paths=workflow_paths):
             continue
         with tempfile.TemporaryDirectory() as directory:
             download_state_artifact(repo, run_id, name, directory)
@@ -449,7 +455,8 @@ def run_timed_out(repo: str, run_id: int) -> bool:
     return False
 
 
-SWEEP_FAILURE_SURFACE_PREFIX = "oracle-verdict failed twice without a result at: "
+SWEEP_FAILURE_SURFACE_PREFIX = "review-verdict failed twice without a result at: "
+SWEEP_FAILURE_SURFACE_PREFIXES = (SWEEP_FAILURE_SURFACE_PREFIX, legacy.SWEEP_FAILURE_SURFACE_PREFIX)
 
 
 def commit_statuses(repo: str, sha: str) -> list[dict[str, Any]]:
@@ -465,6 +472,17 @@ def is_app_status(status: Mapping[str, Any], bot_login: str) -> bool:
 
 
 def post_status(repo: str, head_sha: str, payload: Mapping[str, Any], token: str) -> None:
+    failures: list[GitHubError] = []
+    for context in (*legacy.mirror_contexts(payload["context"]), payload["context"]):
+        try:
+            _post_one_status(repo, head_sha, {**payload, "context": context}, token)
+        except GitHubError as exc:
+            failures.append(exc)
+    if failures:
+        raise GitHubError("; ".join(str(item) for item in failures))
+
+
+def _post_one_status(repo: str, head_sha: str, payload: Mapping[str, Any], token: str) -> None:
     env = dict(os.environ)
     env["GH_TOKEN"] = token
     result = subprocess.run(
@@ -510,6 +528,22 @@ def post_file(path: str, payload: Path, token: str) -> None:
         raise GitHubError(f"could not post to {path}: {result.stderr.strip()[:500]}")
 
 
+def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:
+    path = f"repos/{repo}/statuses/{head_sha}"
+    document = json.loads(payload.read_text(encoding="utf-8"))
+    failures: list[GitHubError] = []
+    for context in (*legacy.mirror_contexts(document["context"]), document["context"]):
+        with tempfile.TemporaryDirectory() as directory:
+            posted = Path(directory) / "status.json"
+            posted.write_text(json.dumps({**document, "context": context}), encoding="utf-8")
+            try:
+                post_file(path, posted, token)
+            except GitHubError as exc:
+                failures.append(exc)
+    if failures:
+        raise GitHubError("; ".join(str(item) for item in failures))
+
+
 def pull_base_ref(repo: str, pr: int, token: str) -> str:
     result = subprocess.run(
         ["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".base.ref"],
@@ -529,7 +563,7 @@ def dispatch_gate(repo: str, pr: int, head: str, token: str, base: str) -> None:
             "gh",
             "workflow",
             "run",
-            "oracle-gate.yml",
+            "review-gate.yml",
             "--repo",
             repo,
             "--ref",
@@ -573,7 +607,7 @@ def post_gate(repo: str, pr: int, head: str, token: str, policy: Path) -> None:
         raise GitHubError(f"could not run the gate for #{pr} at {head}: {exc}") from exc
     if result.returncode not in (0, WAITING_EXIT):
         detail = (result.stderr.strip() or result.stdout.strip())[:500]
-        raise GitHubError(f"could not post oracle-gate for #{pr} at {head}: exit {result.returncode}: {detail}")
+        raise GitHubError(f"could not post review-gate for #{pr} at {head}: exit {result.returncode}: {detail}")
 
 
 def backoff_reset_at(repo: str, pr: int, head_sha: str, attesters: frozenset[str]) -> datetime | None:

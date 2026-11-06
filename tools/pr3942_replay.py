@@ -15,17 +15,17 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from theseus_reviewer import evidence, promotion  # noqa: E402
+from theseus_reviewer import evidence, legacy, promotion  # noqa: E402
 from theseus_reviewer.diff import hunk_index  # noqa: E402
 
-FIXTURE_PATH = ROOT / "tests" / "fixtures" / "reviewers" / "pr3942_coverage.json"
+FIXTURE_PATH = ROOT / "tests" / "fixtures" / "replays" / "pr3942_coverage.json"
 CAPTURE_RUN = "41858800966"
 REPOSITORY = "BenchBox-dev/benchbox"
 MERGE_BASE = "37f78fbf"
 HEAD = "4cbb8205"
 LOCK_PATH = ".github/theseus-lock.json"
-PULL_REQUEST_DIFF = ".oracle-pull-request.diff"
-PROMOTION_DIR = ".oracle-promotion"
+PULL_REQUEST_DIFF = legacy.STAGED_DIFF_NAME
+PROMOTION_DIR = legacy.STAGED_PROMOTION_DIR
 PROMOTION_DIFF = f"{PROMOTION_DIR}/upstream.diff"
 EXPECTED_REQUIRED = 304
 EXPECTED_CALLS = 405
@@ -34,6 +34,37 @@ EXPECTED_PROMOTION_DIFF_LINES = 32947
 REDACTED = "[redacted]"
 WORKSPACE_PREFIX = "/home/runner/work/benchbox/benchbox/workspace"
 LISTING_ROW = re.compile(r"(?P<path>.+) \(\+(?P<added>\d+)/-(?P<deleted>\d+), (?P<status>[a-z]+)(?:, [^)]*)?\)")
+
+
+_WORD = re.escape(legacy.WORD)
+RENAMES: tuple[tuple[str, str], ...] = (
+    (f"test_{_WORD}_review_check", "test_review_decision"),
+    (rf"{_WORD}-review\.yml", "review-request.yml"),
+    (rf"{_WORD}-review-shadow", "review-shadow"),
+    (rf"{_WORD}-reviewers\.yml", "review.yml"),
+    (rf"{_WORD}-omp-config\.yml", "review-omp-config.yml"),
+    (rf"{_WORD}_reviewers", "reviewers"),
+    (rf"{_WORD}_review_check", "review_check"),
+    (rf"{_WORD}_local_review", "local_review"),
+    (rf"local-{_WORD}", "local-review"),
+    (_WORD, "review"),
+)
+
+
+def renamed(value: str) -> str:
+    for pattern, replacement in RENAMES:
+        value = re.sub(pattern, replacement, value)
+    return re.sub(r"review([_-])review(?![a-z])", "review", value)
+
+
+def rename_fixture(value: Any) -> Any:
+    if isinstance(value, str):
+        return renamed(value)
+    if isinstance(value, list):
+        return [rename_fixture(item) for item in value]
+    if isinstance(value, dict):
+        return {key: rename_fixture(item) for key, item in value.items()}
+    return value
 
 
 class ReplayError(Exception):
@@ -217,7 +248,7 @@ def split_call_path(path: str, known: set[str]) -> tuple[str, str | None]:
     relative = "" if path == WORKSPACE_PREFIX else path.removeprefix(WORKSPACE_PREFIX + "/")
     if relative in known:
         return relative, None
-    match = evidence._OMP_SELECTOR.search(relative)
+    match = evidence.OMP_SELECTOR.search(relative)
     if match is None:
         return relative, None
     return relative[: match.start()], match.group(0)[1:]
@@ -270,6 +301,10 @@ def sections(text: str, index: dict[str, list[Any]], keep: dict[str, int]) -> li
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
+    return rename_fixture(_build(args))
+
+
+def _build(args: argparse.Namespace) -> dict[str, Any]:
     capture_bytes = args.capture.read_bytes()
     capture = json.loads(capture_bytes)
     if capture.get("run_id") != CAPTURE_RUN or not str(capture.get("head_sha", "")).startswith(HEAD):
@@ -373,11 +408,13 @@ def dump(fixture: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Rebuild tests/fixtures/reviewers/pr3942_coverage.json from public inputs: the BenchBox merge-base "
+            "Rebuild tests/fixtures/replays/pr3942_coverage.json from public inputs: the BenchBox merge-base "
             f"{MERGE_BASE} -> head {HEAD} history, the head lock's bootstrap baseline and the Theseus source "
             f"commit it pins, and the verdict capture of run {CAPTURE_RUN} "
-            f"(gh run download {CAPTURE_RUN} -R {REPOSITORY} -n oracle-verdict-capture -D DIR). The tree, "
-            "baseline, source and delta digests are checked against the head lock before anything is written."
+            f"(gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {legacy.VERDICT_CAPTURE_ARTIFACT} -D DIR). The tree, "
+            "baseline, source and delta digests are checked against the head lock before anything is written. "
+            "The capture and the trees it names carry the names Theseus used before 0.2.0; RENAMES maps every string "
+            "of the result to the current vocabulary, in a fixed order, and keeps the committed row order."
         )
     )
     parser.add_argument("--benchbox-repo", type=Path, required=True, help="BenchBox clone; only read with git.")
@@ -387,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         type=Path,
         default=FIXTURE_PATH,
-        help="fixture to write (default: tests/fixtures/reviewers/pr3942_coverage.json).",
+        help="fixture to write (default: tests/fixtures/replays/pr3942_coverage.json).",
     )
     parser.add_argument("--check", action="store_true", help="compare with the existing fixture instead of writing.")
     args = parser.parse_args(argv)

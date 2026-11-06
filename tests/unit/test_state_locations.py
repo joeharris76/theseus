@@ -13,7 +13,7 @@ def test_defaults_are_neutral_and_never_name_a_consumer(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("THESEUS_LOCAL_STATE", raising=False)
     monkeypatch.delenv(omp_pin.CACHE_ENV, raising=False)
-    assert local.state_dir() == tmp_path / ".cache" / "theseus" / "local-oracle"
+    assert local.state_dir() == tmp_path / ".cache" / "theseus" / "local-review"
     assert omp_pin.cache_root() == tmp_path / ".cache" / "theseus" / "omp"
 
 

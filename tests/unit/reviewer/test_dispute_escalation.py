@@ -34,8 +34,8 @@ from .test_rounds import _decided, _final, _forced, _plan_same_head, _prior, _pr
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
-COMMENT_EVENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/oracle-review"}}
-RULING = "Oracle adjudication: WITHDRAW D1 - the helper keeps the row, see pkg/kept.py:12"
+COMMENT_EVENT = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
+RULING = "Review adjudication: WITHDRAW D1 - the helper keeps the row, see pkg/kept.py:12"
 REVIEWED_AT = "2026-10-08T10:00:00Z"
 AFTER_REVIEW = "2026-10-09T10:00:00Z"
 
@@ -286,13 +286,13 @@ def test_a_withdrawal_stops_the_finding_blocking(monkeypatch: pytest.MonkeyPatch
     assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
     assert "escalated" not in record and record["carried"] is True
     assert final.description.startswith("owner adjudication: WITHDRAW D1")
-    assert final.review["body"].startswith("### oracle-verdict: success for `")
+    assert final.review["body"].startswith("### review-verdict: success for `")
 
 
 def test_maintaining_a_finding_closes_its_dispute_and_keeps_it_blocking(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    body = "Oracle adjudication: MAINTAIN D1 - the row is still dropped"
+    body = "Review adjudication: MAINTAIN D1 - the row is still dropped"
     _, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body))
     final, record = _finalized(plan)
     assert final.state == "failure"
@@ -309,9 +309,9 @@ def test_maintaining_a_finding_closes_its_dispute_and_keeps_it_blocking(
         (_owner_comment(created_at="2026-10-08T09:00:00Z", updated_at="2026-10-08T09:00:00Z"), "late"),
         (_owner_comment(user={"login": "someone", "type": "User"}), "not an attester"),
         (_owner_comment(user={"login": "joeharris76", "type": "Bot"}), "bot account"),
-        (_owner_comment("Oracle adjudication: WITHDRAW D1"), "no reason"),
-        (_owner_comment("Oracle adjudication: DISMISS D1 - nope"), "unknown action"),
-        (_owner_comment("Oracle adjudication: WITHDRAW D9 - not escalated"), "finding not escalated"),
+        (_owner_comment("Review adjudication: WITHDRAW D1"), "no reason"),
+        (_owner_comment("Review adjudication: DISMISS D1 - nope"), "unknown action"),
+        (_owner_comment("Review adjudication: WITHDRAW D9 - not escalated"), "finding not escalated"),
     ],
 )
 def test_an_invalid_adjudication_is_ignored(
@@ -335,7 +335,7 @@ def test_an_adjudication_on_an_unescalated_head_is_ignored(monkeypatch: pytest.M
 
 
 def test_a_malformed_adjudication_comment_never_plans_a_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment("Oracle adjudication:please rerun"))
+    values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment("Review adjudication:please rerun"))
     assert values["decision"] == "skip" and values["post"] == "false"
 
 
@@ -343,9 +343,9 @@ def test_the_adjudication_grammar_is_exact() -> None:
     assert adjudication.parse(RULING) == adjudication.Adjudication(
         "WITHDRAW", "D1", "the helper keeps the row, see pkg/kept.py:12"
     )
-    assert adjudication.parse("Oracle adjudication: MAINTAIN D12 - still wrong\nextra line") is None
-    assert adjudication.parse("oracle adjudication: MAINTAIN D12 - still wrong") is None
-    assert adjudication.parse("Oracle adjudication: MAINTAIN D0 - nope") is None
+    assert adjudication.parse("Review adjudication: MAINTAIN D12 - still wrong\nextra line") is None
+    assert adjudication.parse("review adjudication: MAINTAIN D12 - still wrong") is None
+    assert adjudication.parse("Review adjudication: MAINTAIN D0 - nope") is None
 
 
 def _failed_state() -> State:
@@ -405,6 +405,6 @@ def test_the_sweep_leaves_a_success_head_alone(monkeypatch: pytest.MonkeyPatch, 
 def test_the_trigger_prefix_matches_case_insensitively_yet_the_grammar_stays_exact(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    body = "oracle adjudication: WITHDRAW D1 - lower case"
+    body = "review adjudication: WITHDRAW D1 - lower case"
     values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body))
     assert values["decision"] == "skip" and values["post"] == "false"

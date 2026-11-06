@@ -34,7 +34,7 @@ def world(tmp_path: Path):
 def launcher(world: PinWorld, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "consumer"
     commit = support.commit_lock(repo, world.reviewer_lock)
-    monkeypatch.setenv("ORACLE_PROMOTION_MIRROR", world.mirror.origin)
+    monkeypatch.setenv("REVIEW_PROMOTION_MIRROR", world.mirror.origin)
     lock = bootstrap.read_lock(repo, commit)
     assert lock.dependencies == ()
     return bootstrap.install(lock, tmp_path / "install-cache", bootstrap.default_fetch()).executable
@@ -54,7 +54,7 @@ def test_local_review_runs_through_a_real_bootstrap_launcher(
     review = harness.local_review("feat/local")
 
     assert review.code == 0, review.stdout + review.stderr
-    assert "Local oracle review: no Critical or High findings; pr-open may proceed." in review.stdout
+    assert "Local review: no Critical or High findings; pr-open may proceed." in review.stdout
     assert "No module named" not in review.stderr
 
 
