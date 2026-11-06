@@ -422,33 +422,61 @@ def test_a_per_file_failure_after_the_size_answer_keeps_the_larger_bucket(
     assert held["size_bucket"] == expected and held["source"] == "fallback"
 
 
-def test_unavailable_runs_are_recorded_for_a_manual_run_and_kept_for_a_later_state() -> None:
-    first = retry.next_state(
-        previous=None,
+def _next(previous: retry.State | None, now: datetime, cause: str, head: str = HEAD, **extra: Any) -> retry.State:
+    return retry.next_state(
+        previous=previous,
         pr=7,
-        head_sha=HEAD,
+        head_sha=head,
         outcome=retry.PENDING,
         manual=True,
-        now=NOW,
+        now=now,
         pool_blocked_until={},
-        pending_cause=retry.UNAVAILABLE,
+        pending_cause=cause,
+        **extra,
     )
+
+
+def test_unavailable_runs_are_recorded_for_a_dispatch_and_kept_for_a_later_state_on_the_same_head() -> None:
+    first = _next(None, NOW, retry.UNAVAILABLE, dispatched=True)
     later = NOW + timedelta(hours=2)
-    second = retry.next_state(
-        previous=first,
-        pr=7,
-        head_sha=HEAD,
-        outcome=retry.PENDING,
-        manual=True,
-        now=later,
-        pool_blocked_until={},
-        pending_cause=retry.ALL_ABSENT,
-    )
+    second = _next(first, later, retry.ALL_ABSENT)
     assert first.unavailable_runs == (NOW,) and second.unavailable_runs == (NOW,) and second.retries == (later,)
     assert retry.State.from_json(second.to_json()).unavailable_runs == (NOW,)
     assert retry.State.from_json({**second.to_json(), "unavailable_runs": []}).unavailable_runs == ()
-    day_later = NOW + timedelta(hours=25)
-    assert retry.recent_unavailable(second, day_later) == ()
+    assert retry.recent_unavailable(second, NOW + timedelta(hours=25)) == ()
+
+
+def test_a_review_comment_during_an_outage_adds_no_entry_because_it_is_not_a_dispatch() -> None:
+    assert _next(None, NOW, retry.UNAVAILABLE).unavailable_runs == ()
+    assert _next(None, NOW, retry.UNAVAILABLE, dispatched=False).unavailable_runs == ()
+
+
+@pytest.mark.parametrize("outcome", [retry.SUCCESS, retry.FAILURE, retry.PENDING])
+def test_entries_of_another_head_are_never_inherited(outcome: str) -> None:
+    other = retry.State(7, "c" * 40, outcome, NOW, (), {}, None, 0, None, (NOW,))
+    assert _next(other, NOW + timedelta(hours=1), retry.ALL_ABSENT).unavailable_runs == ()
+    assert _next(other, NOW + timedelta(hours=1), retry.UNAVAILABLE, dispatched=True).unavailable_runs == (
+        NOW + timedelta(hours=1),
+    )
+
+
+def test_more_recorded_entries_than_dispatches_never_make_the_spent_count_negative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = _dispatches(2, HEAD, NOW)
+    state = retry.State(
+        7,
+        HEAD,
+        retry.PENDING,
+        NOW,
+        (),
+        {},
+        retry.ALL_ABSENT,
+        0,
+        None,
+        tuple(NOW - timedelta(hours=i) for i in range(9)),
+    )
+    assert _bounded(monkeypatch, state, runs) == "its retry is due"
 
 
 def _dispatches(count: int, head: str, now: datetime) -> tuple[Any, ...]:

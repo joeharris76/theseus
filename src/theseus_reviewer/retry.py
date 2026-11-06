@@ -117,7 +117,7 @@ def recent_unavailable(state: State | None, now: datetime) -> tuple[datetime, ..
 
 
 def inherited_unavailable(previous: State | None, head_sha: str, now: datetime) -> tuple[datetime, ...]:
-    if previous is not None and previous.head_sha != head_sha and previous.outcome not in DECISIVE:
+    if previous is None or previous.head_sha != head_sha:
         return ()
     return recent_unavailable(previous, now)
 
@@ -188,12 +188,15 @@ def next_state(
     pool_blocked_until: Mapping[str, PoolBlock],
     pending_cause: str | None = None,
     strikes: int | None = None,
+    dispatched: bool = False,
 ) -> State:
     cause = pending_cause if outcome == PENDING else None
     spent = manual and cause != UNAVAILABLE
     retries = inherited_retries(previous, head_sha, now) + ((now,) if spent else ())
     kept = max(strikes or 0, previous.strikes if previous else 0)
-    unavailable = inherited_unavailable(previous, head_sha, now) + ((now,) if manual and cause == UNAVAILABLE else ())
+    unavailable = inherited_unavailable(previous, head_sha, now) + (
+        (now,) if dispatched and cause == UNAVAILABLE else ()
+    )
     return State(pr, head_sha, outcome, now, retries, dict(pool_blocked_until), cause, kept, None, unavailable)
 
 

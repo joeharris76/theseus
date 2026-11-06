@@ -1697,6 +1697,7 @@ def command_finalize(args: argparse.Namespace) -> int:
             pool_blocked_until=selection.pool_resets(selection_input, loaded.attempts),
             pending_cause=final.pending_cause,
             strikes=final.strikes,
+            dispatched=os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
         )
     _write_json(out_dir / "status.json", report.status_payload(plan, final, run_url))
     if final.body and (plan["findings_delivery"] == "comment" or final.review is None):
@@ -2047,7 +2048,7 @@ def _bounded_retry(
         )
         return None
     unavailable = state is not None and state.pending_cause == retry.UNAVAILABLE
-    spent = sweep.recent_dispatches(head_runs, now) - len(retry.recent_unavailable(state, now))
+    spent = max(0, sweep.recent_dispatches(head_runs, now) - len(retry.recent_unavailable(state, now)))
     if spent >= rules.daily_budget and not unavailable:
         _summary(f"retry not dispatched for #{number}: the daily budget of {rules.daily_budget} is used")
         return None
