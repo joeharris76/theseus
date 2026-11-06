@@ -200,8 +200,13 @@ def _skip_reason(
             f"{_source(block.provider)} returned a quota error at {block.recorded_at.isoformat()}",
             None,
         )
-    resolution: providers.Resolution | None = None
     limit = selection.capacities.get(reviewer.name)
+    if selection.load_tokens:
+        if limit is None:
+            return capacity.unknown_text(selection.capacity_error), None
+        if selection.load_tokens > limit:
+            return capacity.skip_text(selection.load_tokens, limit), None
+    resolution: providers.Resolution | None = None
     if selection.availability:
         resolution = providers.resolve(
             selection.candidates.get(reviewer.name, ()),
@@ -212,14 +217,7 @@ def _skip_reason(
             selection.load_tokens,
         )
         if resolution.target is None:
-            if resolution.degraded_capacity and limit is not None and selection.load_tokens > limit:
-                return capacity.skip_text(selection.load_tokens, limit), resolution
             return resolution.reason, resolution
-    if selection.load_tokens and not (resolution is not None and resolution.substituted):
-        if limit is None:
-            return capacity.unknown_text(selection.capacity_error), resolution
-        if selection.load_tokens > limit:
-            return capacity.skip_text(selection.load_tokens, limit), resolution
     if selection.brief_mode == "oversize":
         return "skipped: the brief exceeds the size cap even without the diff", resolution
     if selection.brief_mode == "file-list" and not (reviewer.read_only == "hard" and reviewer.reads_files):
@@ -265,7 +263,6 @@ def next_step(selection: SelectionInput, attempts: Sequence[Attempt]) -> Step:
             reasons.append(f"{reviewer.name}: {reason}")
             if reason.startswith(capacity.SKIP_PREFIX):
                 too_large = True
-                only_availability = False
             elif not reason.startswith("disabled"):
                 blocked_otherwise = True
                 if not reason.startswith((providers.UNAVAILABLE_PREFIX, providers.DEGRADED_CAPACITY_PREFIX)):
