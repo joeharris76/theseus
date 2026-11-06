@@ -195,7 +195,7 @@ def test_a_provider_named_only_in_model_text_is_never_attributed() -> None:
     )
 
 
-RULES = RetryRules(daily_budget=2, backoff_start_minutes=60, sweep_max_dispatches=5)
+RULES = RetryRules(daily_budget=6, backoff_start_minutes=60, sweep_max_dispatches=5)
 HEAD = "a" * 40
 
 
@@ -359,3 +359,136 @@ def test_the_run_suffix_never_cuts_the_degraded_suffix_of_a_success_status() -> 
     payload = report.status_payload({"status_context": "review-verdict", "run_uuid": "r" * 36}, final, "https://x")
     assert len(payload["description"]) <= report.DESCRIPTION_LIMIT
     assert degraded in payload["description"] and payload["description"].endswith(f"[run {'r' * 36}]")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_a_client_error_from_the_classifier_still_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int
+) -> None:
+    assert _select(monkeypatch, tmp_path, _minimal_plan("max"), JevError(status, "rejected")) == {}
+
+
+@pytest.mark.parametrize("status", [None, 429, 500, 503])
+def test_an_outage_status_from_the_classifier_falls_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int | None
+) -> None:
+    held = _select(monkeypatch, tmp_path, _minimal_plan("large"), JevError(status, "down"))
+    assert held["size_bucket"] == "large" and held["source"] == "fallback"
+
+
+class _AnswersSizeThenFails:
+    def __init__(self, size: str) -> None:
+        self.size = size
+
+    def __enter__(self) -> _AnswersSizeThenFails:
+        return self
+
+    def __exit__(self, *ignored: object) -> None:
+        return None
+
+    def ask(self, state: object, questions: dict[str, Any]) -> dict[str, Any]:
+        if "size" not in questions:
+            raise JevError(503, "down")
+        return {
+            "size": {"choice": self.size, "probabilities": {self.size: 1.0}, "confidence": 1.0},
+            "capability": {"choice": "routine", "probabilities": {"routine": 1.0}, "confidence": 1.0},
+            "template": {"choice": "standard", "probabilities": {"standard": 1.0}, "confidence": 1.0},
+        }
+
+
+@pytest.mark.parametrize(
+    ("answered", "bucket", "expected"),
+    [("huge", "large", "huge"), ("max", "medium", "max"), ("small", "large", "large")],
+)
+def test_a_per_file_failure_after_the_size_answer_keeps_the_larger_bucket(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, answered: str, bucket: str, expected: str
+) -> None:
+    monkeypatch.setattr(cli, "JevSession", lambda: _AnswersSizeThenFails(answered))
+    plan = _minimal_plan(bucket)
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out.txt"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    (tmp_path / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    args = argparse.Namespace(
+        plan=str(tmp_path / "plan.json"),
+        attempts_dir=str(tmp_path / "attempts"),
+        slot=1,
+        classification=str(tmp_path / "classification.json"),
+        workspace=None,
+        classify_only=True,
+    )
+    assert cli.command_select(args) == 0
+    held = json.loads((tmp_path / "classification.json").read_text(encoding="utf-8"))
+    assert held["size_bucket"] == expected and held["source"] == "fallback"
+
+
+def test_unavailable_runs_are_recorded_for_a_manual_run_and_kept_for_a_later_state() -> None:
+    first = retry.next_state(
+        previous=None,
+        pr=7,
+        head_sha=HEAD,
+        outcome=retry.PENDING,
+        manual=True,
+        now=NOW,
+        pool_blocked_until={},
+        pending_cause=retry.UNAVAILABLE,
+    )
+    later = NOW + timedelta(hours=2)
+    second = retry.next_state(
+        previous=first,
+        pr=7,
+        head_sha=HEAD,
+        outcome=retry.PENDING,
+        manual=True,
+        now=later,
+        pool_blocked_until={},
+        pending_cause=retry.ALL_ABSENT,
+    )
+    assert first.unavailable_runs == (NOW,) and second.unavailable_runs == (NOW,) and second.retries == (later,)
+    assert retry.State.from_json(second.to_json()).unavailable_runs == (NOW,)
+    assert retry.State.from_json({**second.to_json(), "unavailable_runs": []}).unavailable_runs == ()
+    day_later = NOW + timedelta(hours=25)
+    assert retry.recent_unavailable(second, day_later) == ()
+
+
+def _dispatches(count: int, head: str, now: datetime) -> tuple[Any, ...]:
+    from theseus_reviewer import sweep
+
+    return tuple(
+        sweep.Run(
+            id=index,
+            pr=7,
+            event=sweep.DISPATCH_EVENT,
+            status=sweep.COMPLETED,
+            conclusion="success",
+            created_at=now - timedelta(hours=index + 1),
+            head=head,
+        )
+        for index in range(count)
+    )
+
+
+def _bounded(monkeypatch: pytest.MonkeyPatch, state: retry.State, runs: tuple[Any, ...]) -> str | None:
+    monkeypatch.setattr(cli, "_already_surfaced", lambda *args: False)
+    return cli._bounded_retry(
+        "o/r", 7, HEAD, runs, state.updated_at, RULES, NOW, "review-verdict", "bot", "t", None, state
+    )
+
+
+def test_an_outage_longer_than_the_daily_dispatch_cap_keeps_being_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    runs = _dispatches(9, HEAD, NOW)
+    state = retry.State(
+        7, HEAD, retry.PENDING, NOW, (), {}, retry.UNAVAILABLE, 0, None, tuple(r.created_at for r in runs)
+    )
+    assert _bounded(monkeypatch, state, runs) == "its retry is due"
+
+
+def test_the_dispatches_of_an_outage_do_not_use_up_the_all_absent_budget_after_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = _dispatches(7, HEAD, NOW)
+    recorded = tuple(r.created_at for r in runs)
+    recovered = retry.State(7, HEAD, retry.PENDING, NOW, (), {}, retry.ALL_ABSENT, 0, None, recorded)
+    assert _bounded(monkeypatch, recovered, runs) == "its retry is due"
+    unrecorded = retry.State(7, HEAD, retry.PENDING, NOW, (), {}, retry.ALL_ABSENT)
+    assert _bounded(monkeypatch, unrecorded, runs) is None

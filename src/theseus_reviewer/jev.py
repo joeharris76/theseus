@@ -18,6 +18,11 @@ class JevError(Exception):
         self.status = status
         self.message = message
         self.missing_key = missing_key
+        self.answered_bucket: str | None = None
+
+    @property
+    def is_outage(self) -> bool:
+        return not self.missing_key and (self.status is None or self.status == 429 or self.status >= 500)
 
 
 class JevSession:

@@ -652,6 +652,12 @@ def _entry_finding(entry: Mapping[str, Any], cycle: int = 1) -> dict[str, Any]:
     }
 
 
+def _holds_blocking(previous: Mapping[str, Any] | None) -> bool:
+    if previous is None:
+        return False
+    return any(item["severity"] in BLOCKING_SEVERITIES for item in findings.open_findings(previous))
+
+
 def _blocking(found: tuple[dict[str, Any], ...]) -> bool:
     return any(item["severity"] in BLOCKING_SEVERITIES for item in found)
 
@@ -928,7 +934,8 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
     if final.judgement is None:
         reasons = "; ".join(errors) if errors else final.description
         raise Unavailable(
-            f"no reviewer produced a verdict: {reasons}", availability=final.pending_cause == retry.UNAVAILABLE
+            f"no reviewer produced a verdict: {reasons}",
+            availability=final.pending_cause == retry.UNAVAILABLE and not _holds_blocking(previous),
         )
     if final.degraded:
         terminal_slot = next((item for item in loaded.attempts if item.reviewer == final.reviewer), None)
@@ -1116,16 +1123,18 @@ def _reviewed(run: Run, trusted: Trusted, previous: Mapping[str, Any] | None) ->
         )
     access = resolve_credentials()
     run.reporter.hide(access.token, access.url)
-    if not reachable(access.url, access.proxy):
-        hint = "; start the cloud gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
-        raise Unavailable(f"the {access.client} gateway is unreachable{hint}", availability=True)
-    run.access = access
     head_tree = _git(run.root, "rev-parse", f"{run.head}^{{tree}}").strip()
     cache = cache_path(state_dir(), cache_key(plan, head_tree, trusted))
     cached = _load_cached(cache)
     if cached is not None:
         run.reporter.say("Reusing the cached local review of this unchanged patch.")
         return cached
+    if not reachable(access.url, access.proxy):
+        hint = "; start the cloud gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
+        raise Unavailable(
+            f"the {access.client} gateway is unreachable{hint}", availability=not _holds_blocking(previous)
+        )
+    run.access = access
     with exclusive(cache.with_suffix(".lock"), run.reporter, _holder(run.root)):
         cached = _load_cached(cache)
         if cached is not None:

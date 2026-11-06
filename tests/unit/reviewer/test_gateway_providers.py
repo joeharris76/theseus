@@ -253,3 +253,21 @@ def test_an_unreachable_gateway_is_broken_with_the_probe_error(
     code, report = _report(paths, capsys, "--served-url", url, "--token-file", str(paths["token"]))
 
     assert code == 1 and report["state"] == "broken" and report["served_error"] == "gateway unreachable"
+
+
+def test_a_second_run_with_the_same_report_path_replaces_the_report_and_the_clients(tmp_path: Path) -> None:
+    paths = _files(tmp_path)
+    assert _clients(paths) == 0
+    first = paths["report"].read_text(encoding="utf-8")
+    paths["accounts"].write_text(
+        json.dumps({"accounts": [{"provider": "anthropic", "identityKey": "email:a@example.com"}]}), encoding="utf-8"
+    )
+
+    assert _clients(paths) == 0
+
+    report = json.loads(paths["report"].read_text(encoding="utf-8"))
+    assert report["granted"] == ["anthropic"] and report["granted"] != json.loads(first)["granted"]
+    assert json.loads(paths["out"].read_text(encoding="utf-8"))["review-ci"]["accounts"] == {
+        "anthropic": ["email:a@example.com"]
+    }
+    assert [path.name for path in tmp_path.iterdir() if path.name.endswith(".tmp")] == []

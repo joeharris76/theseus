@@ -1358,12 +1358,12 @@ def command_select(args: argparse.Namespace) -> int:
             classification = _classify_plan(plan)
         except (JevError, KeyError, TypeError, ValueError) as exc:
             bucket = plan.get("classifier_unavailable_bucket")
-            if not isinstance(exc, JevError) or exc.missing_key or not bucket:
+            if not isinstance(exc, JevError) or not exc.is_outage or not bucket:
                 if classify_only:
                     _summary(f"classification unavailable: {exc}")
                     return 0
                 return _empty_selection(f"classification unavailable: {exc}", args.slot)
-            classification = fallback_classification(bucket, plan_gate_flags(plan))
+            classification = fallback_classification(bucket, plan_gate_flags(plan), exc.answered_bucket)
             _summary(f"classification unavailable (TypeSafe): {exc}; {classification_note(classification)}")
         _write_json(classification_path, classification.to_json())
         if classify_only:
@@ -1890,6 +1890,7 @@ def _retry_reason(
                 bot_login,
                 token,
                 base_changed_at,
+                state,
             )
         if state.outcome != retry.PENDING or state.pending_cause not in (*retry.SWEPT_CAUSES, retry.UNPUBLISHED):
             return None
@@ -1922,6 +1923,7 @@ def _retry_reason(
                 bot_login,
                 token,
                 base_changed_at,
+                state,
             )
         return None
     if not full:
@@ -2026,6 +2028,7 @@ def _bounded_retry(
     bot_login: str,
     token: str,
     base_changed_at: datetime | None,
+    state: retry.State | None = None,
 ) -> str | None:
     failures = sweep.stateless_failures(head_runs, since)
     if _already_surfaced(repo, head, status_context, bot_login, number, base_changed_at):
@@ -2043,7 +2046,9 @@ def _bounded_retry(
             base_changed_at=base_changed_at,
         )
         return None
-    if sweep.recent_dispatches(head_runs, now) >= rules.daily_budget:
+    unavailable = state is not None and state.pending_cause == retry.UNAVAILABLE
+    spent = sweep.recent_dispatches(head_runs, now) - len(retry.recent_unavailable(state, now))
+    if spent >= rules.daily_budget and not unavailable:
         _summary(f"retry not dispatched for #{number}: the daily budget of {rules.daily_budget} is used")
         return None
     return "its retry is due"
@@ -2415,6 +2420,13 @@ def command_redact_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _replace_private(path: Path, text: str) -> None:
+    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    staged.unlink(missing_ok=True)
+    write_private(staged, text)
+    os.replace(staged, path)
+
+
 def _gateway_client_token(path: Path) -> str:
     try:
         token = path.read_text(encoding="utf-8")
@@ -2463,7 +2475,7 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         excluded[provider] = {"reason": reason, "models": [m for m in models if providers.provider_of(m) == provider]}
     granted = [provider for provider in providers.routed(config) if provider not in excluded]
     if args.report:
-        write_private(Path(args.report), json.dumps({"granted": granted, "excluded": excluded}, indent=2) + "\n")
+        _replace_private(Path(args.report), json.dumps({"granted": granted, "excluded": excluded}, indent=2) + "\n")
     if not granted:
         raise SystemExit("review-verdict: error: no configured provider has a broker login")
     for provider, item in excluded.items():
@@ -2476,10 +2488,7 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         if accounts is not None:
             client["accounts"] = accounts
         clients[name] = client
-    out = Path(args.out)
-    staged = out.with_name(f".{out.name}.{os.getpid()}.tmp")
-    write_private(staged, json.dumps(clients, indent=2) + "\n")
-    os.replace(staged, out)
+    _replace_private(Path(args.out), json.dumps(clients, indent=2) + "\n")
     pinned = ", ".join(f"{provider}={len(keys)}" for provider, keys in (accounts or {}).items())
     for name in clients:
         print(f"{name}: {len(models)} models; pinned accounts: {pinned or 'none'}")

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .jev import JevSession
+from .jev import JevError, JevSession
 from .policy import SIZE_BUCKETS
 
 CONFIDENCE_BAR = 0.60
@@ -253,10 +253,14 @@ def classify_diff(
     ranked = sorted(stats, key=lambda item: -(item[1] + item[2]))[:MAX_SCORED_FILES]
     for path, added, deleted, status in ranked:
         siblings = [(other, a, d) for other, a, d, _ in stats if other != path]
-        file_answers = session.ask(
-            file_state(path, added, deleted, status, siblings),
-            {"impact": FILE_IMPACT_QUESTION, "importance": FILE_SCORE_QUESTION},
-        )
+        try:
+            file_answers = session.ask(
+                file_state(path, added, deleted, status, siblings),
+                {"impact": FILE_IMPACT_QUESTION, "importance": FILE_SCORE_QUESTION},
+            )
+        except JevError as exc:
+            exc.answered_bucket = bucket
+            raise
         impact, impact_probs, _ = _choice(file_answers["impact"])
         rows.append(
             FileRow(
@@ -276,8 +280,12 @@ def classify_diff(
     )
 
 
-def fallback_classification(unavailable_bucket: str, gate_flags: Sequence[str]) -> Classification:
+def fallback_classification(
+    unavailable_bucket: str, gate_flags: Sequence[str], answered_bucket: str | None = None
+) -> Classification:
     bucket = unavailable_bucket
+    if answered_bucket in SIZE_BUCKETS:
+        bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(answered_bucket))]
     if gate_flags:
         bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(GATE_BUCKET_FLOOR))]
     return Classification(

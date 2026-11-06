@@ -275,3 +275,38 @@ def test_the_probe_never_puts_the_gateway_token_in_a_published_surface(harness: 
     published = json.dumps(harness.github.reviews[307]) + json.dumps(harness.github.statuses[head])
     assert harness.gateway.token not in published and harness.gateway.url not in published
     assert os.environ.get("OMP_GATEWAY_TOKEN") is None
+
+
+HIGH = {
+    "severity": "High",
+    "file": CHECKER,
+    "line": 2,
+    "title": "Equality ignores the operand types",
+    "detail": "checker treats 1 and True as equal, so a boolean column matches an integer column.",
+}
+
+
+def _recorded_high(harness: Harness) -> None:
+    harness.branch("feat/local", {CHECKER: FIXED_CHECKER}, "guard None operands")
+    harness.script_omp(
+        [{"decision": "SHIP_WITH_FIXES", "summary": "One defect.", "files_examined": [CHECKER], "defects": [HIGH]}]
+    )
+    assert harness.local_review("feat/local").code == 1
+
+
+@pytest.mark.parametrize("mode", ["down", "rejected"])
+def test_open_blocking_findings_keep_an_unavailable_review_from_being_an_availability_cause(
+    harness: Harness, tmp_path: Path, mode: str
+) -> None:
+    _recorded_high(harness)
+    harness.gateway.mode = mode
+    out = tmp_path / "unavailable.txt"
+
+    review = harness.local_review(
+        "feat/local",
+        rebuttals={"c1-D1": f"Dispute: {CHECKER}:2 both operands are guarded before the comparison"},
+        env={"REVIEW_LOCAL_UNAVAILABLE_OUT": str(out)},
+    )
+
+    assert review.code == 2, review.stdout + review.stderr
+    assert out.read_text(encoding="utf-8") == ""
