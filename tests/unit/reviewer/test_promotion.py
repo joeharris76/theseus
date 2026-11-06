@@ -1172,73 +1172,6 @@ def test_preparation_requires_a_workflow_newly_referenced_by_the_head_whole() ->
     assert f"{STAGED_NEW}{gate}" not in bundle.whole_paths
 
 
-ACTION_WORKFLOW = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/setup@{SHA_B}\n"
-ACTION_TREE = {
-    **SURFACE_NEW,
-    ".github/actions/setup/action.yml": (
-        b"runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/inner\n    - uses: actions/checkout@v4\n"
-    ),
-    ".github/actions/inner/action.yaml": b"runs:\n  using: composite\n  steps:\n    - run: echo\n      shell: bash\n",
-}
-
-
-def test_step_level_composite_actions_are_in_the_surface_and_required() -> None:
-    surface = _surface(ACTION_TREE, {"w.yml": ACTION_WORKFLOW})
-    assert {".github/actions/setup/action.yml", ".github/actions/inner/action.yaml"} <= surface
-    old = {
-        **ACTION_TREE,
-        ".github/actions/inner/action.yaml": b"runs:\n  using: composite\n  steps:\n    - run: true\n      shell: bash\n",
-    }
-    required = _required(old, ACTION_TREE, {"w.yml": ACTION_WORKFLOW})
-    assert f"{STAGED_NEW}.github/actions/inner/action.yaml" in required
-
-
-@pytest.mark.parametrize(
-    "uses",
-    [
-        f"{THESEUS}/.github/actions/missing@{SHA_B}",
-        f"{THESEUS}/.github/actions/setup",
-        f"{THESEUS}/../escape@{SHA_B}",
-        f"https://github.com/{THESEUS}/x",
-    ],
-)
-def test_unresolvable_theseus_step_reference_holds(uses: str) -> None:
-    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n"
-    with pytest.raises(promotion.PromotionError):
-        _surface(ACTION_TREE, {"w.yml": workflow})
-
-
-def test_missing_nested_action_holds() -> None:
-    nested = {
-        **ACTION_TREE,
-        ".github/actions/setup/action.yml": b"runs:\n  using: composite\n  steps:\n    - uses: ./nowhere\n",
-    }
-    with pytest.raises(promotion.PromotionError, match="missing"):
-        _surface(nested, {"w.yml": ACTION_WORKFLOW})
-
-
-@pytest.mark.parametrize(
-    ("body", "message"),
-    [
-        (
-            b"runs:\n  using: node20\n  main: dist/index.js\n",
-            "node actions in the Theseus repository are not supported",
-        ),
-        (
-            b"runs:\n  using: node16\n  main: ../lib/evil.js\n",
-            "node actions in the Theseus repository are not supported",
-        ),
-        (b"runs:\n  using: docker\n  image: Dockerfile\n", "unsupported runs.using 'docker'"),
-        (b"runs:\n  using: docker\n  image: docker://alpine:3\n", "unsupported runs.using 'docker'"),
-        (b"runs:\n  using: bash\n", "unsupported runs.using 'bash'"),
-    ],
-)
-def test_theseus_action_that_is_not_composite_holds(body: bytes, message: str) -> None:
-    tree = {**ACTION_TREE, ".github/actions/setup/action.yml": body}
-    with pytest.raises(promotion.PromotionError, match=message):
-        _surface(tree, {"w.yml": ACTION_WORKFLOW})
-
-
 def test_step_references_to_other_repositories_are_ignored() -> None:
     workflow = (
         "jobs:\n  a:\n    steps:\n"
@@ -1252,93 +1185,86 @@ def test_step_references_to_other_repositories_are_ignored() -> None:
     assert _surface(SURFACE_NEW, {"w.yml": workflow}) == _surface(SURFACE_NEW, {})
 
 
-def test_unchanged_files_newly_executed_by_the_head_are_required_whole() -> None:
-    action = ".github/actions/payload/action.yml"
-    script = ".github/actions/payload/payload.py"
-    unchanged = {
-        action: b"runs:\n  using: composite\n  steps:\n    - run: python ${{ github.action_path }}/payload.py\n",
-        script: b"print(1)\n",
-    }
+def test_unchanged_dormant_workflow_newly_referenced_by_the_head_is_required_whole() -> None:
+    payload = ".github/workflows/payload.yml"
+    unchanged = {payload: b"name: payload\njobs:\n  a:\n    runs-on: x\n"}
     inputs = _preparation_inputs(old_extra=unchanged, new_extra=unchanged)
-    head_reference = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/payload@{SHA_B}\n"
+    head_reference = f"jobs:\n  a:\n    uses: {THESEUS}/{payload}@{SHA_B}\n"
     inputs["workflow_loader"] = lambda ref: {"w.yml": head_reference} if ref == SHA_A else {}
     bundle = promotion.prepare_promotion(**inputs)
-    assert {f"{STAGED_NEW}{action}", f"{STAGED_NEW}{script}"} <= bundle.required_paths
-    assert {f"{STAGED_NEW}{action}", f"{STAGED_NEW}{script}"} <= bundle.whole_paths
-    assert not any(item.path.endswith("payload.py") for item in bundle.changed_files)
+    assert f"{STAGED_NEW}{payload}" in bundle.required_paths
+    assert f"{STAGED_NEW}{payload}" in bundle.whole_paths
+    assert not any(item.path.endswith("payload.yml") for item in bundle.changed_files)
 
 
-def test_action_surface_includes_every_file_in_the_action_directory() -> None:
+STEP_ACTION_REFERENCES = [
+    f"{THESEUS}/.github/actions/setup@{SHA_B}",
+    f"{THESEUS}/.github/actions/setup@main",
+    f"{THESEUS}/.github/actions/setup",
+    f"{THESEUS}@{SHA_B}",
+    f"{THESEUS.upper()}/x@{SHA_B}",
+    f"{THESEUS}.git/x@{SHA_B}",
+]
+
+
+@pytest.mark.parametrize("uses", STEP_ACTION_REFERENCES)
+def test_step_level_theseus_action_holds_whatever_its_kind(uses: str) -> None:
+    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n"
+    for tree in (
+        SURFACE_NEW,
+        {**SURFACE_NEW, "x/action.yml": b"runs:\n  using: composite\n  steps: []\n"},
+        {**SURFACE_NEW, "x/action.yml": b"runs:\n  using: node20\n  main: i.js\n"},
+    ):
+        with pytest.raises(promotion.PromotionError, match="actions in the Theseus repository are not supported"):
+            _surface(tree, {"w.yml": workflow})
+
+
+def test_step_level_theseus_action_inside_a_theseus_workflow_holds() -> None:
     tree = {
-        **ACTION_TREE,
-        ".github/actions/setup/payload.py": b"print(1)\n",
-        ".github/actions/setup/nested/more.sh": b"true\n",
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/x@{SHA_B}\n".encode(),
     }
-    surface = _surface(tree, {"w.yml": ACTION_WORKFLOW})
-    assert {".github/actions/setup/payload.py", ".github/actions/setup/nested/more.sh"} <= surface
+    with pytest.raises(promotion.PromotionError, match="use job-level reusable workflows"):
+        _surface(tree)
 
 
-@pytest.mark.parametrize(
-    "run",
-    [
-        "python ${{ github.action_path }}/../lib/evil.py",
-        "python ${{ github.workspace }}/.github/actions/other/x.py",
-        "python $GITHUB_WORKSPACE/x.py",
-        "cd .. && ./run.sh",
-        "python /home/runner/work/_actions/joeharris76/theseus/abc/x.py",
-    ],
-)
-def test_composite_run_reaching_outside_the_action_directory_holds(run: str) -> None:
+@pytest.mark.parametrize("uses", ["./.github/actions/x", "./", "."])
+def test_step_level_local_reference_inside_a_theseus_workflow_holds(uses: str) -> None:
     tree = {
-        **ACTION_TREE,
-        ".github/actions/setup/action.yml": (
-            f"runs:\n  using: composite\n  steps:\n    - run: {run!r}\n      shell: bash\n"
-        ).encode(),
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n".encode(),
     }
-    with pytest.raises(promotion.PromotionError, match="outside its own directory"):
-        _surface(tree, {"w.yml": ACTION_WORKFLOW})
+    with pytest.raises(promotion.PromotionError, match=r"resolves against \$GITHUB_WORKSPACE"):
+        _surface(tree)
 
 
-def test_inline_and_action_path_runs_are_accepted() -> None:
-    body = (
-        b"runs:\n  using: composite\n  steps:\n"
-        b"    - run: echo hello && python ${{ github.action_path }}/payload.py\n      shell: bash\n"
-    )
-    tree = {**ACTION_TREE, ".github/actions/setup/action.yml": body, ".github/actions/setup/payload.py": b"x\n"}
-    assert ".github/actions/setup/payload.py" in _surface(tree, {"w.yml": ACTION_WORKFLOW})
+def test_job_level_local_workflow_reference_inside_a_theseus_workflow_is_supported() -> None:
+    tree = {
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": b"jobs:\n  a:\n    uses: ./.github/workflows/ci.yml\n",
+    }
+    assert ".github/workflows/ci.yml" in _surface(tree)
 
 
 @pytest.mark.parametrize("ref", ["main", "v1", "refs/heads/main", "refs/tags/v1", SHA_C, SHA_B.upper(), SHA_B[:7]])
-@pytest.mark.parametrize("level", ["step", "job"])
-def test_theseus_reference_not_pinned_to_the_promoted_commit_holds(level: str, ref: str) -> None:
-    if level == "step":
-        workflow = f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/.github/actions/setup@{ref}\n"
-    else:
-        workflow = f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{ref}\n"
+def test_theseus_reference_not_pinned_to_the_promoted_commit_holds(ref: str) -> None:
+    workflow = f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{ref}\n"
     with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
-        _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
+        _surface(SURFACE_NEW, {"w.yml": workflow})
 
 
 def test_theseus_reference_matches_owner_and_repository_case_insensitively() -> None:
     owner, name = THESEUS.split("/")
     spelled = f"{owner.upper()}/{name.title()}"
-    workflow = (
-        f"jobs:\n  a:\n    uses: {spelled}/.github/workflows/review.yml@{SHA_B}\n"
-        f"  b:\n    steps:\n      - uses: {spelled}/.github/actions/setup@{SHA_B}\n"
-    )
-    surface = _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
-    assert {".github/workflows/review.yml", ".github/actions/setup/action.yml"} <= surface
+    workflow = f"jobs:\n  a:\n    uses: {spelled}/.github/workflows/review.yml@{SHA_B}\n"
+    assert ".github/workflows/review.yml" in _surface(SURFACE_NEW, {"w.yml": workflow})
 
 
 def test_git_suffix_on_the_repository_name_is_the_same_repository() -> None:
-    workflow = (
-        f"jobs:\n  a:\n    uses: {THESEUS}.git/.github/workflows/review.yml@{SHA_B}\n"
-        f"  b:\n    steps:\n      - uses: {THESEUS}.git/.github/actions/setup@{SHA_B}\n"
-    )
-    surface = _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow})
-    assert {".github/workflows/review.yml", ".github/actions/setup/action.yml"} <= surface
+    workflow = f"jobs:\n  a:\n    uses: {THESEUS}.git/.github/workflows/review.yml@{SHA_B}\n"
+    assert ".github/workflows/review.yml" in _surface(SURFACE_NEW, {"w.yml": workflow})
     with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
-        _surface(ACTION_TREE | SURFACE_NEW, {"w.yml": workflow.replace(SHA_B, "main")})
+        _surface(SURFACE_NEW, {"w.yml": workflow.replace(SHA_B, "main")})
 
 
 @pytest.mark.parametrize(
@@ -1353,6 +1279,12 @@ def test_git_suffix_on_the_repository_name_is_the_same_repository() -> None:
 def test_job_level_theseus_reference_that_cannot_be_resolved_holds(uses: str) -> None:
     with pytest.raises(promotion.PromotionError, match="cannot be resolved|without a version"):
         _surface(SURFACE_NEW, {"w.yml": f"jobs:\n  a:\n    uses: {uses}\n"})
+
+
+def test_step_level_reference_that_mentions_the_theseus_repository_but_does_not_parse_holds() -> None:
+    workflow = f"jobs:\n  a:\n    steps:\n      - uses: https://github.com/{THESEUS}/x\n"
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved"):
+        _surface(SURFACE_NEW, {"w.yml": workflow})
 
 
 def test_nested_local_job_reference_that_is_not_a_workflow_holds() -> None:
