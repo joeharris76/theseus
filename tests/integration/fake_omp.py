@@ -285,8 +285,7 @@ CATALOG = (
     ("openai-codex/gpt-6-luna", 400_000, 64_000),
     ("anthropic/claude-sonnet-5-5", 1_000_000, 64_000),
     ("anthropic/claude-opus-5-5", 1_000_000, 64_000),
-    ("anthropic/claude-fable-5", 1_000_000, 64_000),
-    ("muse-code/muse-spark-1.3-contributor", 400_000, 32_000),
+    ("anthropic/claude-fable-5-1", 1_000_000, 128_000),
     ("google-antigravity/gemini-3.8-flash", 1_000_000, 64_000),
 )
 

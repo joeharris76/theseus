@@ -30,7 +30,7 @@ CONFIG = {
         "fallbackChains": {
             "anthropic/claude-sonnet-5-5": [
                 "openai-codex/gpt-6.1-sol:medium",
-                "muse-code/muse-spark-1.3-contributor:high",
+                "google-antigravity/gemini-3.8-flash:high",
             ],
             "anthropic/claude-opus-5-5": ["openai-codex/gpt-6.1-sol:high"],
             "openai-codex/gpt-6-luna": ["anthropic/claude-sonnet-5-5:medium"],
@@ -111,7 +111,7 @@ def test_capacity_uses_fallback_chain_minimum() -> None:
 
 
 def test_unknown_catalog_model_is_ignored() -> None:
-    assert capacity.reviewer_models("@default", CONFIG)[-1].startswith("muse-code/")
+    assert capacity.reviewer_models("@default", CONFIG)[-1].startswith("google-antigravity/")
     assert capacity.reviewer_capacity("@default", CONFIG, CATALOG) == 372_000
     assert capacity.reviewer_capacity("@other", CONFIG, CATALOG) is None
     assert capacity.reviewer_capacity("@missing-role", CONFIG, CATALOG) is None
@@ -119,7 +119,7 @@ def test_unknown_catalog_model_is_ignored() -> None:
     assert capacity.reviewer_capacities(chain, CONFIG, CATALOG) == {"a": 372_000}
     assert capacity.unlisted_models(CONFIG, CATALOG) == [
         "unlisted/some-model",
-        "muse-code/muse-spark-1.3-contributor",
+        "google-antigravity/gemini-3.8-flash",
     ]
 
 
@@ -333,6 +333,7 @@ MODELS = {{
     "anthropic": {{"claude-sonnet-5-5": 1000000, "claude-opus-5-5": 1000000}},
     "openai-codex": {{"gpt-6.1-sol": 400000, "gpt-6-luna": 272000}},
     "muse-code": {{"muse-spark-1.3-contributor": 262144}},
+    "google-antigravity": {{"gemini-3.8-flash": 262144}},
     "polluted": {{"model": 1000}},
 }}
 agent = Path(os.environ["HOME"]) / ".omp" / "agent"
@@ -385,6 +386,7 @@ def test_the_catalog_lists_every_gateway_provider_without_a_real_credential(
 
     assert listed["anthropic/claude-opus-5-5"] == 872_000
     assert listed["openai-codex/gpt-6-luna"] == 144_000
+    assert "google-antigravity/gemini-3.8-flash" in listed
     assert "muse-code/muse-spark-1.3-contributor" in listed
     assert not any(selector.startswith("polluted/") for selector in listed)
 

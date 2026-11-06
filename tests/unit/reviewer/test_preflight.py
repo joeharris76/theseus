@@ -23,7 +23,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 WINDOWS = {
     "anthropic/claude-sonnet-5-5": 872_000,
     "anthropic/claude-opus-5-5": 872_000,
-    "anthropic/claude-fable-5": 872_000,
+    "anthropic/claude-fable-5-1": 872_000,
     "openai-codex/gpt-6-luna": 144_000,
     "openai-codex/gpt-6.1-sol": 372_000,
     "openai-codex/gpt-6-astra": 144_000,
