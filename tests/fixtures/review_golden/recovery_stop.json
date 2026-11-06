@@ -20,6 +20,10 @@
         "reason": "",
         "source": "jev"
       },
+      "resolved": {
+        "nominal": "anthropic/claude-sonnet-5-5:high",
+        "target": "anthropic/claude-sonnet-5-5:high"
+      },
       "reviewer": "medium",
       "run_id": "<volatile>",
       "schema": 3,
@@ -66,6 +70,38 @@
       "medium": "medium",
       "small": "small",
       "trivial": "trivial"
+    },
+    "candidates": {
+      "huge": [
+        "anthropic/claude-opus-5-5:xhigh",
+        "openai-codex/gpt-6.1-sol:high",
+        "google-antigravity/gemini-4-argon:medium"
+      ],
+      "large": [
+        "anthropic/claude-opus-5-5:medium",
+        "openai-codex/gpt-6.1-sol:high",
+        "google-antigravity/gemini-4-argon:medium"
+      ],
+      "max": [
+        "anthropic/claude-fable-5-1:medium",
+        "openai-codex/gpt-6-astra:high",
+        "google-antigravity/gemini-4-argon:xhigh"
+      ],
+      "medium": [
+        "anthropic/claude-sonnet-5-5:high",
+        "openai-codex/gpt-6.1-sol:medium",
+        "google-antigravity/gemini-3.8-flash:high"
+      ],
+      "small": [
+        "openai-codex/gpt-6-luna:xhigh",
+        "anthropic/claude-sonnet-5-5:medium",
+        "google-antigravity/gemini-3.8-flash:medium"
+      ],
+      "trivial": [
+        "openai-codex/gpt-6-luna:xhigh",
+        "anthropic/claude-sonnet-5-5:medium",
+        "google-antigravity/gemini-3.8-flash:medium"
+      ]
     },
     "capacity": {
       "huge": 936000,
@@ -161,6 +197,7 @@
         "timeout_minutes": 45
       }
     ],
+    "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",
     "decision": "review",
@@ -190,10 +227,24 @@
     "max_attempts": 5,
     "max_defects": 10,
     "mode": "enforce",
+    "model_windows": {
+      "anthropic/claude-fable-5-1": 872000,
+      "anthropic/claude-opus-5-5": 936000,
+      "anthropic/claude-sonnet-5-5": 936000,
+      "google-antigravity/gemini-3.8-flash": 936000,
+      "google-antigravity/gemini-4-argon": 983040,
+      "openai-codex/gpt-6-astra": 144000,
+      "openai-codex/gpt-6-luna": 336000,
+      "openai-codex/gpt-6.1-sol": 372000
+    },
     "omp_config": ".github/review-omp-config.yml",
     "omp_sha256": "<volatile>",
     "open_findings": {},
     "pool_blocked_until": {},
+    "pool_providers": {
+      "claude": "anthropic",
+      "codex": "openai-codex"
+    },
     "pr": 103,
     "previous_state": null,
     "protocol": {
@@ -229,6 +280,11 @@
       }
     ],
     "reviewed_head": null,
+    "routed": [
+      "openai-codex",
+      "anthropic",
+      "google-antigravity"
+    ],
     "run_id": "<volatile>",
     "schema": 1,
     "scope": "full",
@@ -238,6 +294,23 @@
     "scope_reasons": [
       "changes comparison, validation or result logic: benchbox/core/equivalence/checker.py"
     ],
+    "served": {
+      "models": [
+        "anthropic/claude-fable-5-1",
+        "anthropic/claude-opus-5-5",
+        "anthropic/claude-sonnet-5-5",
+        "google-antigravity/gemini-3.8-flash",
+        "google-antigravity/gemini-4-argon",
+        "openai-codex/gpt-6-astra",
+        "openai-codex/gpt-6-luna",
+        "openai-codex/gpt-6.1-sol"
+      ],
+      "providers": [
+        "anthropic",
+        "google-antigravity",
+        "openai-codex"
+      ]
+    },
     "status_context": "review-verdict",
     "unchanged_files": [],
     "untracked_files": []
@@ -310,5 +383,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
+  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
 }

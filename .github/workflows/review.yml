@@ -221,6 +221,65 @@ jobs:
           SURFACE_TOKEN: ${{ steps.app.outputs.token }}
         run: theseus drive --policy "$POLICY_PATH" sweep
 
+  health:
+    name: health
+    needs: guard
+    if: github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', inputs.gated_base)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    env:
+      HAS_TAILNET: ${{ secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != '' }}
+      POLICY_PATH: ${{ inputs.policy_path }}
+    steps:
+      - name: Check out the trusted gated-branch copy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.trusted_paths }}
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the pinned Theseus bootstrap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install the reviewer pin from the trusted base lock
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+          BOOTSTRAP: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bootstrap.py
+          INSTALL_CACHE: ${{ runner.temp }}/theseus-reviewer-install
+        run: |
+          set -euo pipefail
+          EXECUTABLE="$(python3 -I -S "$BOOTSTRAP" install --repo trusted --commit "$TRUSTED_SHA" --cache-dir "$INSTALL_CACHE")"
+          dirname "$EXECUTABLE" >> "$GITHUB_PATH"
+
+      - name: Join the tailnet to reach the credential gateway
+        if: env.HAS_TAILNET == 'true'
+        continue-on-error: true
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CI_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CI_SECRET }}
+          tags: ${{ inputs.tailscale_tag }}
+
+      - name: Fail when the gateway is unreachable or a configured provider is not served
+        timeout-minutes: 5
+        working-directory: trusted
+        env:
+          OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
+          REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
+        run: theseus drive --policy "$POLICY_PATH" health
+
   review:
     name: review
     needs: guard

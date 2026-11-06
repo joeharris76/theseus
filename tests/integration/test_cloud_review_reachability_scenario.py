@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from .fake_gateway import DEFAULT_MODELS
 from .fake_github import OWNER_TOKEN
 from .harness import CHECKER, GATEWAY_TOKEN, JEV_KEY, PACKAGE, POLICY, SLUG, Harness, Step, git
 
@@ -24,9 +25,15 @@ class GatewayProxy:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 requests.append(self.path)
+                body = (
+                    json.dumps({"data": [{"id": model} for model in DEFAULT_MODELS]}).encode()
+                    if self.path.endswith("/v1/models")
+                    else b""
+                )
                 self.send_response(200)
-                self.send_header("Content-Length", "0")
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
+                self.wfile.write(body)
 
             def log_message(self, *args: Any) -> None:
                 return None
@@ -78,7 +85,11 @@ def test_a_cloud_review_reaches_a_tailnet_only_gateway_through_the_recorded_prox
 
     assert review.code == 0, review.stdout + review.stderr
     assert "Local review: no Critical or High findings; pr-open may proceed." in review.stdout
-    assert proxy.requests == [f"{UNROUTABLE_GATEWAY}/healthz"]
+    assert proxy.requests == [
+        f"{UNROUTABLE_GATEWAY}/healthz",
+        f"{UNROUTABLE_GATEWAY}/healthz",
+        f"{UNROUTABLE_GATEWAY}/v1/models",
+    ]
     assert harness.omp_calls() >= 1
     assert UNROUTABLE_GATEWAY not in review.stdout + review.stderr and GATEWAY_TOKEN not in json.dumps(
         harness.local_captures()

@@ -121,6 +121,7 @@
         "timeout_minutes": 45
       }
     ],
+    "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",
     "decision": "review",

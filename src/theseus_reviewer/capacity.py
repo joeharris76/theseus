@@ -4,13 +4,14 @@ import json
 import math
 import subprocess
 import tempfile
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from . import commands, credentials, promotion
 from ._vendor import yaml
 from .diff import Hunk, hunk_index
+from .providers import candidates, configured_models, routed, strip_effort
 
 OVERHEAD_TOKENS = {"inline": 80_000, "file-list": 170_000, "promotion": 170_000}
 BYTES_PER_TOKEN = 2.27
@@ -79,38 +80,9 @@ def required_bytes(
     return total
 
 
-def strip_effort(target: str) -> str:
-    provider, _, model = target.partition("/")
-    return f"{provider}/{model.split(':', 1)[0]}" if model else target
-
-
-def _role_target(model: str, config: Mapping[str, Any]) -> str | None:
-    if not model.startswith("@"):
-        return model
-    roles = config.get("modelRoles")
-    target = roles.get(model[1:]) if isinstance(roles, Mapping) else None
-    return target if isinstance(target, str) and target else None
-
-
 def _fallback_on(config: Mapping[str, Any]) -> object:
     retry = config.get("retry")
     return retry.get("fallbackOn") if isinstance(retry, Mapping) else None
-
-
-def reviewer_models(model: str, config: Mapping[str, Any]) -> list[str]:
-    target = _role_target(model, config)
-    if target is None:
-        return []
-    models = [target]
-    retry = config.get("retry")
-    chains = retry.get("fallbackChains") if isinstance(retry, Mapping) else None
-    if isinstance(chains, Mapping):
-        followers = chains.get(target)
-        if followers is None:
-            followers = chains.get(strip_effort(target))
-        if isinstance(followers, Sequence) and not isinstance(followers, str):
-            models.extend(item for item in followers if isinstance(item, str))
-    return models
 
 
 def _window(model: str, catalog: Mapping[str, int]) -> int | None:
@@ -119,29 +91,22 @@ def _window(model: str, catalog: Mapping[str, int]) -> int | None:
     return catalog.get(strip_effort(model))
 
 
-def configured_models(config: Mapping[str, Any]) -> list[str]:
-    names: list[str] = []
-    roles = config.get("modelRoles")
-    if isinstance(roles, Mapping):
-        names.extend(target for target in roles.values() if isinstance(target, str) and target)
-    retry = config.get("retry")
-    chains = retry.get("fallbackChains") if isinstance(retry, Mapping) else None
-    if isinstance(chains, Mapping):
-        for leader, followers in chains.items():
-            names.append(str(leader))
-            if isinstance(followers, Sequence) and not isinstance(followers, str):
-                names.extend(item for item in followers if isinstance(item, str))
-    return list(dict.fromkeys(names))
-
-
 def unlisted_models(config: Mapping[str, Any], catalog: Mapping[str, int]) -> list[str]:
     return list(
         dict.fromkeys(strip_effort(name) for name in configured_models(config) if _window(name, catalog) is None)
     )
 
 
+def model_windows(config: Mapping[str, Any], catalog: Mapping[str, int]) -> dict[str, int]:
+    return {
+        strip_effort(name): window
+        for name in configured_models(config)
+        if (window := _window(name, catalog)) is not None
+    }
+
+
 def reviewer_capacity(model: str, config: Mapping[str, Any], catalog: Mapping[str, int]) -> int | None:
-    chain = reviewer_models(model, config)
+    chain = candidates(model, config)
     if not chain or (primary := _window(chain[0], catalog)) is None:
         return None
     if _fallback_on(config) == USAGE_LIMIT_FALLBACK:
@@ -183,12 +148,19 @@ def read_catalog(
     config_text: str,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, int]:
+    try:
+        held = yaml.safe_load(config_text)
+    except yaml.YAMLError as exc:
+        raise CatalogError(f"the model configuration is not readable: {exc}") from exc
+    providers = routed(held if isinstance(held, Mapping) else {})
     with tempfile.TemporaryDirectory(prefix="review-catalog-") as scratch:
         home = Path(scratch) / "home"
         agent = home / ".omp" / "agent"
         agent.mkdir(parents=True)
         (agent / "config.yml").write_text(config_text, encoding="utf-8")
-        (agent / "models.yml").write_text(credentials.gateway_models_text(CATALOG_GATEWAY_URL), encoding="utf-8")
+        (agent / "models.yml").write_text(
+            credentials.gateway_models_text(CATALOG_GATEWAY_URL, providers), encoding="utf-8"
+        )
         overlay = commands.write_overlay(Path(scratch))
         env = {**commands.omp_env(), "HOME": str(home), "TMPDIR": scratch, credentials.GATEWAY_ENV[0]: CATALOG_TOKEN}
         try:

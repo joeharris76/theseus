@@ -27,6 +27,7 @@ ARTIFACT_KEYS = frozenset(
         "recovery",
     }
 )
+OPTIONAL_KEYS = frozenset({"resolved"})
 VERDICT_OUTCOME = "verdict"
 ABSENT_OUTCOME = "absent"
 
@@ -46,8 +47,9 @@ def build_artifact(
     missing: absence.Absence | None,
     diagnostic: str = "",
     recovered: recovery.Recovery | None = None,
+    resolved: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    artifact = {
         "schema": SCHEMA_VERSION,
         "run_id": run_id,
         "pr": pr,
@@ -68,6 +70,9 @@ def build_artifact(
         "diagnostic": diagnostic,
         "recovery": recovered.to_json() if recovered is not None else None,
     }
+    if resolved is not None:
+        artifact["resolved"] = dict(resolved)
+    return artifact
 
 
 @dataclass
@@ -90,6 +95,9 @@ def _attempt(
     workspace: Path | str | None = None,
 ) -> Attempt:
     attempt = _judged(data, plan, loaded, workspace)
+    resolved = data.get("resolved")
+    if isinstance(resolved, Mapping):
+        attempt = replace(attempt, target=str(resolved.get("target") or ""), nominal=str(resolved.get("nominal") or ""))
     raw = data["recovery"]
     if raw is None:
         return attempt
@@ -164,7 +172,11 @@ def load(
             loaded.errors.append(f"{path.name}: unreadable ({exc})")
             continue
         errors = loaded.errors
-        if not _check(isinstance(data, dict) and set(data) == ARTIFACT_KEYS, errors, f"{path.name}: wrong keys"):
+        if not _check(
+            isinstance(data, dict) and ARTIFACT_KEYS <= set(data) <= ARTIFACT_KEYS | OPTIONAL_KEYS,
+            errors,
+            f"{path.name}: wrong keys",
+        ):
             continue
         valid = all(
             (
@@ -201,6 +213,8 @@ def replay(selection_input: SelectionInput, attempts: list[Attempt]) -> list[str
         expected = step.reviewer.name if step.kind == selection.REVIEW and step.reviewer else None
         if expected != attempt.reviewer:
             errors.append(f"slot {attempt.slot} ran {attempt.reviewer}, but the policy selects {expected or step.kind}")
+        elif attempt.target and step.resolution is not None and attempt.target != step.resolution.target:
+            errors.append(f"slot {attempt.slot} ran {attempt.target}, but the policy selects {step.resolution.target}")
         held = attempt.recovery
         if held is not None and held.source == recovery.FALLBACK:
             number = 1 + sum(1 for earlier in attempts[:index] if earlier.reviewer == attempt.reviewer)

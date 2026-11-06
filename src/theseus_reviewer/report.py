@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import absence, adjudication, credentials, dedup, protocol, recovery, redaction_check, selection
+from . import absence, adjudication, credentials, dedup, protocol, providers, recovery, redaction_check, selection
 from .retry import (
     ALL_ABSENT,
     FAILURE,
@@ -16,6 +16,7 @@ from .retry import (
     PENDING,
     STOPPED,
     SUCCESS,
+    UNAVAILABLE,
     UNREPORTED,
 )
 from .selection import Attempt, Step
@@ -63,6 +64,8 @@ class Final:
     strikes: int | None = None
     judgement: protocol.Judgement | None = None
     marker: str | None = None
+    degraded: str = ""
+    classification_note: str = ""
 
 
 def _clip(text: str, limit: int = DESCRIPTION_LIMIT) -> str:
@@ -201,12 +204,49 @@ def _header(plan: Mapping[str, Any], state: str) -> list[str]:
     return lines
 
 
-def _reviewer_line(plan: Mapping[str, Any], name: str | None) -> list[str]:
+def _reviewer_line(plan: Mapping[str, Any], name: str | None, ran: str = "") -> list[str]:
     spec = next((item for item in plan["chain"] if item["name"] == name), None)
     if spec is None:
         return []
     effort = f", effort {spec['effort']}" if spec.get("effort") else ""
-    return [f"Reviewer: {name} (role {spec['role']}, {spec['harness']} {spec['model']}{effort}).", ""]
+    line = f"Reviewer: {name} (role {spec['role']}, {spec['harness']} {spec['model']}{effort})."
+    return [f"{line} Model that ran: {ran}." if ran else line, ""]
+
+
+def _served(plan: Mapping[str, Any]) -> providers.Served | None:
+    return providers.Served.from_json(plan["served"]) if plan.get("served") else None
+
+
+def _degraded(plan: Mapping[str, Any], attempts: Sequence[Attempt]) -> list[str]:
+    return providers.degraded_providers(plan.get("routed") or (), _served(plan), selection.excluded_providers(attempts))
+
+
+def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded: Sequence[str]) -> list[str]:
+    served = _served(plan)
+    lines: list[str] = []
+    if served is None and plan.get("served_error"):
+        return [f"- the gateway's served models are unknown: {plan['served_error']}"]
+    if served is None:
+        return lines
+    unserved = [item for item in degraded if item not in served.providers]
+    excluded = sorted(selection.excluded_providers(attempts))
+    if unserved:
+        lines.append(f"- not served by the gateway: {', '.join(unserved)}")
+    for attempt in attempts:
+        if selection.provider_failed(attempt):
+            lines.append(
+                f"- excluded after {attempt.provider} failed (attempt {attempt.slot}, {attempt.reviewer}): {attempt.absence}"
+            )
+    if degraded or excluded:
+        lines.append(f"- served: {', '.join(sorted(served.providers)) or 'none'}")
+    for attempt in attempts:
+        if attempt.target and attempt.nominal and attempt.target != attempt.nominal:
+            lines.append(f"- {attempt.reviewer} (attempt {attempt.slot}): {attempt.nominal} → {attempt.target}")
+    return lines
+
+
+def _classification_lines(note: str) -> list[str]:
+    return [note, ""] if note else []
 
 
 def _recovery_text(attempt: Attempt) -> str:
@@ -276,6 +316,8 @@ def _settled(plan: Mapping[str, Any], step: Step) -> tuple[Step, str]:
         return step, STOPPED
     if step.kind == selection.PENDING and (step.oversize or plan.get("brief_mode") == "oversize"):
         return step, OVERSIZE
+    if step.kind == selection.PENDING and step.unavailable:
+        return step, UNAVAILABLE
     return step, ALL_ABSENT
 
 
@@ -328,9 +370,12 @@ def _description(
     reviewer: str | None,
     cause: str,
     escalated: Sequence[str] = (),
+    unavailable: str = "",
 ) -> str:
     if cause == OVERSIZE:
         return OVERSIZE_DESCRIPTION
+    if cause == UNAVAILABLE and judgement is None:
+        return f"pending: no reviewer available ({unavailable})"
     if judgement is None:
         return "pending: " + "; ".join(step.reasons or ("no reviewer available",))
     if judgement.decision == protocol.SHIP_WITH_FIXES:
@@ -399,6 +444,7 @@ def finalize(
     commentable: Mapping[str, frozenset[int]],
     workspace: Path | str | None = None,
     secrets: tuple[str, ...] = (),
+    note: str = "",
 ) -> Final:
     if errors:
         body = "\n".join(
@@ -450,9 +496,16 @@ def finalize(
     if unrecorded:
         ids, markers = {}, {}
         state, pending_cause = PENDING, MARKER_LIMIT
-    description = (
-        MARKER_LIMIT_DESCRIPTION if unrecorded else _description(step, judgement, reviewer, pending_cause, escalated)
+    degraded = _degraded(plan, attempts)
+    gone = plan.get("served_error") or (
+        f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change"
     )
+    description = (
+        MARKER_LIMIT_DESCRIPTION
+        if unrecorded
+        else _description(step, judgement, reviewer, pending_cause, escalated, gone)
+    )
+    degraded_suffix = f" · degraded: {', '.join(degraded)}" if degraded else ""
     delivery = plan.get("findings_delivery", "comment")
     listed = [*placement.inline, *placement.summary, *(judgement.not_counted if judgement is not None else ())]
 
@@ -467,7 +520,10 @@ def finalize(
             lines += [OVERSIZE_NOTE, ""]
         if judgement is not None:
             lines += [f"Decision: **{judgement.label}**.", ""]
-        lines += _reviewer_line(plan, reviewer)
+        lines += _classification_lines(note)
+        lines += _reviewer_line(
+            plan, reviewer, terminal.target if terminal is not None and terminal.target != terminal.nominal else ""
+        )
         if cap is not None:
             lines += [_size_notice(listed, cap), ""]
         lines += _judgement_notes(judgement)
@@ -508,6 +564,7 @@ def finalize(
             plan, strikes if judgement is not None and not unrecorded else int(rules.get("strikes", 0))
         )
         lines += _section("Reviewers not available", _absences(attempts, step))
+        lines += _section("Provider availability", _availability(plan, attempts, degraded))
         body = "\n".join(lines).rstrip() + "\n"
         if marker is not None:
             body += "\n" + marker
@@ -520,7 +577,7 @@ def finalize(
     final_strikes = strikes if judgement is not None and not unrecorded else None
     return Final(
         state,
-        _clip(description),
+        _clip(description, DESCRIPTION_LIMIT - len(degraded_suffix)) + degraded_suffix,
         body if has_content else "",
         review,
         reviewer,
@@ -528,6 +585,7 @@ def finalize(
         final_strikes,
         judgement,
         marker,
+        degraded_suffix,
     )
 
 
@@ -699,7 +757,8 @@ def status_payload(plan: Mapping[str, Any], final: Final, target_url: str) -> di
     if final.state == SUCCESS and run_id:
         suffix = f" [run {run_id}]"
         if len(description) + len(suffix) > DESCRIPTION_LIMIT:
-            description = _clip(description, DESCRIPTION_LIMIT - len(suffix))
+            base = description.removesuffix(final.degraded)
+            description = _clip(base, DESCRIPTION_LIMIT - len(suffix) - len(final.degraded)) + final.degraded
         description += suffix
     return {
         "state": final.state,

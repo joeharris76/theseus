@@ -33,6 +33,35 @@ def _next_reply(home: Path, replies: list[dict[str, Any]], prompt: str) -> tuple
     return reply, index
 
 
+def _resolved_model(argv: list[str]) -> str:
+    selector = argv[argv.index("--model") + 1] if "--model" in argv else ""
+    if not selector.startswith("@"):
+        return selector
+    config = Path(os.environ["HOME"]) / ".omp" / "agent" / "config.yml"
+    in_roles = False
+    for line in config.read_text(encoding="utf-8").splitlines():
+        if line.startswith("modelRoles:"):
+            in_roles = True
+            continue
+        if in_roles and not line.startswith(" "):
+            break
+        key, _, value = line.strip().partition(": ")
+        if in_roles and key == selector[1:]:
+            return value.strip().strip("'\"")
+    return ""
+
+
+def _record_model(home: Path, index: int, model: str) -> None:
+    import fcntl
+
+    with open(home / "calls.lock", "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        counter = home / "calls.json"
+        calls = json.loads(counter.read_text(encoding="utf-8"))
+        calls[index]["model"] = model
+        counter.write_text(json.dumps(calls), encoding="utf-8")
+
+
 def _record_met(home: Path, index: int, met: bool) -> None:
     import fcntl
 
@@ -287,6 +316,9 @@ CATALOG = (
     ("anthropic/claude-opus-5-5", 1_000_000, 64_000),
     ("anthropic/claude-fable-5-1", 1_000_000, 128_000),
     ("google-antigravity/gemini-3.8-flash", 1_000_000, 64_000),
+    ("openai-codex/gpt-6.1-sol", 500_000, 128_000),
+    ("openai-codex/gpt-6-astra", 272_000, 128_000),
+    ("google-antigravity/gemini-4-argon", 1_111_040, 128_000),
 )
 
 
@@ -311,6 +343,13 @@ def main(argv: list[str]) -> int:
     cwd = argv[argv.index("--cwd") + 1]
     prompt = argv[-1]
     reply, call = _next_reply(home, script["replies"], prompt)
+    model = _resolved_model(argv)
+    _record_model(home, call, model)
+    dead = script.get("dead", {}).get(model.partition("/")[0])
+    if dead is not None:
+        for event in _terminal_error({**dead, "provider": model.partition("/")[0]}):
+            sys.stdout.write(json.dumps(event) + "\n")
+        return 1
     if script.get("ancestor_probe"):
         _record_ancestors(home, script["ancestor_probe"])
     if reply.get("rendezvous"):

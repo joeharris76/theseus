@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from theseus_reviewer import providers
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import Reviewer, load_policy
 from theseus_reviewer.selection import (
@@ -13,7 +14,6 @@ from theseus_reviewer.selection import (
     FAIL,
     PASS,
     PENDING,
-    POOL_PROVIDERS,
     QUOTA_BACKOFF,
     REVIEW,
     Attempt,
@@ -216,11 +216,12 @@ def test_a_fallback_block_never_outlives_the_one_hour_backoff() -> None:
 def test_pool_resets_from_the_primary_provider_keep_a_parsed_reset_up_to_the_backoff() -> None:
     chain = [_reviewer("a", pool="claude")]
     reset = NOW + timedelta(minutes=20)
-    resets = pool_resets(_input(chain), [Attempt(1, "a", ABSENT, "quota", reset_at=reset, provider="anthropic")])
-    assert resets == {"claude": PoolBlock(reset, "anthropic", NOW)}
+    held = _input(chain, pool_providers={"claude": "anthropic"})
+    resets = pool_resets(held, [Attempt(1, "a", ABSENT, "quota", reset_at=reset, provider="anthropic")])
+    assert resets == {"claude": PoolBlock(reset, "anthropic", NOW, True)}
     far = NOW + timedelta(days=6)
-    resets = pool_resets(_input(chain), [Attempt(1, "a", ABSENT, "quota", reset_at=far, provider="anthropic")])
-    assert resets == {"claude": PoolBlock(NOW + QUOTA_BACKOFF, "anthropic", NOW)}
+    resets = pool_resets(held, [Attempt(1, "a", ABSENT, "quota", reset_at=far, provider="anthropic")])
+    assert resets == {"claude": PoolBlock(NOW + QUOTA_BACKOFF, "anthropic", NOW, True)}
 
 
 def test_pool_resets_from_a_fallback_provider_ignore_the_reset_and_last_one_hour() -> None:
@@ -262,20 +263,23 @@ def test_pool_resets_keep_future_blocks() -> None:
 
 
 def test_active_blocks_on_a_new_head_keep_only_primary_provider_blocks() -> None:
-    primary = PoolBlock(NOW + timedelta(hours=3), "anthropic", NOW)
+    primary = PoolBlock(NOW + timedelta(hours=3), "anthropic", NOW, True)
     fallback = PoolBlock(NOW + timedelta(minutes=30), "google-antigravity", NOW)
     blocks = {"claude": primary, "codex": fallback}
     assert active_blocks(blocks, NOW, same_head=False) == {"claude": primary}
     assert active_blocks(blocks, NOW, same_head=True) == blocks
 
 
-def test_pool_providers_match_the_reviewer_roles_in_the_omp_config() -> None:
-    roles = yaml.safe_load(OMP_CONFIG.read_text(encoding="utf-8"))["modelRoles"]
+def test_every_pool_leads_with_one_provider_in_the_omp_config() -> None:
+    config = yaml.safe_load(OMP_CONFIG.read_text(encoding="utf-8"))
     policy = load_policy(POLICY_PATH)
-    for reviewer in policy.reviewers.values():
-        provider = roles[reviewer.model.removeprefix("@")].split("/", 1)[0]
-        assert POOL_PROVIDERS[reviewer.pool] == provider
-    assert set(POOL_PROVIDERS) == set(policy.pools)
+    for pool in policy.pools:
+        leaders = {
+            providers.provider_of(providers.candidates(reviewer.model, config)[0])
+            for reviewer in policy.reviewers.values()
+            if reviewer.pool == pool
+        }
+        assert len(leaders) == 1
 
 
 def test_pool_resets_drop_a_block_that_ends_now() -> None:
@@ -293,10 +297,11 @@ def test_pool_resets_ignore_absences_other_than_quota(absence: str) -> None:
 @pytest.mark.parametrize(("stored", "reported"), [(40, 10), (10, 40)])
 def test_pool_resets_keep_the_later_of_a_stored_block_and_a_new_quota_reset(stored: int, reported: int) -> None:
     chain = [_reviewer("a", pool="claude")]
-    kept = PoolBlock(NOW + timedelta(minutes=stored), "anthropic", NOW - timedelta(minutes=5))
+    kept = PoolBlock(NOW + timedelta(minutes=stored), "anthropic", NOW - timedelta(minutes=5), True)
     attempt = Attempt(1, "a", ABSENT, "quota", reset_at=NOW + timedelta(minutes=reported), provider="anthropic")
-    later = kept if stored > reported else PoolBlock(NOW + timedelta(minutes=reported), "anthropic", NOW)
-    assert pool_resets(_input(chain, pool_blocked_until={"claude": kept}), [attempt]) == {"claude": later}
+    later = kept if stored > reported else PoolBlock(NOW + timedelta(minutes=reported), "anthropic", NOW, True)
+    held = _input(chain, pool_blocked_until={"claude": kept}, pool_providers={"claude": "anthropic"})
+    assert pool_resets(held, [attempt]) == {"claude": later}
 
 
 def test_oversize_brief_skips_everything() -> None:

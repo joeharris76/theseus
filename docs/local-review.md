@@ -28,7 +28,9 @@ Each review phase runs as a child of the verified install: the same interpreter 
 |---|---|
 | 0 | No Critical or High finding; the pull request may be opened. |
 | 1 | Refused: a blocking finding, an unanswered earlier finding, or an invalid option or rebuttal. |
-| 2 | Unavailable: no classifier key, unreachable gateway, unreadable trusted inputs. The review never reports success when it could not run. |
+| 2 | Unavailable: no classifier key, unreachable gateway, nothing servable, unreadable trusted inputs. The review never reports success when it could not run. |
+
+The local attempt phase probes the gateway like the hosted one. A degraded gateway still reviews: the output says `Review degraded: <providers>; reviewed by <model>.` and the review follows the normal verdict rules. When nothing can run for availability alone (the gateway is unreachable or rejects the client token, nothing is served, or no served model can hold the change) the exit is 2 with the cause on stderr. Set `REVIEW_LOCAL_UNAVAILABLE_OUT=FILE` to have an exit-2 run write one line, `availability: <reason>`, to that file for those availability causes only; the file is left empty for every other exit-2 cause (no classifier key, a secret on disk, a hold, an invalid policy), so a caller can tell an outage from a refusal without parsing stderr.
 
 `--member` with `--result-json FILE` records a member review for batch consumers (both flags together, full commit SHAs only). The persisted member record schema string is `benchbox_member_review_v1`, unchanged.
 

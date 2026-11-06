@@ -22,12 +22,14 @@ from . import (
     adjudication,
     base_change,
     capacity,
+    commands,
     coverage,
     credentials,
     dedup,
     disk_scan,
     edits,
     findings,
+    gateway_report,
     gitdiff,
     github,
     legacy,
@@ -35,6 +37,7 @@ from . import (
     processes,
     promotion,
     protocol,
+    providers,
     recovery,
     redaction_check,
     report,
@@ -47,10 +50,11 @@ from . import (
 from . import (
     attempts as attempt_files,
 )
+from ._vendor import yaml
 from .absence import ERROR, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
-from .classify import Classification, classify_diff
+from .classify import Classification, classification_note, classify_diff, fallback_classification
 from .diff import binary_files, binary_notice_count, commentable_lines, hunk_index, select_files
 from .evidence import is_binary_candidate
 from .jev import JevError, JevSession
@@ -1263,6 +1267,7 @@ def _plan_review(
             "reviewed_head": latest["head_sha"] if partial else None,
             "gate_path_list": list(policy.classifier.gate_paths),
             "pool_blocked_until": {pool: block.to_json() for pool, block in pool_blocks.items()},
+            "classifier_unavailable_bucket": policy.classifier.unavailable_bucket,
         }
     )
     if promotion_record is not None:
@@ -1329,12 +1334,17 @@ def _empty_selection(reason: str, slot: int) -> int:
 
 def _choose_reviewer(
     plan: Mapping[str, Any], loaded: attempt_files.LoadedAttempts, classification: Classification, slot: int
-) -> tuple[Reviewer | None, str]:
+) -> tuple[Reviewer | None, str, providers.Resolution | None]:
     step, errors = attempt_files.decide(_selection(plan, classification), loaded)
     chosen = (
         step.reviewer if not errors and step.kind == selection.REVIEW and len(loaded.attempts) == slot - 1 else None
     )
-    return chosen, f"slot {slot}: {chosen.name if chosen else step.kind} {'; '.join(errors)}".rstrip()
+    line = f"slot {slot}: {chosen.name if chosen else step.kind} {'; '.join(errors)}".rstrip()
+    if chosen is not None and step.resolution is not None and step.resolution.substituted:
+        line += f" ({step.resolution.nominal} unavailable; running {step.resolution.target})"
+    if chosen is None and step.unavailable:
+        line += f" (unavailable: {'; '.join(step.reasons)})"
+    return chosen, line, step.resolution if chosen is not None else None
 
 
 def command_select(args: argparse.Namespace) -> int:
@@ -1347,10 +1357,14 @@ def command_select(args: argparse.Namespace) -> int:
         try:
             classification = _classify_plan(plan)
         except (JevError, KeyError, TypeError, ValueError) as exc:
-            if classify_only:
-                _summary(f"classification unavailable: {exc}")
-                return 0
-            return _empty_selection(f"classification unavailable: {exc}", args.slot)
+            bucket = plan.get("classifier_unavailable_bucket")
+            if not isinstance(exc, JevError) or exc.missing_key or not bucket:
+                if classify_only:
+                    _summary(f"classification unavailable: {exc}")
+                    return 0
+                return _empty_selection(f"classification unavailable: {exc}", args.slot)
+            classification = fallback_classification(bucket, plan_gate_flags(plan))
+            _summary(f"classification unavailable (TypeSafe): {exc}; {classification_note(classification)}")
         _write_json(classification_path, classification.to_json())
         if classify_only:
             return 0
@@ -1359,7 +1373,7 @@ def command_select(args: argparse.Namespace) -> int:
         if read is None:
             return _empty_selection("classification unreadable", args.slot)
         classification = read
-    chosen, line = _choose_reviewer(plan, loaded, classification, args.slot)
+    chosen, line, _ = _choose_reviewer(plan, loaded, classification, args.slot)
     _output({"reviewer": chosen.name if chosen else "", "harness": chosen.harness if chosen else ""})
     _defer_summary(Path(args.attempts_dir), line)
     return 0
@@ -1523,6 +1537,7 @@ def command_review(args: argparse.Namespace) -> int:
         verdict=outcome.verdict,
         missing=outcome.missing,
         diagnostic=outcome.diagnostic,
+        resolved=getattr(args, "resolved", None),
     )
     _write_json(Path(args.out_dir) / attempt_files.artifact_name(args.slot), artifact)
     if outcome.capture is not None:
@@ -1597,6 +1612,11 @@ def decided_attempts(
     return selection_input, loaded, step, errors
 
 
+def _classification_note(args: argparse.Namespace) -> str:
+    classification = _read_classification(Path(args.classification)) if args.classification else None
+    return classification_note(classification) if classification is not None and classification.fallback else ""
+
+
 def command_finalize(args: argparse.Namespace) -> int:
     plan = _read_json(Path(args.plan))
     out_dir = Path(args.out_dir)
@@ -1663,6 +1683,7 @@ def command_finalize(args: argparse.Namespace) -> int:
             commentable,
             workspace=ws,
             secrets=credentials.known(_held(args)),
+            note=_classification_note(args),
         )
         previous = plan.get("previous_state")
         _write_states(
@@ -1870,12 +1891,12 @@ def _retry_reason(
                 token,
                 base_changed_at,
             )
-        if state.outcome != retry.PENDING or state.pending_cause not in (retry.ALL_ABSENT, retry.UNPUBLISHED):
+        if state.outcome != retry.PENDING or state.pending_cause not in (*retry.SWEPT_CAUSES, retry.UNPUBLISHED):
             return None
         reset_at = github.backoff_reset_at(repo, number, head, binding.attesters)
         usable = (
             reset_at is not None
-            and state.pending_cause == retry.ALL_ABSENT
+            and state.pending_cause in retry.SWEPT_CAUSES
             and retry.due_for_retry(state, head, now, rules, reset_at)
         )
         if not due and not usable:
@@ -2143,7 +2164,13 @@ def command_reset_backoff(args: argparse.Namespace) -> int:
     return 0
 
 
-def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_loopback_http: bool = False) -> None:
+def write_reviewer_home(
+    home: Path,
+    gateway_url: str,
+    config_text: str,
+    allow_loopback_http: bool = False,
+    effective_text: str | None = None,
+) -> None:
     url = gateway_url.strip()
     if not url:
         raise SystemExit("review-verdict: error: the gateway URL is empty; set the REVIEW_GATEWAY_URL secret")
@@ -2155,8 +2182,13 @@ def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_lo
         raise SystemExit("review-verdict: error: the gateway URL must be an https:// URL")
     agent_dir = home / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "config.yml").write_text(config_text, encoding="utf-8")
-    (agent_dir / "models.yml").write_text(credentials.gateway_models_text(url), encoding="utf-8")
+    try:
+        held = yaml.safe_load(config_text)
+    except yaml.YAMLError as exc:
+        raise SystemExit(f"review-verdict: error: the reviewer config is not readable: {exc}") from exc
+    routed = providers.routed(held if isinstance(held, Mapping) else {})
+    (agent_dir / "config.yml").write_text(config_text if effective_text is None else effective_text, encoding="utf-8")
+    (agent_dir / "models.yml").write_text(credentials.gateway_models_text(url, routed), encoding="utf-8")
 
 
 def command_reviewer_home(args: argparse.Namespace) -> int:
@@ -2180,7 +2212,23 @@ def _scratch_environment(home: Path) -> Iterator[None]:
                 os.environ[name] = value
 
 
-def _run_slot(args: argparse.Namespace, plan: Mapping[str, Any], slot: int, reviewer: Reviewer) -> bool:
+def _slot_config(plan: Mapping[str, Any], reviewer: Reviewer, resolution: providers.Resolution | None) -> str:
+    text = Path(plan["omp_config"]).read_text(encoding="utf-8")
+    if resolution is None or not resolution.rewrite or not reviewer.model.startswith("@"):
+        return text
+    held = yaml.safe_load(text)
+    options = plan["candidates"][reviewer.name]
+    effective = providers.effective_config(held, reviewer.model.removeprefix("@"), resolution, options)
+    return yaml.safe_dump(effective, sort_keys=False)
+
+
+def _run_slot(
+    args: argparse.Namespace,
+    plan: Mapping[str, Any],
+    slot: int,
+    reviewer: Reviewer,
+    resolution: providers.Resolution | None = None,
+) -> bool:
     out_dir = Path(args.attempts_dir)
     workspace = Path(args.workspace)
     runner.reset_workspace(workspace)
@@ -2194,6 +2242,7 @@ def _run_slot(args: argparse.Namespace, plan: Mapping[str, Any], slot: int, revi
                 os.environ.get("REVIEW_GATEWAY_URL", ""),
                 Path(plan["omp_config"]).read_text(encoding="utf-8"),
                 bool(getattr(args, "allow_loopback_http", False)),
+                _slot_config(plan, reviewer, resolution),
             )
             command_review(
                 argparse.Namespace(
@@ -2205,6 +2254,7 @@ def _run_slot(args: argparse.Namespace, plan: Mapping[str, Any], slot: int, revi
                     scratch=str(home / "scratch"),
                     out_dir=str(out_dir),
                     classification=args.classification,
+                    resolved=None if resolution is None else resolution.to_json(),
                 )
             )
     except processes.HarnessLeakError as exc:
@@ -2275,6 +2325,35 @@ def command_count_attempts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _record_served(args: argparse.Namespace, plan_path: Path, plan: dict[str, Any], ran: int) -> dict[str, Any]:
+    if not plan.get("candidates") or (ran > 0 and ("served" in plan or "served_error" in plan)):
+        return plan
+    base = {key: value for key, value in plan.items() if key not in ("served", "served_error")}
+    try:
+        served = providers.probe(
+            os.environ.get("REVIEW_GATEWAY_URL", ""),
+            os.environ.get("OMP_GATEWAY_TOKEN", ""),
+            proxy=commands.active_gateway_proxy(),
+            allow_loopback_http=bool(getattr(args, "allow_loopback_http", False)),
+        )
+    except providers.ProbeError as exc:
+        held = {**base, "served_error": str(exc)}
+        _defer_summary(
+            Path(args.attempts_dir),
+            f"gateway probe failed: {exc}; no reviewer is selected until the served models are known",
+        )
+    else:
+        held = {**base, "served": served.to_json()}
+        gone = providers.degraded_providers(plan.get("routed") or (), served, ())
+        _defer_summary(
+            Path(args.attempts_dir), f"gateway serves {', '.join(sorted(served.providers)) or 'no provider'}"
+        )
+        if gone:
+            _defer_summary(Path(args.attempts_dir), f"degraded: {', '.join(gone)} not served")
+    _write_json(plan_path, held)
+    return held
+
+
 def command_attempts(args: argparse.Namespace) -> int:
     plan = _read_json(Path(args.plan))
     out_dir = Path(args.attempts_dir)
@@ -2282,6 +2361,7 @@ def command_attempts(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     classification = _read_classification(Path(args.classification))
     ran = len(attempt_files.load(out_dir, plan, os.environ["GITHUB_RUN_ID"], workspace=workspace).attempts)
+    plan = _record_served(args, Path(args.plan), plan, ran)
     adopting = processes.become_subreaper()
     try:
         if processes.IS_LINUX and not adopting:
@@ -2292,12 +2372,12 @@ def command_attempts(args: argparse.Namespace) -> int:
                 _summary(f"slot {slot}: pending (classification unreadable)")
                 break
             loaded = attempt_files.load(out_dir, plan, os.environ["GITHUB_RUN_ID"], workspace=workspace)
-            chosen, line = _choose_reviewer(plan, loaded, classification, slot)
+            chosen, line, resolution = _choose_reviewer(plan, loaded, classification, slot)
             _defer_summary(out_dir, line)
             if chosen is None:
                 break
             ran = slot
-            if _run_slot(args, plan, slot, chosen):
+            if _run_slot(args, plan, slot, chosen, resolution):
                 return 1
             loaded = attempt_files.load(out_dir, plan, os.environ["GITHUB_RUN_ID"], workspace=workspace)
             if _recovery_target(plan, loaded) is not None:
@@ -2335,31 +2415,6 @@ def command_redact_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def _gateway_model(target: str) -> str:
-    provider, _, model = target.partition("/")
-    return f"{provider}/{model.split(':', 1)[0]}"
-
-
-def gateway_models(config: Mapping[str, Any]) -> list[str]:
-    chains = config["retry"]["fallbackChains"]
-    targets = [*config["modelRoles"].values(), *chains, *(target for chain in chains.values() for target in chain)]
-    return list(dict.fromkeys(_gateway_model(target) for target in targets))
-
-
-def _gateway_accounts(path: Path, providers: list[str]) -> dict[str, list[str]]:
-    listed = _read_json(path).get("accounts", [])
-    accounts = {
-        provider: [
-            entry["identityKey"] for entry in listed if entry.get("provider") == provider and entry.get("identityKey")
-        ]
-        for provider in providers
-    }
-    missing = [provider for provider, keys in accounts.items() if not keys]
-    if missing:
-        raise SystemExit(f"review-verdict: error: no logged-in broker account for {', '.join(missing)}")
-    return accounts
-
-
 def _gateway_client_token(path: Path) -> str:
     try:
         token = path.read_text(encoding="utf-8")
@@ -2386,8 +2441,6 @@ def _gateway_named_token_files(specs: list[str]) -> dict[str, Path]:
 
 
 def command_gateway_clients(args: argparse.Namespace) -> int:
-    from ._vendor import yaml
-
     token_files = {GATEWAY_CLIENT: Path(args.token_file), **_gateway_named_token_files(args.client)}
     digests: dict[str, str] = {}
     for name, path in token_files.items():
@@ -2395,14 +2448,28 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         if digest in digests.values():
             raise SystemExit(f"review-verdict: error: gateway client {name} shares its token with another client")
         digests[name] = digest
-    models = gateway_models(yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8")))
-    providers = list(dict.fromkeys(model.split("/", 1)[0] for model in models))
-    unknown = [provider for provider in providers if provider not in credentials.GATEWAY_PROVIDERS]
-    if unknown:
-        raise SystemExit(
-            f"review-verdict: error: the reviewer config names providers the gateway does not serve: {unknown}"
-        )
-    accounts = _gateway_accounts(Path(args.accounts), providers) if args.accounts else None
+    config = yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8"))
+    models = providers.gateway_models(config)
+    held = gateway_report.accounts(Path(args.accounts)) if args.accounts else None
+    owner = set(args.exclude_provider)
+    excluded: dict[str, dict[str, Any]] = {}
+    for provider in providers.routed(config):
+        if provider in owner:
+            reason = providers.OWNER_REASON
+        elif held is not None and not held.get(provider):
+            reason = providers.NO_LOGIN_REASON
+        else:
+            continue
+        excluded[provider] = {"reason": reason, "models": [m for m in models if providers.provider_of(m) == provider]}
+    granted = [provider for provider in providers.routed(config) if provider not in excluded]
+    if args.report:
+        write_private(Path(args.report), json.dumps({"granted": granted, "excluded": excluded}, indent=2) + "\n")
+    if not granted:
+        raise SystemExit("review-verdict: error: no configured provider has a broker login")
+    for provider, item in excluded.items():
+        print(f"excluded: {provider} ({item['reason']}): {', '.join(item['models'])}")
+    models = [model for model in models if providers.provider_of(model) in granted]
+    accounts = {provider: held[provider] for provider in granted} if held is not None else None
     clients: dict[str, dict[str, Any]] = {}
     for name, digest in digests.items():
         client: dict[str, Any] = {"tokenSha256": digest, "models": models}
@@ -2417,6 +2484,10 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
     for name in clients:
         print(f"{name}: {len(models)} models; pinned accounts: {pinned or 'none'}")
     return 0
+
+
+def command_gateway_providers(args: argparse.Namespace) -> int:
+    return gateway_report.command(args)
 
 
 def command_local_review(args: argparse.Namespace) -> int:
@@ -2513,7 +2584,18 @@ def _parser() -> argparse.ArgumentParser:
     clients.add_argument("--client", action="append", default=[], metavar="NAME=TOKEN_FILE")
     clients.add_argument("--out", required=True)
     clients.add_argument("--omp-config", required=True)
+    clients.add_argument("--exclude-provider", action="append", default=[], metavar="PROVIDER")
+    clients.add_argument("--report")
     clients.set_defaults(handler=command_gateway_clients)
+    gateway_report = commands.add_parser("gateway-providers")
+    gateway_report.add_argument("--omp-config", required=True)
+    gateway_report.add_argument("--accounts")
+    gateway_report.add_argument("--clients")
+    gateway_report.add_argument("--exclude-provider", action="append", default=[], metavar="PROVIDER")
+    gateway_report.add_argument("--served-url")
+    gateway_report.add_argument("--token-file")
+    gateway_report.add_argument("--json", action="store_true")
+    gateway_report.set_defaults(handler=command_gateway_providers)
     local_review = commands.add_parser("local-review")
     local_review.add_argument("--policy", required=True)
     local_review.add_argument("--repo", default="")

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import absence, capacity, driver, promotion, report, retry
+from theseus_reviewer import absence, capacity, driver, promotion, providers, report, retry
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.selection import ABSENT, PENDING, REVIEW, Attempt, SelectionInput, next_step
 
@@ -111,7 +111,7 @@ def test_capacity_uses_fallback_chain_minimum() -> None:
 
 
 def test_unknown_catalog_model_is_ignored() -> None:
-    assert capacity.reviewer_models("@default", CONFIG)[-1].startswith("google-antigravity/")
+    assert providers.candidates("@default", CONFIG)[-1].startswith("google-antigravity/")
     assert capacity.reviewer_capacity("@default", CONFIG, CATALOG) == 372_000
     assert capacity.reviewer_capacity("@other", CONFIG, CATALOG) is None
     assert capacity.reviewer_capacity("@missing-role", CONFIG, CATALOG) is None
@@ -387,8 +387,17 @@ def test_the_catalog_lists_every_gateway_provider_without_a_real_credential(
     assert listed["anthropic/claude-opus-5-5"] == 872_000
     assert listed["openai-codex/gpt-6-luna"] == 144_000
     assert "google-antigravity/gemini-3.8-flash" in listed
-    assert "muse-code/muse-spark-1.3-contributor" in listed
     assert not any(selector.startswith("polluted/") for selector in listed)
+
+
+def test_the_catalog_routes_a_provider_only_the_config_names(
+    gated_omp: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _polluted_home(tmp_path, monkeypatch)
+    extended = {**CONFIG, "modelRoles": {**CONFIG["modelRoles"], "extra": "muse-code/muse-spark-1.3-contributor"}}
+    monkeypatch.setenv("OMP_GATEWAY_TOKEN", "unused")
+    listed = capacity.read_catalog(gated_omp, json.dumps(extended))
+    assert listed["muse-code/muse-spark-1.3-contributor"] == 262_144 - 128_000
 
 
 def test_a_real_gateway_token_in_the_environment_never_reaches_the_catalog_listing(

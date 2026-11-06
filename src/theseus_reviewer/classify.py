@@ -10,6 +10,8 @@ from .policy import SIZE_BUCKETS
 CONFIDENCE_BAR = 0.60
 MAX_SCORED_FILES = 40
 GATE_BUCKET_FLOOR = "large"
+CLASSIFIER_SOURCE = "classifier"
+FALLBACK_SOURCE = "fallback"
 
 SIZE_QUESTION = {
     "type": "choice",
@@ -115,9 +117,14 @@ class Classification:
     confidence: float
     gate_flags: tuple[str, ...]
     files: tuple[FileRow, ...]
+    source: str = CLASSIFIER_SOURCE
+
+    @property
+    def fallback(self) -> bool:
+        return self.source == FALLBACK_SOURCE
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "size_bucket": self.size_bucket,
             "capability": self.capability,
             "template": self.template,
@@ -125,6 +132,9 @@ class Classification:
             "gate_flags": list(self.gate_flags),
             "files": [item.to_json() for item in self.files],
         }
+        if self.fallback:
+            data["source"] = self.source
+        return data
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> Classification:
@@ -135,6 +145,7 @@ class Classification:
             confidence=float(data["confidence"]),
             gate_flags=tuple(data.get("gate_flags", [])),
             files=tuple(FileRow.from_json(item) for item in data.get("files", [])),
+            source=str(data.get("source") or CLASSIFIER_SOURCE),
         )
 
 
@@ -262,4 +273,26 @@ def classify_diff(
         confidence=confidence,
         gate_flags=tuple(gate_flags),
         files=tuple(rows),
+    )
+
+
+def fallback_classification(unavailable_bucket: str, gate_flags: Sequence[str]) -> Classification:
+    bucket = unavailable_bucket
+    if gate_flags:
+        bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(GATE_BUCKET_FLOOR))]
+    return Classification(
+        size_bucket=bucket,
+        capability="deep",
+        template="gate" if gate_flags else "deep",
+        confidence=0.0,
+        gate_flags=tuple(gate_flags),
+        files=(),
+        source=FALLBACK_SOURCE,
+    )
+
+
+def classification_note(classification: Classification) -> str:
+    return (
+        "Classification unavailable (TypeSafe): reviewed from the "
+        f"{classification.size_bucket} bucket with the {classification.template} template."
     )

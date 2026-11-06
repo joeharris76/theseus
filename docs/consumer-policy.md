@@ -16,6 +16,8 @@ consumer:
   omp_config: .github/review-omp-config.yml
   inert_manifest: .github/inert-paths.txt            # optional
   omp_fixture_prefix: tests/fixtures/omp_candidate   # optional
+classifier:
+  unavailable_bucket: large   # optional; size bucket used when the classifier is unreachable
 promotion:                    # optional; when present, repository is required
   repository: acme/theseus
   bootstrap_reviewers: [acme-owner]   # optional; omit every bootstrap_* key when no first-promotion bootstrap is configured
@@ -23,6 +25,8 @@ promotion:                    # optional; when present, repository is required
   bootstrap_path_map: {}              # optional
   dependencies: {}
 ```
+
+`classifier.unavailable_bucket` is one of the size buckets (`trivial`, `small`, `medium`, `large`, `huge`, `max`). Without it a classifier outage leaves the change pending, as before. With it, a classifier failure (an error from the judgment service, not a missing `TYPESAFE_API_KEY`, which is configuration and still refuses) classifies the change from that bucket instead: the capability is `deep`, the template is `deep`, and when the change touches `classifier.gate_paths` the bucket is raised to at least `large` and the template is `gate`. The classification is recorded with `source: fallback`, and the review body says `Classification unavailable (TypeSafe): reviewed from the <bucket> bucket with the <template> template.` A hosted review and a local review behave the same way.
 
 Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 100000 bytes inside the package, and a policy that still sets it is refused.
 
@@ -55,6 +59,31 @@ Protocol identities are not consumer settings and do not change: the `review-ver
 Tool-owned defaults are neutral: cache roots `~/.cache/theseus/omp` and `~/.cache/theseus/local-review`, with `THESEUS_OMP_CACHE`, `THESEUS_OMP_DOWNLOAD_MIRROR`, `THESEUS_LOCAL_STATE` and `THESEUS_INSTALL_CACHE` overrides. A consumer that already holds an OMP cache or local findings and dispute state keeps them by pointing the variable at the existing directory (for example `THESEUS_LOCAL_STATE=~/.cache/<consumer>/local-review`); nothing is copied or deleted, and the persisted formats (`CACHE_SCHEMA`, the member-review schema string, finding identifiers, attempt and state files) are unchanged, so existing records keep working. A directory the consumer stops pointing at is simply no longer read.
 
 The gate hands off to `theseus gate` in a subprocess (`THESEUS_GATE_COMMAND`, shlex-split; required, there is no fallback to the running interpreter) and surfaces a failed subprocess as `GitHubError`, so the hosted workflow can run the gate from a separately verified install.
+
+## Provider loss
+
+Losing one model provider never stops reviews. Four words describe what the review flow knows about providers, and none of them is a hard-coded list:
+
+- **Routed providers** are the providers named by the trusted omp config, in `modelRoles` and `retry.fallbackChains`. They are derived from the config. The reviewer's omp is told to reach exactly these providers, only through the gateway. Routing is an allow-list, not a requirement.
+- **Granted providers** are the routed providers that have at least one broker account, minus any the host owner excludes. `theseus gateway-clients` writes `clients.json` with the models and accounts of exactly these.
+- **Served providers** are the providers of the models the running gateway lists on `/v1/models` for the client token.
+- **No provider is required.** The floor is at least one served model that can review the change.
+
+The candidates of a reviewer are its role's model followed by the `retry.fallbackChains` entries of that model, in order. The chain is the owner-curated list of qualified substitutes, and the config is read from the trusted base only: a pull request's own omp config never selects or excludes a reviewer.
+
+At the start of the attempt phase (hosted and local) the review probes `GET /healthz` and `GET /v1/models` with the client token and records the served models in the plan, or `served_error` when the gateway is unreachable, answers an error, rejects the token or lists malformed data. The probe is repeated until the first attempt has run and then fixed for the run. Then, per reviewer:
+
+1. When its first candidate is served and has not failed in this run, it runs as today: the capacity check uses that model's window and an oversize change is skipped as before.
+2. Otherwise the first later candidate that is served, not excluded and whose window (`contextWindow - maxTokens` from the pinned omp's catalog, recorded for every routed model) holds the load runs instead. The attempt is written with a rewritten reviewer config: the role points at the chosen model, and the chain keeps only the remaining served candidates.
+3. Otherwise the reviewer is skipped with `unavailable: <each candidate and why>`, or with `capacity-degraded: ...` when served candidates exist but none holds a load that the primary would hold. A load above the primary's own window is still `oversize`. Escalation stays upward only; a reviewer is never replaced by a smaller tier, and no model outside the trusted candidate lists runs.
+
+A provider that is listed but fails when called is excluded for the rest of the run. The structured terminal error of the omp stream (`provider` and `errorStatus` of the final assistant message, never model text) attributes a 401, 404 or 5xx (including 529) to a provider. The same reviewer then tries its next candidate, and an attempt that failed on the provider the reviewer was running does not count against the two attempts per reviewer. Quota errors keep their pool block; which provider a pool leads with is derived from the config (`pool_providers` in the plan).
+
+When no reviewer can run because of availability alone (the served set is empty or unknown, or no served candidate holds the load) and no attempt ran, the result is pending with cause `unavailable`: no attempt and no retry from the budget is spent, the status reads `pending: no reviewer available (...)`, the gate stays pending, and the sweep re-dispatches it after `retry.backoff_start_minutes` with no doubling. Nothing is merged on an unavailable review; only an owner stand-in does.
+
+Every review-verdict status and body reports degradation: the status description ends with `· degraded: <providers>` (the routed providers that are not served or were excluded), and the body has a `Provider availability` section naming unserved and excluded providers and each substitution (`large: anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high`). The reviewer identity stays the tier; the body shows the model that ran.
+
+The reusable `review.yml` has a `health` job that runs only on the caller's `schedule` event, with `contents: read`. It joins the tailnet and runs `theseus drive health`, which exits 1 when the gateway is unreachable, rejects the client token, or does not serve every provider the trusted config names, so the scheduled run goes red and its summary names the providers.
 
 ## Review capacity
 

@@ -22,6 +22,8 @@ KINDS = (OK, QUOTA, AUTH, TIMEOUT, INVALID, EMPTY, ERROR, INCOMPLETE, CONTEXT_OV
 QUOTA_STATUS = 429
 AUTH_STATUS = 401
 OVERFLOW_STATUS = 413
+NOT_FOUND_STATUS = 404
+SERVER_ERROR_FLOOR = 500
 
 CALIBRATED_QUOTA_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "omp": (
@@ -148,6 +150,10 @@ def published_detail(detail: str, extra: Iterable[str] = ()) -> str:
     return redact_detail(" ".join(detail.split()), extra, PUBLISHED_DETAIL_LIMIT)
 
 
+def _provider_down(status: int | None) -> bool:
+    return status is not None and (status == NOT_FOUND_STATUS or status >= SERVER_ERROR_FLOOR)
+
+
 def _first(patterns: tuple[re.Pattern[str], ...], text: str) -> re.Match[str] | None:
     return next((match for pattern in patterns if (match := pattern.search(text)) is not None), None)
 
@@ -171,7 +177,7 @@ def classify(
         detail = redact_detail(f"{terminal.status} {' '.join(terminal.message.split())}".strip())
         if terminal.status == QUOTA_STATUS:
             return Absence(QUOTA, detail, parse_reset(terminal.message, now), terminal.provider)
-        return Absence(AUTH, detail)
+        return Absence(AUTH, detail, None, terminal.provider)
     quota = _first(CALIBRATED_QUOTA_PATTERNS.get(harness, ()), stderr) if failed else None
     if quota is not None:
         return Absence(QUOTA, redact_detail(quota.group(0)), parse_reset(stderr, now))
@@ -183,6 +189,13 @@ def classify(
     overflow = _first(CALIBRATED_CONTEXT_PATTERNS.get(harness, ()), f"{terminal.message if terminal else ''}\n{stderr}")
     if failed and overflow is not None:
         return Absence(CONTEXT_OVERFLOW, redact_detail(overflow.group(0)))
+    if failed and terminal is not None and terminal.provider and _provider_down(terminal.status):
+        return Absence(
+            ERROR,
+            redact_detail(f"{terminal.status} {' '.join(terminal.message.split())}"),
+            None,
+            terminal.provider,
+        )
     if exit_code is None:
         return Absence(ERROR, "the reviewer could not be started")
     if exit_code != 0:
