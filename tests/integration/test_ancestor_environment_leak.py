@@ -16,7 +16,7 @@ from .harness import (
     Harness,
     ReviewRun,
 )
-from .runs import GATEWAY_URL, phase_keys
+from .runs import phase_keys
 
 pytestmark = [
     pytest.mark.integration,
@@ -32,7 +32,7 @@ WITHHELD = {
     "JOB_TOKEN": JOB_TOKEN,
     "TS_OAUTH_CI_SECRET": HELD_SECRET,
 }
-HELD_BY_THE_ATTEMPT_STEP = {"OMP_GATEWAY_TOKEN": GATEWAY_TOKEN, "REVIEW_GATEWAY_URL": GATEWAY_URL}
+HELD_BY_THE_ATTEMPT_STEP = {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"}
 PHASE_SECRETS = {
     "prepare": {"GH_TOKEN", "PR_NUMBER", "TYPESAFE_API_KEY"},
     "scan-before": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
@@ -62,7 +62,11 @@ def _reviewed(harness: Harness) -> ReviewRun:
     harness.github.open_pull(41, "feat/checker")
     harness.script_omp(
         [{"decision": "SHIP", "summary": "No defects.", "files_examined": [CHECKER]}],
-        ancestor_probe={**WITHHELD, **HELD_BY_THE_ATTEMPT_STEP},
+        ancestor_probe={
+            **WITHHELD,
+            "OMP_GATEWAY_TOKEN": GATEWAY_TOKEN,
+            "REVIEW_GATEWAY_URL": harness.gateway.url,
+        },
     )
     return harness.review(41)
 
@@ -83,7 +87,7 @@ def test_the_gateway_token_and_url_are_readable_in_the_attempt_step_environment(
     run = _reviewed(harness)
 
     assert run.steps["attempts"].code == 0
-    assert _found(harness) == set(HELD_BY_THE_ATTEMPT_STEP)
+    assert _found(harness) == HELD_BY_THE_ATTEMPT_STEP
 
 
 def test_the_environment_file_written_by_the_harness_phase_holds_only_the_binary_path(harness: Harness) -> None:

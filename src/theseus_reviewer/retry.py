@@ -20,6 +20,8 @@ MARKER_LIMIT = "marker-limit"
 OMP_INSTALL = "omp-install"
 UNPUBLISHED = "unpublished"
 STOPPED = "stopped"
+UNAVAILABLE = "unavailable"
+SWEPT_CAUSES = (ALL_ABSENT, UNAVAILABLE)
 MANUAL_ONLY_CAUSES = (OMP_INSTALL, UNPUBLISHED, STOPPED)
 SWEEP_EXCLUDED_CAUSES = (OMP_INSTALL, STOPPED)
 PENDING_CAUSES = (
@@ -31,6 +33,7 @@ PENDING_CAUSES = (
     OMP_INSTALL,
     UNPUBLISHED,
     STOPPED,
+    UNAVAILABLE,
 )
 WINDOW = timedelta(hours=24)
 
@@ -52,6 +55,7 @@ class State:
     pending_cause: str | None = None
     strikes: int = 0
     attempted_at: datetime | None = None
+    unavailable_runs: tuple[datetime, ...] = ()
 
     @property
     def backoff_from(self) -> datetime:
@@ -70,6 +74,8 @@ class State:
         }
         if self.attempted_at is not None:
             data["attempted_at"] = self.attempted_at.isoformat()
+        if self.unavailable_runs:
+            data["unavailable_runs"] = [moment.isoformat() for moment in self.unavailable_runs]
         return data
 
     @classmethod
@@ -87,6 +93,7 @@ class State:
             pending_cause=data.get("pending_cause"),
             strikes=int(data.get("strikes") or 0),
             attempted_at=datetime.fromisoformat(data["attempted_at"]) if data.get("attempted_at") else None,
+            unavailable_runs=tuple(datetime.fromisoformat(item) for item in data.get("unavailable_runs", [])),
         )
 
 
@@ -103,6 +110,18 @@ def recent_retries(state: State | None, now: datetime) -> tuple[datetime, ...]:
     return tuple(moment for moment in state.retries if now - moment < WINDOW)
 
 
+def recent_unavailable(state: State | None, now: datetime) -> tuple[datetime, ...]:
+    if state is None:
+        return ()
+    return tuple(moment for moment in state.unavailable_runs if now - moment < WINDOW)
+
+
+def inherited_unavailable(previous: State | None, head_sha: str, now: datetime) -> tuple[datetime, ...]:
+    if previous is None or previous.head_sha != head_sha:
+        return ()
+    return recent_unavailable(previous, now)
+
+
 def inherited_retries(previous: State | None, head_sha: str, now: datetime) -> tuple[datetime, ...]:
     if previous is not None and previous.head_sha != head_sha and previous.outcome not in DECISIVE:
         return ()
@@ -115,7 +134,7 @@ def reset_applies(previous: State | None, head_sha: str, reset_at: datetime | No
         and previous is not None
         and previous.head_sha == head_sha
         and previous.outcome == PENDING
-        and previous.pending_cause == ALL_ABSENT
+        and previous.pending_cause in SWEPT_CAUSES
         and reset_at > previous.updated_at
     )
 
@@ -134,7 +153,7 @@ def decide_rerun(
     if same_head and previous is not None and previous.outcome in DECISIVE and not new_diff and not manual:
         return RerunDecision(False, f"head {head_sha} already has a {previous.outcome} result")
     if same_head and previous is not None and previous.outcome == PENDING and not new_diff:
-        if previous.pending_cause != ALL_ABSENT and not (manual and previous.pending_cause in MANUAL_ONLY_CAUSES):
+        if previous.pending_cause not in SWEPT_CAUSES and not (manual and previous.pending_cause in MANUAL_ONLY_CAUSES):
             cause = previous.pending_cause or "unknown"
             return RerunDecision(
                 False, f"the last run on head {head_sha} was pending for {cause}, not absent reviewers"
@@ -144,10 +163,12 @@ def decide_rerun(
     if reset_applies(previous, head_sha, reset_at):
         return RerunDecision(True, "retry backoff reset by the owner")
     retries = inherited_retries(previous, head_sha, now)
-    if len(retries) >= rules.daily_budget:
+    unavailable = same_head and previous is not None and previous.pending_cause == UNAVAILABLE
+    if len(retries) >= rules.daily_budget and not unavailable:
         return RerunDecision(False, f"the daily retry budget of {rules.daily_budget} is used", True)
     if same_head and previous is not None:
-        wait = timedelta(minutes=rules.backoff_start_minutes * 2 ** len(retries))
+        doublings = 0 if unavailable else len(retries)
+        wait = timedelta(minutes=rules.backoff_start_minutes * 2**doublings)
         ready_at = previous.backoff_from + wait
         if now < ready_at:
             return RerunDecision(False, f"backoff: the next retry is allowed after {ready_at.isoformat()}", True)
@@ -167,19 +188,38 @@ def next_state(
     pool_blocked_until: Mapping[str, PoolBlock],
     pending_cause: str | None = None,
     strikes: int | None = None,
+    dispatched: bool = False,
 ) -> State:
-    retries = inherited_retries(previous, head_sha, now) + ((now,) if manual else ())
     cause = pending_cause if outcome == PENDING else None
+    spent = manual and cause != UNAVAILABLE
+    retries = inherited_retries(previous, head_sha, now) + ((now,) if spent else ())
     kept = max(strikes or 0, previous.strikes if previous else 0)
-    return State(pr, head_sha, outcome, now, retries, dict(pool_blocked_until), cause, kept)
+    unavailable = inherited_unavailable(previous, head_sha, now) + (
+        (now,) if dispatched and cause == UNAVAILABLE else ()
+    )
+    return State(pr, head_sha, outcome, now, retries, dict(pool_blocked_until), cause, kept, None, unavailable)
 
 
 def attempt_state(*, previous: State | None, pr: int, head_sha: str, published: State) -> State:
     strikes = previous.strikes if previous is not None else 0
     if previous is not None and previous.head_sha == head_sha:
-        return replace(previous, retries=published.retries, attempted_at=published.updated_at)
+        return replace(
+            previous,
+            retries=published.retries,
+            attempted_at=published.updated_at,
+            unavailable_runs=published.unavailable_runs,
+        )
     return State(
-        pr, head_sha, PENDING, published.updated_at, published.retries, {}, UNPUBLISHED, strikes, published.updated_at
+        pr,
+        head_sha,
+        PENDING,
+        published.updated_at,
+        published.retries,
+        {},
+        UNPUBLISHED,
+        strikes,
+        published.updated_at,
+        published.unavailable_runs,
     )
 
 

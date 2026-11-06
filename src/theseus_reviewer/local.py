@@ -33,6 +33,7 @@ from . import (
     protocol,
     redaction_check,
     report,
+    retry,
     selection,
     selfexec,
 )
@@ -96,6 +97,8 @@ PROXY_ENV = "REVIEW_LOCAL_PROXY"
 SCAN_ENV = "REVIEW_LOCAL_SCAN"
 REBUTTALS_ENV = "REVIEW_LOCAL_REBUTTALS"
 RECORD_OUT_ENV = "REVIEW_LOCAL_RECORD_OUT"
+UNAVAILABLE_OUT_ENV = "REVIEW_LOCAL_UNAVAILABLE_OUT"
+AVAILABILITY_PREFIX = "availability: "
 ADJUDICATE_ENV = "REVIEW_LOCAL_ADJUDICATE"
 EXCLUDE_ENV = "REVIEW_LOCAL_EXCLUDE"
 TRUSTED_ENV = "REVIEW_LOCAL_TRUSTED"
@@ -115,7 +118,9 @@ PRIOR_FILE = "prior.json"
 
 
 class Unavailable(Exception):
-    pass
+    def __init__(self, message: str, *, availability: bool = False) -> None:
+        super().__init__(message)
+        self.availability = availability
 
 
 @dataclass(frozen=True)
@@ -647,6 +652,12 @@ def _entry_finding(entry: Mapping[str, Any], cycle: int = 1) -> dict[str, Any]:
     }
 
 
+def _holds_blocking(previous: Mapping[str, Any] | None) -> bool:
+    if previous is None:
+        return False
+    return any(item["severity"] in BLOCKING_SEVERITIES for item in findings.open_findings(previous))
+
+
 def _blocking(found: tuple[dict[str, Any], ...]) -> bool:
     return any(item["severity"] in BLOCKING_SEVERITIES for item in found)
 
@@ -922,7 +933,14 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
     )
     if final.judgement is None:
         reasons = "; ".join(errors) if errors else final.description
-        raise Unavailable(f"no reviewer produced a verdict: {reasons}")
+        raise Unavailable(
+            f"no reviewer produced a verdict: {reasons}",
+            availability=final.pending_cause == retry.UNAVAILABLE and not _holds_blocking(previous),
+        )
+    if final.degraded:
+        terminal_slot = next((item for item in loaded.attempts if item.reviewer == final.reviewer), None)
+        ran = f"; reviewed by {terminal_slot.target}" if terminal_slot is not None and terminal_slot.target else ""
+        run.reporter.say(f"Review {final.degraded.removeprefix(' · ')}{ran}.")
     terminal = next(
         (item for item in loaded.attempts if item.reviewer == final.reviewer and item.outcome == step.kind), None
     )
@@ -991,7 +1009,7 @@ def _fresh_review(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | 
         raise Unavailable("the verdict could not be finalised without leaving a secret value in the results")
     _persist_pool_blocks(run)
     _keep_captures(layout.attempts / cli.CAPTURE_DIR, run.head, run.reporter.secrets)
-    return _decided(run, plan, previous)
+    return _decided(run, _read(layout.plan_file), previous)
 
 
 def _severity_rank(finding: Mapping[str, Any]) -> int:
@@ -1105,16 +1123,18 @@ def _reviewed(run: Run, trusted: Trusted, previous: Mapping[str, Any] | None) ->
         )
     access = resolve_credentials()
     run.reporter.hide(access.token, access.url)
-    if not reachable(access.url, access.proxy):
-        hint = "; start the cloud gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
-        raise Unavailable(f"the {access.client} gateway is unreachable{hint}")
-    run.access = access
     head_tree = _git(run.root, "rev-parse", f"{run.head}^{{tree}}").strip()
     cache = cache_path(state_dir(), cache_key(plan, head_tree, trusted))
     cached = _load_cached(cache)
     if cached is not None:
         run.reporter.say("Reusing the cached local review of this unchanged patch.")
         return cached
+    if not reachable(access.url, access.proxy):
+        hint = "; start the cloud gateway" if access.client == CLOUD_CLIENT and not access.proxy else ""
+        raise Unavailable(
+            f"the {access.client} gateway is unreachable{hint}", availability=not _holds_blocking(previous)
+        )
+    run.access = access
     with exclusive(cache.with_suffix(".lock"), run.reporter, _holder(run.root)):
         cached = _load_cached(cache)
         if cached is not None:
@@ -1306,6 +1326,15 @@ def _default_base_ref(args: argparse.Namespace, root: Path) -> None:
     args.base_ref = f"origin/{gated_base}"
 
 
+def _write_unavailable(exc: Unavailable) -> None:
+    target = os.environ.get(UNAVAILABLE_OUT_ENV, "")
+    if not target:
+        return
+    line = " ".join(str(exc).split())[:300]
+    with contextlib.suppress(OSError):
+        Path(target).write_text(f"{AVAILABILITY_PREFIX}{line}\n" if exc.availability else "", encoding="utf-8")
+
+
 def command_review(args: argparse.Namespace) -> int:
     reporter = Reporter()
     member = getattr(args, "member", False)
@@ -1321,4 +1350,5 @@ def command_review(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     except Unavailable as exc:
         reporter.say(f"Refusing {subject}: the local review is unavailable: {exc}", error=True)
+        _write_unavailable(exc)
         return EXIT_UNAVAILABLE

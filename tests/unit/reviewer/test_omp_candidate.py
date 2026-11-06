@@ -21,10 +21,10 @@ from theseus_reviewer import (
     candidate_chain,
     candidate_checks,
     candidate_stub,
-    capacity,
     commands,
     omp_candidate,
     omp_pin,
+    providers,
 )
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientRun
@@ -66,18 +66,18 @@ SCRIPT = (
 
 def _fake(tmp_path: Path, mutate: Callable[[dict[str, Any]], None] | None = None) -> tuple[Path, Path]:
     data = copy.deepcopy(STATIC)
-    data["models"] = sorted({capacity.strip_effort(name) for name in capacity.configured_models(CONFIG)})
+    data["models"] = sorted({providers.strip_effort(name) for name in providers.configured_models(CONFIG)})
     if mutate is not None:
         mutate(data)
     directory = tmp_path / "bin"
     directory.mkdir(exist_ok=True)
     (directory / "static.json").write_text(json.dumps(data), encoding="utf-8")
     binary = directory / "omp"
-    providers = yaml.safe_load(commands.OMP_OVERLAY_TEXT)["disabledProviders"]
+    disabled = yaml.safe_load(commands.OMP_OVERLAY_TEXT)["disabledProviders"]
     script = SCRIPT.format(
         python=sys.executable, data=str(directory / "static.json"), marker=str(directory / "executed")
     )
-    binary.write_text(script + "# " + " ".join(f'"{item}"' for item in providers) + "\n", encoding="utf-8")
+    binary.write_text(script + "# " + " ".join(f'"{item}"' for item in disabled) + "\n", encoding="utf-8")
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)

@@ -13,10 +13,16 @@ MAX_REQUEST_BYTES = 32 * 1024 * 1024
 
 
 class JevError(Exception):
-    def __init__(self, status: int | None, message: str) -> None:
+    def __init__(self, status: int | None, message: str, *, missing_key: bool = False) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.missing_key = missing_key
+        self.answered_bucket: str | None = None
+
+    @property
+    def is_outage(self) -> bool:
+        return not self.missing_key and (self.status is None or self.status == 429 or self.status >= 500)
 
 
 class JevSession:
@@ -34,7 +40,7 @@ class JevSession:
 
     def __enter__(self) -> JevSession:
         if not self.api_key:
-            raise JevError(None, "TYPESAFE_API_KEY is not set")
+            raise JevError(None, "TYPESAFE_API_KEY is not set", missing_key=True)
         return self
 
     def __exit__(self, *ignored: object) -> None:

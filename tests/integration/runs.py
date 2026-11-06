@@ -34,7 +34,6 @@ from .harness import (
 if TYPE_CHECKING:
     from .harness import Harness
 
-GATEWAY_URL = "https://gateway.example.invalid"
 TRUSTED_CHECKOUT = "Check out the trusted gated-branch copy"
 BOOTSTRAP_CHECKOUT = "Check out the pinned Theseus bootstrap"
 HOSTED_REVIEW = REPO_ROOT / ".github" / "workflows" / "review.yml"
@@ -177,7 +176,7 @@ class WorkflowRunner:
             "secrets.TS_OAUTH_CI_SECRET": HELD_SECRET,
             "secrets.TS_OAUTH_CI_CLIENT_ID": OAUTH_CLIENT_ID,
             "secrets.REVIEW_GATEWAY_TOKEN": GATEWAY_TOKEN,
-            "secrets.REVIEW_GATEWAY_URL": GATEWAY_URL,
+            "secrets.REVIEW_GATEWAY_URL": self.harness.gateway.url,
             "github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr": str(self.pr),
             "secrets.REVIEW_APP_ID != ''": "true" if self.options.app else "false",
             "secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != ''": "true",

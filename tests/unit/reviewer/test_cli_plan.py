@@ -534,7 +534,7 @@ def test_manual_retry_inside_backoff_waits_for_the_next_slot(monkeypatch: pytest
 
 def _block(provider: str, *, recorded: timedelta, remaining: timedelta) -> PoolBlock:
     now = datetime.now(UTC)
-    return PoolBlock(now + remaining, provider, now - recorded)
+    return PoolBlock(now + remaining, provider, now - recorded, provider == "anthropic")
 
 
 def test_a_primary_provider_pool_block_is_carried_to_a_new_head(

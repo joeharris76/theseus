@@ -190,6 +190,7 @@ def test_the_phases_are_exactly_the_cutover_set_and_none_accepts_shadow() -> Non
         "finalize",
         "publish",
         "dispatch",
+        "health",
         "sweep",
     }
     parser = cli._parser()

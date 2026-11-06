@@ -14,6 +14,7 @@ from typing import Any
 
 from theseus_reviewer import omp_pin
 
+from .fake_gateway import FakeGateway
 from .fake_github import APP_TOKEN, GH_HOST, JOB_TOKEN, OWNER_TOKEN, FakeGitHub
 from .fake_jev import FakeJev
 
@@ -126,6 +127,7 @@ class Harness:
         self._publish_remote()
         self.github = FakeGitHub(SLUG, self.repo).start()
         self.jev = FakeJev().start()
+        self.gateway = FakeGateway(GATEWAY_TOKEN).start()
 
     @property
     def remote_root(self) -> Path:
@@ -145,6 +147,7 @@ class Harness:
     def close(self) -> None:
         self.github.stop()
         self.jev.stop()
+        self.gateway.stop()
 
     def _pinned_policy(self) -> str:
         text = (ALPHA_ROOT / POLICY).read_text(encoding="utf-8")
@@ -218,8 +221,10 @@ class Harness:
         replies: list[dict[str, Any]],
         leak_env: str | None = None,
         ancestor_probe: dict[str, str] | None = None,
+        dead: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         script = {
+            "dead": dead or {},
             "version": PINNED_OMP,
             "stream": str(RECORDED_STREAM),
             "replies": replies,
@@ -263,6 +268,7 @@ class Harness:
             "https_proxy": "",
             "NO_PROXY": "127.0.0.1",
             "no_proxy": "127.0.0.1",
+            "SSL_CERT_FILE": self.gateway.certificate_file,
             "GITHUB_REPOSITORY": SLUG,
             "GITHUB_SERVER_URL": f"https://{GH_HOST}",
             "GITHUB_API_URL": self.github.url,
@@ -423,7 +429,7 @@ class Harness:
             git(checkout, "branch", "--quiet", "-f", "develop", "origin/develop")
         values = {
             **self.base_env(),
-            "REVIEW_GATEWAY_URL": self.github.url,
+            "REVIEW_GATEWAY_URL": self.gateway.url,
             "REVIEW_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
             "GH_TOKEN": OWNER_TOKEN,
             "GH_ENTERPRISE_TOKEN": OWNER_TOKEN,

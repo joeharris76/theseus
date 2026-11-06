@@ -79,6 +79,10 @@ def gateway_proxy(proxy: str) -> Iterator[None]:
         _gateway_proxy = previous
 
 
+def active_gateway_proxy() -> str:
+    return _gateway_proxy
+
+
 def omp_env() -> dict[str, str]:
     names = (*OMP_BASE_ENV, *GATEWAY_ENV)
     env = {name: value for name in names if (value := os.environ.get(name))}

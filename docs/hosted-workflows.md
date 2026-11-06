@@ -99,6 +99,14 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 A failing subprocess posts no status of its own, so no success is published on its behalf.
 
+## Provider loss and the health job
+
+The attempt phase probes the gateway's served models before choosing a reviewer, so a provider that is gone changes the reviewer's model, never the outcome of the run; see [Provider loss](consumer-policy.md#provider-loss) for the selection rules.
+
+- A review that ran on a substitute, or while a routed provider is unserved or excluded, ends its status description with `· degraded: <providers>` and has a `Provider availability` body section.
+- A review that cannot run for availability alone ends pending with cause `unavailable`: no attempt or daily retry is spent, the sweep retries it after the flat `retry.backoff_start_minutes` (at most about 24 a day), and `review-gate` stays pending. Those dispatches are exempt from the sweep's daily dispatch cap, and the state records each one so a later `all-absent` retry still has its full budget after the outage.
+- The `health` job runs on `schedule` only (the caller's existing hourly cron) and needs no permission beyond `contents: read`. It exits 1, and the scheduled run goes red, when the gateway is unreachable, the client token is rejected, or a provider named in the trusted omp config is not served. Push, pull request and dispatch events skip it. It reads the same `REVIEW_GATEWAY_URL` and `REVIEW_GATEWAY_TOKEN` secrets as the attempt steps. The CI health job cannot see the host's owner denylist, so a provider the owner removed on purpose still shows the scheduled run red until the trusted config no longer names it; that is the expected CI-side behaviour for a deliberate removal, and the host monitor is what reports it as a notice rather than an alert.
+
 ## Permission ceilings
 
 A callee job can hold at most what the caller's calling job grants. The example callers grant the union of what the callee jobs ask for; each callee job then narrows it.
@@ -108,6 +116,7 @@ A callee job can hold at most what the caller's calling job grants. The example 
 | `guard` | `contents: read` | `contents: read`; it checks out only `.github/theseus-lock.json` from the trusted ref |
 | `review` (`review.yml`) | `actions: write`, `contents: read`, `pull-requests: read` | the same; `actions: write` lets the retry sweep and the dispatch step run |
 | `sweep` (`review.yml`) | same | same |
+| `health` (`review.yml`) | `contents: read` | the same; it runs only on `schedule`, probes the gateway and writes nothing |
 | `gate` (`gate.yml`) | `contents: read`, `pull-requests: read` | the same |
 | `bridge` | `actions: write`, `contents: read`, `pull-requests: read` | the same; it only lists pulls and dispatches the gate |
 | `sweep` (`gate.yml`) | `contents: read`, `pull-requests: read` | the same |

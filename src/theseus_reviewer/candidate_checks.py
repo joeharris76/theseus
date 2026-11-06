@@ -34,6 +34,9 @@ COMMAND_SECONDS = 60
 ROSTER = frozenset(commands.OMP_READ_TOOLS.split(","))
 UPSTREAM_PATH = "/v1/messages"
 UPSTREAM_MODEL = "claude-sonnet-5-5"
+QUOTA_PRIMARY = f"anthropic/{UPSTREAM_MODEL}"
+QUOTA_PROVIDER = QUOTA_PRIMARY.partition("/")[0]
+QUOTA_CHAIN_TARGET = "openai-codex/gpt-6.1-sol"
 REVIEW_REQUESTS = 5
 ELISION_FOOTER = "elided; re-read needed ranges"
 FIXTURE_PREFIX = "fixture-"
@@ -564,27 +567,26 @@ def breach_checks(run: ClientRun) -> list[Check]:
 
 
 def quota_checks(walk: ClientRun, terminal: ClientRun) -> list[Check]:
-    chain_target = "openai-codex/gpt-6.1-sol"
+    chain_target = QUOTA_CHAIN_TARGET
     return [
         _check(
             "live-quota-fallback-walk",
             (4, 6, 9),
-            _run_failures(walk, succeeds=False)
-            + walk_failures(walk.stdout, first="anthropic/claude-sonnet-5-5", then=chain_target),
+            _run_failures(walk, succeeds=False) + walk_failures(walk.stdout, first=QUOTA_PRIMARY, then=chain_target),
         ),
         _check(
             "live-quota-classification",
             (6, 8, 9),
             _run_failures(terminal, succeeds=False)
             + terminal_failures(
-                terminal.stdout, terminal.exit_code or 1, status=429, provider="anthropic", kind=absence.QUOTA
+                terminal.stdout, terminal.exit_code or 1, status=429, provider=QUOTA_PROVIDER, kind=absence.QUOTA
             ),
         ),
     ]
 
 
 def auth_checks(upstream: ClientRun, bad_token: ClientRun) -> list[Check]:
-    walked = {f"{item.get('provider')}" for item in assistant_messages(upstream.stdout)} - {"anthropic"}
+    walked = {f"{item.get('provider')}" for item in assistant_messages(upstream.stdout)} - {QUOTA_PROVIDER}
     gateway = _run_failures(bad_token, succeeds=False)
     if bad_token.upstream:
         gateway.append("the gateway forwarded a request for a client with the wrong token")
@@ -599,7 +601,7 @@ def auth_checks(upstream: ClientRun, bad_token: ClientRun) -> list[Check]:
             (4, 8, 9),
             _run_failures(upstream, succeeds=False)
             + terminal_failures(
-                upstream.stdout, upstream.exit_code or 1, status=401, provider="anthropic", kind=absence.AUTH
+                upstream.stdout, upstream.exit_code or 1, status=401, provider=QUOTA_PROVIDER, kind=absence.AUTH
             )
             + ([f"an authentication failure walked the fallback chain to {sorted(walked)}"] if walked else []),
         ),

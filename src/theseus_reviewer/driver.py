@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import capacity, cli, github, isolation, omp_pin
+from . import capacity, cli, commands, github, isolation, omp_pin, providers
+from ._vendor import yaml
 from .policy import PolicyError, load_policy
 
 STATE_FILE = Path("state") / github.STATE_FILE
@@ -228,6 +229,26 @@ def _reported_version(binary: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _record_providers(plan_file: Path, plan: Mapping[str, Any], config_text: str) -> None:
+    config = yaml.safe_load(config_text)
+    config = config if isinstance(config, Mapping) else {}
+    options = {str(item["name"]): providers.candidates(str(item["model"]), config) for item in plan["chain"]}
+    pools: dict[str, str] = {}
+    for item in plan["chain"]:
+        first = options[str(item["name"])][:1]
+        if first:
+            pools.setdefault(str(item["pool"]), providers.provider_of(first[0]))
+    cli._write_json(
+        plan_file,
+        {
+            **plan,
+            "candidates": {name: values for name, values in options.items() if values},
+            "pool_providers": pools,
+            "routed": list(providers.routed(config)),
+        },
+    )
+
+
 def _record_capacity(
     env: Environment, binary: Path, reader: Callable[[Path, str], Mapping[str, int]] = capacity.read_catalog
 ) -> None:
@@ -235,15 +256,24 @@ def _record_capacity(
     try:
         plan = _read(plan_file)
         config_text = Path(plan["omp_config"]).read_text(encoding="utf-8")
-        held = capacity.measure(plan, config_text, lambda: reader(binary, config_text))
-    except (OSError, ValueError, KeyError, TypeError, capacity.CatalogError) as exc:
+        _record_providers(plan_file, plan, config_text)
+        plan = _read(plan_file)
+        listing = reader(binary, config_text)
+        held = capacity.measure(plan, config_text, lambda: listing)
+        windows = capacity.model_windows(yaml.safe_load(config_text), listing)
+    except (OSError, ValueError, KeyError, TypeError, capacity.CatalogError, yaml.YAMLError) as exc:
         print(f"review-verdict: reviewer capacity is unknown ({exc}); no reviewer is selected for a sized change")
         with contextlib.suppress(OSError, ValueError):
             cli._write_json(plan_file, {**_read(plan_file), capacity.ERROR_KEY: str(exc)})
         return
     unlisted = sorted(str(item["name"]) for item in plan["chain"] if str(item["name"]) not in held)
     cli._write_json(
-        plan_file, {**{k: v for k, v in plan.items() if k != capacity.ERROR_KEY}, capacity.CAPACITY_KEY: held}
+        plan_file,
+        {
+            **{k: v for k, v in plan.items() if k != capacity.ERROR_KEY},
+            capacity.CAPACITY_KEY: held,
+            "model_windows": windows,
+        },
     )
     cli._summary(f"reviewer capacity: {json.dumps(held, sort_keys=True)}")
     if unlisted:
@@ -292,6 +322,34 @@ def attempts(env: Environment, args: argparse.Namespace) -> int:
                 allow_loopback_http=env.loopback_http,
             )
         )
+
+
+def health(env: Environment, args: argparse.Namespace) -> int:
+    try:
+        config = yaml.safe_load(Path(load_policy(env.policy).consumer.omp_config).read_text(encoding="utf-8"))
+        routed = providers.routed(config if isinstance(config, Mapping) else {})
+    except (OSError, PolicyError, yaml.YAMLError) as exc:
+        print(f"::error::review gateway health: the trusted model configuration cannot be read: {exc}")
+        return 1
+    try:
+        served = providers.probe(
+            os.environ.get("REVIEW_GATEWAY_URL", ""),
+            os.environ.get("OMP_GATEWAY_TOKEN", ""),
+            proxy=commands.active_gateway_proxy(),
+            allow_loopback_http=env.loopback_http,
+        )
+    except providers.ProbeError as exc:
+        print(f"::error::review gateway health: {exc}")
+        cli._summary(f"review gateway health: {exc}")
+        return 1
+    missing = [provider for provider in routed if provider not in served.providers]
+    cli._summary(f"review gateway serves {', '.join(sorted(served.providers)) or 'no provider'}")
+    if missing:
+        print(f"::error::review gateway health: not served: {', '.join(missing)}")
+        cli._summary(f"review gateway health: degraded, not served: {', '.join(missing)}")
+        return 1
+    cli._summary("review gateway health: every configured provider is served")
+    return 0
 
 
 def recover(env: Environment, args: argparse.Namespace) -> int:
@@ -405,6 +463,7 @@ PHASES: dict[str, Phase] = {
     "isolation": isolate,
     "attempts": attempts,
     "recover": recover,
+    "health": health,
     "finalize": finalize,
     "publish": publish,
     "dispatch": dispatch,

@@ -9,7 +9,6 @@ from functools import lru_cache
 REDACTED = "[redacted]"
 MIN_LENGTH = 8
 GATEWAY_ENV = ("OMP_GATEWAY_TOKEN",)
-GATEWAY_PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
 BROKER_ENV = ("OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN")
 RUNNER_ENV = (
     "REVIEW_GATEWAY_URL",
@@ -36,10 +35,10 @@ def known(extra: Iterable[str] = ()) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if len(value) >= MIN_LENGTH))
 
 
-def gateway_models_text(url: str) -> str:
+def gateway_models_text(url: str, providers: Iterable[str]) -> str:
     providers = "".join(
         f"  {provider}:\n    transport: pi-native\n    baseUrl: {json.dumps(url)}\n    apiKey: {GATEWAY_ENV[0]}\n"
-        for provider in GATEWAY_PROVIDERS
+        for provider in providers
     )
     return f"providers:\n{providers}"
 

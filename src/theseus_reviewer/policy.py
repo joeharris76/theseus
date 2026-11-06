@@ -96,6 +96,7 @@ class ClassifierRules:
     logic_paths: tuple[str, ...]
     data_paths: tuple[str, ...]
     exempt_paths: tuple[str, ...]
+    unavailable_bucket: str | None = None
 
 
 @dataclass(frozen=True)
@@ -395,6 +396,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
             logic_paths=_str_tuple(classifier.get("logic_paths"), "classifier logic_paths"),
             data_paths=_str_tuple(classifier.get("data_paths"), "classifier data_paths"),
             exempt_paths=_str_tuple(classifier.get("exempt_paths") or [], "classifier exempt_paths"),
+            unavailable_bucket=classifier.get("unavailable_bucket"),
         ),
         omp_sha256=omp_sha256,
         evidence=EvidenceRules(
@@ -409,6 +411,10 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
             allowed_artifact_hosts=allowed_hosts,
             dependencies=dependencies,
         ),
+    )
+    _require(
+        policy.classifier.unavailable_bucket is None or policy.classifier.unavailable_bucket in SIZE_BUCKETS,
+        f"classifier unavailable_bucket must be one of {SIZE_BUCKETS}",
     )
     _require(policy.mode in ("shadow", "enforce"), "mode must be shadow or enforce")
     _require(bool(policy.status_context), "status_context is required")

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tests.conftest import ALPHA_POLICY, CONSUMER_ALPHA
 
-from theseus_reviewer import cli
+from theseus_reviewer import cli, providers
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import matching
 from theseus_reviewer.matchers import load_matchers
@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 CONFIG_PATH = CONSUMER_ALPHA / ".github" / "review-omp-config.yml"
 POLICY_PATH = ALPHA_POLICY
 GATEWAY_URL = "https://example.ts.net:4000"
-PROVIDERS = {"anthropic", "openai-codex", "muse-code", "google-antigravity"}
+PROVIDERS = {"anthropic", "openai-codex", "google-antigravity"}
 TOKEN = "t" * 48
 ACCOUNTS = {
     "accounts": [
@@ -57,9 +57,9 @@ def test_reviewer_home_writes_the_config_and_the_gateway_providers(tmp_path: Pat
     )
     agent = tmp_path / ".omp" / "agent"
     assert _load(agent / "config.yml") == _load(CONFIG_PATH)
-    providers = _load(agent / "models.yml")["providers"]
-    assert set(providers) == PROVIDERS
-    for provider in providers.values():
+    routed = _load(agent / "models.yml")["providers"]
+    assert set(routed) == PROVIDERS
+    for provider in routed.values():
         assert provider == {"transport": "pi-native", "baseUrl": GATEWAY_URL, "apiKey": "OMP_GATEWAY_TOKEN"}
 
 
@@ -125,13 +125,6 @@ def test_gateway_clients_pin_each_gateway_provider_to_its_logged_in_accounts(tmp
     }
 
 
-def test_gateway_clients_refuse_a_provider_without_a_logged_in_account(tmp_path: Path) -> None:
-    partial = {"accounts": [entry for entry in ACCOUNTS["accounts"] if entry["provider"] != "google-antigravity"]}
-    with pytest.raises(SystemExit, match="no logged-in broker account for google-antigravity"):
-        _gateway_clients(tmp_path, accounts=partial)
-    assert not (tmp_path / "clients.json").exists()
-
-
 @pytest.mark.parametrize("token", [TOKEN + "\n", "short"])
 def test_gateway_clients_refuse_a_token_the_secret_would_not_match(tmp_path: Path, token: str) -> None:
     with pytest.raises(SystemExit, match="client token"):
@@ -187,7 +180,7 @@ def test_gateway_clients_with_only_review_ci_write_the_single_client_file(tmp_pa
     expected = {
         "review-ci": {
             "tokenSha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
-            "models": cli.gateway_models(_load(CONFIG_PATH)),
+            "models": providers.gateway_models(_load(CONFIG_PATH)),
             "accounts": {
                 "openai-codex": ["email:o@example.com"],
                 "anthropic": ["email:a@example.com"],

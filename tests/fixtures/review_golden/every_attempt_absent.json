@@ -2,9 +2,9 @@
   "attempts": [
     {
       "absence": {
-        "detail": "exit code 1",
+        "detail": "500 api_error: 500 Internal Server Error",
         "kind": "error",
-        "provider": "",
+        "provider": "anthropic",
         "reset_at": null,
         "unread": []
       },
@@ -13,6 +13,10 @@
       "outcome": "absent",
       "pr": 84,
       "recovery": null,
+      "resolved": {
+        "nominal": "anthropic/claude-sonnet-5-5:high",
+        "target": "anthropic/claude-sonnet-5-5:high"
+      },
       "reviewer": "medium",
       "run_id": "<volatile>",
       "schema": 3,
@@ -21,9 +25,9 @@
     },
     {
       "absence": {
-        "detail": "exit code 1",
+        "detail": "500 api_error: 500 Internal Server Error",
         "kind": "error",
-        "provider": "",
+        "provider": "anthropic",
         "reset_at": null,
         "unread": []
       },
@@ -32,6 +36,10 @@
       "outcome": "absent",
       "pr": 84,
       "recovery": null,
+      "resolved": {
+        "nominal": "anthropic/claude-sonnet-5-5:high",
+        "target": "openai-codex/gpt-6.1-sol:medium"
+      },
       "reviewer": "medium",
       "run_id": "<volatile>",
       "schema": 3,
@@ -40,9 +48,9 @@
     },
     {
       "absence": {
-        "detail": "exit code 1",
+        "detail": "500 api_error: 500 Internal Server Error",
         "kind": "error",
-        "provider": "",
+        "provider": "anthropic",
         "reset_at": null,
         "unread": []
       },
@@ -51,7 +59,11 @@
       "outcome": "absent",
       "pr": 84,
       "recovery": null,
-      "reviewer": "large",
+      "resolved": {
+        "nominal": "anthropic/claude-sonnet-5-5:high",
+        "target": "openai-codex/gpt-6.1-sol:medium"
+      },
+      "reviewer": "medium",
       "run_id": "<volatile>",
       "schema": 3,
       "slot": 3,
@@ -59,9 +71,9 @@
     },
     {
       "absence": {
-        "detail": "exit code 1",
+        "detail": "500 api_error: 500 Internal Server Error",
         "kind": "error",
-        "provider": "",
+        "provider": "anthropic",
         "reset_at": null,
         "unread": []
       },
@@ -70,6 +82,10 @@
       "outcome": "absent",
       "pr": 84,
       "recovery": null,
+      "resolved": {
+        "nominal": "anthropic/claude-opus-5-5:medium",
+        "target": "openai-codex/gpt-6.1-sol:high"
+      },
       "reviewer": "large",
       "run_id": "<volatile>",
       "schema": 3,
@@ -78,9 +94,9 @@
     },
     {
       "absence": {
-        "detail": "exit code 1",
+        "detail": "500 api_error: 500 Internal Server Error",
         "kind": "error",
-        "provider": "",
+        "provider": "anthropic",
         "reset_at": null,
         "unread": []
       },
@@ -89,7 +105,11 @@
       "outcome": "absent",
       "pr": 84,
       "recovery": null,
-      "reviewer": "huge",
+      "resolved": {
+        "nominal": "anthropic/claude-opus-5-5:medium",
+        "target": "openai-codex/gpt-6.1-sol:high"
+      },
+      "reviewer": "large",
       "run_id": "<volatile>",
       "schema": 3,
       "slot": 5,
@@ -100,7 +120,7 @@
     "attempt/state.json": null,
     "comment.json": null,
     "review.json": {
-      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): exit code 1\n- medium (attempt 2): absent (error): exit code 1\n- large (attempt 3): absent (error): exit code 1\n- large (attempt 4): absent (error): exit code 1\n- huge (attempt 5): absent (error): exit code 1\n- max: skipped: no attempt slot left in this run\n",
+      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 2): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 3): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 4): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 5): absent (error): 500 api_error: 500 Internal Server Error\n- huge: skipped: no attempt slot left in this run\n- max: skipped: no attempt slot left in this run\n\n**Provider availability**\n\n- excluded after anthropic failed (attempt 1, medium): error\n- excluded after anthropic failed (attempt 2, medium): error\n- excluded after anthropic failed (attempt 3, medium): error\n- excluded after anthropic failed (attempt 4, large): error\n- excluded after anthropic failed (attempt 5, large): error\n- served: anthropic, google-antigravity, openai-codex\n- medium (attempt 2): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- medium (attempt 3): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- large (attempt 4): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n- large (attempt 5): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n",
       "comments": [],
       "commit_id": "<sha0>",
       "event": "COMMENT"
@@ -117,7 +137,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "pending: medium: absent (error: exit code 1); large: absent (error: exit code 1); huge: skipped: no attempt slot left in this run; max: ski…",
+      "description": "pending: medium: absent (error: 500 api_error: 500 Internal Server Error); large: absent (error: 500 api_error: 500 I… · degraded: anthropic",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -135,6 +155,38 @@
       "medium": "medium",
       "small": "small",
       "trivial": "trivial"
+    },
+    "candidates": {
+      "huge": [
+        "anthropic/claude-opus-5-5:xhigh",
+        "openai-codex/gpt-6.1-sol:high",
+        "google-antigravity/gemini-4-argon:medium"
+      ],
+      "large": [
+        "anthropic/claude-opus-5-5:medium",
+        "openai-codex/gpt-6.1-sol:high",
+        "google-antigravity/gemini-4-argon:medium"
+      ],
+      "max": [
+        "anthropic/claude-fable-5-1:medium",
+        "openai-codex/gpt-6-astra:high",
+        "google-antigravity/gemini-4-argon:xhigh"
+      ],
+      "medium": [
+        "anthropic/claude-sonnet-5-5:high",
+        "openai-codex/gpt-6.1-sol:medium",
+        "google-antigravity/gemini-3.8-flash:high"
+      ],
+      "small": [
+        "openai-codex/gpt-6-luna:xhigh",
+        "anthropic/claude-sonnet-5-5:medium",
+        "google-antigravity/gemini-3.8-flash:medium"
+      ],
+      "trivial": [
+        "openai-codex/gpt-6-luna:xhigh",
+        "anthropic/claude-sonnet-5-5:medium",
+        "google-antigravity/gemini-3.8-flash:medium"
+      ]
     },
     "capacity": {
       "huge": 936000,
@@ -230,6 +282,7 @@
         "timeout_minutes": 45
       }
     ],
+    "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",
     "decision": "review",
@@ -259,10 +312,24 @@
     "max_attempts": 5,
     "max_defects": 10,
     "mode": "enforce",
+    "model_windows": {
+      "anthropic/claude-fable-5-1": 872000,
+      "anthropic/claude-opus-5-5": 936000,
+      "anthropic/claude-sonnet-5-5": 936000,
+      "google-antigravity/gemini-3.8-flash": 936000,
+      "google-antigravity/gemini-4-argon": 983040,
+      "openai-codex/gpt-6-astra": 144000,
+      "openai-codex/gpt-6-luna": 336000,
+      "openai-codex/gpt-6.1-sol": 372000
+    },
     "omp_config": ".github/review-omp-config.yml",
     "omp_sha256": "<volatile>",
     "open_findings": {},
     "pool_blocked_until": {},
+    "pool_providers": {
+      "claude": "anthropic",
+      "codex": "openai-codex"
+    },
     "pr": 84,
     "previous_state": null,
     "protocol": {
@@ -298,6 +365,11 @@
       }
     ],
     "reviewed_head": null,
+    "routed": [
+      "openai-codex",
+      "anthropic",
+      "google-antigravity"
+    ],
     "run_id": "<volatile>",
     "schema": 1,
     "scope": "full",
@@ -307,6 +379,23 @@
     "scope_reasons": [
       "changes comparison, validation or result logic: benchbox/core/equivalence/checker.py"
     ],
+    "served": {
+      "models": [
+        "anthropic/claude-fable-5-1",
+        "anthropic/claude-opus-5-5",
+        "anthropic/claude-sonnet-5-5",
+        "google-antigravity/gemini-3.8-flash",
+        "google-antigravity/gemini-4-argon",
+        "openai-codex/gpt-6-astra",
+        "openai-codex/gpt-6-luna",
+        "openai-codex/gpt-6.1-sol"
+      ],
+      "providers": [
+        "anthropic",
+        "google-antigravity",
+        "openai-codex"
+      ]
+    },
     "status_context": "review-verdict",
     "unchanged_files": [],
     "untracked_files": []
@@ -329,7 +418,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): exit code 1\n- medium (attempt 2): absent (error): exit code 1\n- large (attempt 3): absent (error): exit code 1\n- large (attempt 4): absent (error): exit code 1\n- huge (attempt 5): absent (error): exit code 1\n- max: skipped: no attempt slot left in this run\n",
+        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 2): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 3): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 4): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 5): absent (error): 500 api_error: 500 Internal Server Error\n- huge: skipped: no attempt slot left in this run\n- max: skipped: no attempt slot left in this run\n\n**Provider availability**\n\n- excluded after anthropic failed (attempt 1, medium): error\n- excluded after anthropic failed (attempt 2, medium): error\n- excluded after anthropic failed (attempt 3, medium): error\n- excluded after anthropic failed (attempt 4, large): error\n- excluded after anthropic failed (attempt 5, large): error\n- served: anthropic, google-antigravity, openai-codex\n- medium (attempt 2): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- medium (attempt 3): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- large (attempt 4): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n- large (attempt 5): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n",
         "commit_id": "<sha0>",
         "creator": "benchbox-review[bot]"
       }
@@ -338,7 +427,7 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "pending: medium: absent (error: exit code 1); large: absent (error: exit code 1); huge: skipped: no attempt slot left in this run; max: ski…",
+        "description": "pending: medium: absent (error: 500 api_error: 500 Internal Server Error); large: absent (error: 500 api_error: 500 I… · degraded: anthropic",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
@@ -383,5 +472,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #84: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium absent (error: exit code 1)\nslot 2: medium\nslot 2: medium absent (error: exit code 1)\nslot 3: large\nslot 3: large absent (error: exit code 1)\nslot 4: large\nslot 4: large absent (error: exit code 1)\nslot 5: huge\nslot 5: huge absent (error: exit code 1)\nreview-verdict #84 <sha0>: pending: pending: medium: absent (error: exit code 1); large: absent (error: exit code 1); huge: skipped: no attempt slot left in this run; max: ski…\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): exit code 1\n- medium (attempt 2): absent (error): exit code 1\n- large (attempt 3): absent (error): exit code 1\n- large (attempt 4): absent (error): exit code 1\n- huge (attempt 5): absent (error): exit code 1\n- max: skipped: no attempt slot left in this run\n\n"
+  "summary": "review-verdict plan for #84: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (error: 500 api_error: 500 Internal Server Error)\nslot 2: medium (anthropic/claude-sonnet-5-5:high unavailable; running openai-codex/gpt-6.1-sol:medium)\nslot 2: medium absent (error: 500 api_error: 500 Internal Server Error)\nslot 3: medium (anthropic/claude-sonnet-5-5:high unavailable; running openai-codex/gpt-6.1-sol:medium)\nslot 3: medium absent (error: 500 api_error: 500 Internal Server Error)\nslot 4: large (anthropic/claude-opus-5-5:medium unavailable; running openai-codex/gpt-6.1-sol:high)\nslot 4: large absent (error: 500 api_error: 500 Internal Server Error)\nslot 5: large (anthropic/claude-opus-5-5:medium unavailable; running openai-codex/gpt-6.1-sol:high)\nslot 5: large absent (error: 500 api_error: 500 Internal Server Error)\nreview-verdict #84 <sha0>: pending: pending: medium: absent (error: 500 api_error: 500 Internal Server Error); large: absent (error: 500 api_error: 500 I… · degraded: anthropic\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 2): absent (error): 500 api_error: 500 Internal Server Error\n- medium (attempt 3): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 4): absent (error): 500 api_error: 500 Internal Server Error\n- large (attempt 5): absent (error): 500 api_error: 500 Internal Server Error\n- huge: skipped: no attempt slot left in this run\n- max: skipped: no attempt slot left in this run\n\n**Provider availability**\n\n- excluded after anthropic failed (attempt 1, medium): error\n- excluded after anthropic failed (attempt 2, medium): error\n- excluded after anthropic failed (attempt 3, medium): error\n- excluded after anthropic failed (attempt 4, large): error\n- excluded after anthropic failed (attempt 5, large): error\n- served: anthropic, google-antigravity, openai-codex\n- medium (attempt 2): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- medium (attempt 3): anthropic/claude-sonnet-5-5:high → openai-codex/gpt-6.1-sol:medium\n- large (attempt 4): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n- large (attempt 5): anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high\n\n"
 }

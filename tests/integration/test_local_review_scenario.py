@@ -28,7 +28,7 @@ def test_a_clean_local_review_proceeds_and_keeps_a_redacted_capture(harness: Har
     assert review.code == 0, review.stdout + review.stderr
     assert "Local review: no Critical or High findings; pr-open may proceed." in review.stdout
     [capture] = harness.local_captures()
-    assert GATEWAY_TOKEN not in json.dumps(capture) and harness.github.url not in json.dumps(capture)
+    assert GATEWAY_TOKEN not in json.dumps(capture) and harness.gateway.url not in json.dumps(capture)
     assert capture["exit_code"] == 0 and capture["absence"] is None
     assert "[redacted]" in capture["stderr_excerpt"]
 
