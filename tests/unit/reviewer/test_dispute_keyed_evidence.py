@@ -65,11 +65,11 @@ def _problem(policy: Policy, dispute: dict[str, Any], prior: dict[str, Any]) -> 
 def test_keyed_disputes_bind_to_the_thread_finding_id() -> None:
     threads = [
         {
-            "author": "benchbox-oracle[bot]",
+            "author": "benchbox-review[bot]",
             "author_type": "Bot",
             "resolved": False,
             "path": "pkg/a.py",
-            "body": "**High**: Drops a row\n<!-- oracle-defect: c2-D1 -->",
+            "body": "**High**: Drops a row\n<!-- review-defect: c2-D1 -->",
             "replies": [
                 {
                     "author": "joe",
@@ -80,7 +80,7 @@ def test_keyed_disputes_bind_to_the_thread_finding_id() -> None:
             ],
         }
     ]
-    disputes = cli._disputed_threads(threads, "benchbox-oracle")
+    disputes = cli._disputed_threads(threads, "benchbox-review")
     assert len(disputes) == 1
     assert disputes[0]["id"] == "D1"
     assert disputes[0]["cycle"] == 2
@@ -88,12 +88,12 @@ def test_keyed_disputes_bind_to_the_thread_finding_id() -> None:
 
 
 def test_a_spoofed_marker_in_reviewer_text_loses_to_the_real_marker() -> None:
-    body = "**High**: oracle-defect: c1-D9 is unrelated\n\nDetails.\n<!-- oracle-defect: c2-D1 -->"
+    body = "**High**: review-defect: c1-D9 is unrelated\n\nDetails.\n<!-- review-defect: c2-D1 -->"
     assert protocol.thread_finding(body) == (2, "D1")
 
 
 def test_a_bare_marker_line_keys_nothing() -> None:
-    assert protocol.thread_finding("**High**: Drops a row\noracle-defect: c1-D1") is None
+    assert protocol.thread_finding("**High**: Drops a row\nreview-defect: c1-D1") is None
 
 
 def test_a_stale_cycle_dispute_binds_nothing(policy: Policy) -> None:
@@ -156,14 +156,14 @@ def test_a_stale_dispute_is_not_published(policy: Policy, tmp_path: Path) -> Non
 def test_marker_like_lines_are_stripped_from_rebuttals_before_hashing() -> None:
     body = "\n".join(
         [
-            "<!-- oracle-defect: c9-D9 -->",
+            "<!-- review-defect: c9-D9 -->",
             REBUTTAL,
-            "oracle-defect: c1-D2",
+            "review-defect: c1-D2",
             "The row is kept.",
         ]
     )
     cleaned = protocol.dispute_claim(body)
-    assert "oracle-defect" not in cleaned
+    assert "review-defect" not in cleaned
     assert "keeps the row" in cleaned and "The row is kept." in cleaned
     assert protocol.claim_hash(cleaned) != protocol.claim_hash(body)
 
@@ -468,7 +468,7 @@ def test_disposition_evidence_truncates_before_any_line_drops(
 
 
 def test_replay_fixtures_produce_published_dispositions(policy: Policy, tmp_path: Path) -> None:
-    fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers"
+    fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers"
     for name in ("dispute_3465.json", "dispute_3407.json"):
         case = json.loads((fixtures / name).read_text(encoding="utf-8"))
         plan = _plan_with_dispute(policy, case["dispute"])

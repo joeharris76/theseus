@@ -20,7 +20,7 @@ def test_scans_include_leaks_outside_home_and_runner_temp(tmp_path, monkeypatch)
         {"RUNNER_TEMP": str(tmp_path), "GITHUB_WORKSPACE": str(tmp_path), "HOME": str(tmp_path / "home")},
         tmp_path / "policy.yml",
     )
-    with tempfile.TemporaryDirectory(dir="/tmp", prefix="oracle-scratch-leak-") as directory:
+    with tempfile.TemporaryDirectory(dir="/tmp", prefix="review-scratch-leak-") as directory:
         root = Path(directory)
         (root / "response.txt").write_text(secret)
         assert not root.is_relative_to(tmp_path)

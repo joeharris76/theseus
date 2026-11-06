@@ -9,7 +9,7 @@ from theseus_reviewer.verdict import MAX_EVIDENCE, validate
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-HIDDEN = ".github/workflows/oracle-verdict.yml"
+HIDDEN = ".github/workflows/review-verdict.yml"
 
 
 def _returned(*paths: str, span: tuple[int, int] = (1, 5)) -> dict[str, tuple[tuple[int, int], ...]]:
@@ -40,7 +40,7 @@ def test_withdrawal_citations_parse_the_full_repository_path(workspace: Path, te
     assert evidence._withdrawal_verified(text, workspace, _returned(path))
 
 
-@pytest.mark.parametrize("text", ["../pkg/mod.py:1", "/etc/passwd:1", "github/workflows/oracle-verdict.yml:1"])
+@pytest.mark.parametrize("text", ["../pkg/mod.py:1", "/etc/passwd:1", "github/workflows/review-verdict.yml:1"])
 def test_withdrawal_citations_outside_the_read_files_stay_unverified(workspace: Path, text: str) -> None:
     assert not evidence._withdrawal_verified(text, workspace, _returned(HIDDEN, "Makefile", "pkg/mod.py"))
 

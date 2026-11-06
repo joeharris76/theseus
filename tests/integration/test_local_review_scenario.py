@@ -26,7 +26,7 @@ def test_a_clean_local_review_proceeds_and_keeps_a_redacted_capture(harness: Har
     review = harness.local_review("feat/local")
 
     assert review.code == 0, review.stdout + review.stderr
-    assert "Local oracle review: no Critical or High findings; pr-open may proceed." in review.stdout
+    assert "Local review: no Critical or High findings; pr-open may proceed." in review.stdout
     [capture] = harness.local_captures()
     assert GATEWAY_TOKEN not in json.dumps(capture) and harness.github.url not in json.dumps(capture)
     assert capture["exit_code"] == 0 and capture["absence"] is None
@@ -49,7 +49,7 @@ def test_a_local_review_with_a_high_finding_refuses_the_pull_request(harness: Ha
 def test_renaming_gate_machinery_keeps_the_gate_template(harness: Harness) -> None:
     harness.rename_branch(
         "feat/rename-gate",
-        ".github/workflows/oracle-verdict.yml",
+        ".github/workflows/review-verdict.yml",
         ".github/workflows/renamed-review.yml",
         "rename the verdict workflow",
     )

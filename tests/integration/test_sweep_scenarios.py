@@ -13,7 +13,7 @@ UNAVAILABLE = {
     "provider": "anthropic",
     "message": "api_error: 500 Internal Server Error",
 }
-VERDICT = "oracle-verdict.yml"
+VERDICT = "review-verdict.yml"
 
 
 def _failed_run(harness: Harness, pr: int, head: str, event: str, minutes: int, step: str) -> dict:
@@ -33,7 +33,7 @@ def test_a_failed_run_is_redispatched_once_then_a_second_failure_is_surfaced_as_
     assert harness.github.dispatches == [
         {"workflow": VERDICT, "ref": "develop", "inputs": {"pr": "61", "head": head, "reason": "stateless-retry"}}
     ]
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
 
     retry = _failed_run(harness, 61, head, "workflow_dispatch", 20, "Verify Linux process isolation")
     second = harness.sweep()
@@ -41,8 +41,8 @@ def test_a_failed_run_is_redispatched_once_then_a_second_failure_is_surfaced_as_
 
     assert (second.code, third.code) == (0, 0)
     assert len(harness.github.dispatches) == 1
-    surfaced = harness.github.oracle_statuses(head)
-    assert [(item["state"], item["creator"]["login"]) for item in surfaced] == [("pending", "benchbox-oracle[bot]")]
+    surfaced = harness.github.review_statuses(head)
+    assert [(item["state"], item["creator"]["login"]) for item in surfaced] == [("pending", "benchbox-review[bot]")]
     assert "Verify Linux process isolation" in surfaced[0]["description"]
     assert surfaced[0]["target_url"].endswith(f"/{SLUG}/actions/runs/{retry['id']}")
 
@@ -53,7 +53,7 @@ def _pending_review(harness: Harness, pr: int, branch: str) -> tuple[str, dict]:
     harness.script_omp([UNAVAILABLE])
     run = harness.review(pr)
     assert run.steps["finalize"].outputs["state"] == "pending"
-    assert harness.github.artifact_json(f"oracle-verdict-state-{pr}", "state.json")["pending_cause"] == "all-absent"
+    assert harness.github.artifact_json(f"review-verdict-state-{pr}", "state.json")["pending_cause"] == "all-absent"
     return head, run.run
 
 
@@ -99,7 +99,7 @@ def test_a_pending_state_for_an_older_head_does_not_dispatch_the_new_head(harnes
 def test_a_manual_retry_whose_guard_fails_still_consumes_the_retry(harness: Harness) -> None:
     head, run = _pending_review(harness, 90, "feat/consumed")
     harness.github.age(run, 180)
-    posted = len(harness.github.oracle_statuses(head))
+    posted = len(harness.github.review_statuses(head))
     harness.script_omp([UNAVAILABLE])
 
     first = harness.review(
@@ -111,7 +111,7 @@ def test_a_manual_retry_whose_guard_fails_still_consumes_the_retry(harness: Harn
 
     assert first.steps["prepare"].outputs["decision"] == "review"
     assert first.steps["publish"].code == 2
-    assert len(harness.github.oracle_statuses(head)) == posted
+    assert len(harness.github.review_statuses(head)) == posted
     harness.script_omp([UNAVAILABLE])
     second = harness.review(90, event_name="workflow_dispatch")
     assert second.steps["prepare"].outputs["decision"] == "skip"

@@ -79,7 +79,7 @@ def test_a_local_finding_carries_the_id_and_fingerprint_ci_assigns_to_the_same_p
     run = harness.review(81)
 
     [thread] = harness.github.threads[81]
-    assert "<!-- oracle-defect: c1-D1 -->" in thread["comments"][0]["body"]
+    assert "<!-- review-defect: c1-D1 -->" in thread["comments"][0]["body"]
     assert item["id"] == "c1-D1" and item["fingerprint"] == dedup.fingerprint(CHECKER, DEFECT["title"])
     assert run.plan["protocol"]["patch_digest"] == record["patch_digest"]
     assert item["reviewer"] == record["history"][-1]["reviewer"] != ""
@@ -215,7 +215,7 @@ def test_a_record_carried_in_the_pull_request_body_is_ingested_as_claims_and_for
     assert rules["kind"] == "first" and rules["forced"] is True and rules["claimed"] == ["D1"]
     assert [item["id"] for item in rules["prior"]] == ["D1"] and rules["next_id"] == 2
     assert [item["id"] for item in silent.plan["disputes"]] == ["D1"]
-    assert [item["state"] for item in harness.github.oracle_statuses(silent.plan["head_sha"])] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(silent.plan["head_sha"])] == ["failure"]
     body = harness.github.reviews[82][-1]["body"]
     assert "**Dispute dispositions**" in body and "disputed finding D1 has no concedes boolean" in body
     assert "the defect stays open" in body
@@ -229,7 +229,7 @@ def test_ci_clears_a_locally_withdrawn_finding_only_with_its_own_cited_dispositi
     run = harness.review(83)
 
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["success"]
     prompt = harness.omp_prompts()[0]
     assert "Disputed findings" in prompt and REBUTTAL in prompt
 
@@ -248,7 +248,7 @@ def test_a_forged_record_cannot_clear_a_finding_or_confer_a_strike(harness: Harn
 
     run = harness.review(84)
 
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["failure"]
     assert run.plan["protocol"]["strikes"] == 0
     body = harness.github.reviews[84][-1]["body"]
     assert "disputed finding D1 has no concedes boolean" in body and "the defect stays open" in body
@@ -267,7 +267,7 @@ def test_a_forged_record_can_only_add_work_when_the_reviewer_clears_nothing(harn
 
     run = harness.review(85)
 
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["failure"]
     assert run.plan["protocol"]["prior"][0]["severity"] == findings.CLAIMED_SEVERITY
     assert run.plan["protocol"]["strikes"] == 0
 
@@ -282,10 +282,10 @@ def test_a_record_for_another_patch_is_ignored_by_ci(harness: Harness) -> None:
 
     assert run.plan["protocol"]["prior"] == [] and run.plan["disputes"] == []
     assert run.plan["protocol"]["forced"] is False and "claimed" not in run.plan["protocol"]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["success"]
 
 
-def test_a_record_is_not_ingested_once_the_pull_request_has_an_oracle_review(harness: Harness) -> None:
+def test_a_record_is_not_ingested_once_the_pull_request_has_a_review(harness: Harness) -> None:
     _blocked_round(harness)
     body = _record_body(harness)
     harness.github.open_pull(87, "feat/checker")

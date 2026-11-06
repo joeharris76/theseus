@@ -17,10 +17,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 HEAD = "c" * 40
 OTHER_HEAD = "d" * 40
-ALPHA = {"root": CONSUMER_ALPHA, "bot": "benchbox-oracle", "owner": "joeharris76", "base": "develop"}
-BETA = {"root": CONSUMER_BETA, "bot": "beta-oracle", "owner": "beta-owner", "base": "main"}
+ALPHA = {"root": CONSUMER_ALPHA, "bot": "benchbox-review", "owner": "joeharris76", "base": "develop"}
+BETA = {"root": CONSUMER_BETA, "bot": "beta-review", "owner": "beta-owner", "base": "main"}
 CONSUMERS = {"alpha": ALPHA, "beta": BETA}
-POLICY_PATH = ".github/oracle-reviewers.yml"
+POLICY_PATH = ".github/review.yml"
 
 
 def _config(consumer):
@@ -30,7 +30,7 @@ def _config(consumer):
 def _status(login: str, state: str = "failure", description: str = "refused", created: str = "2026-11-01T10:00:00Z"):
     return {
         "id": 1,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": description,
         "login": login,
@@ -56,7 +56,7 @@ def _decide(config, statuses, comments):
 
 def test_each_consumer_loads_its_own_identity():
     alpha, beta = _config(ALPHA), _config(BETA)
-    assert (alpha.binding.bot_login, beta.binding.bot_login) == ("benchbox-oracle", "beta-oracle")
+    assert (alpha.binding.bot_login, beta.binding.bot_login) == ("benchbox-review", "beta-review")
     assert alpha.binding.attesters == {"joeharris76"}
     assert beta.binding.attesters == {"beta-owner", "beta-deputy"}
     assert (alpha.consumer.gated_base, beta.consumer.gated_base) == ("develop", "main")
@@ -68,17 +68,17 @@ def test_each_consumer_loads_its_own_identity():
 @pytest.mark.parametrize("own,other", [("alpha", "beta"), ("beta", "alpha")])
 def test_standin_attestation_is_accepted_only_from_the_consumers_own_attesters(own, other):
     config = _config(CONSUMERS[own])
-    attestation = f"Stand-in oracle review: APPROVE {HEAD}"
+    attestation = f"Stand-in review: APPROVE {HEAD}"
     status, message = _decide(config, [], [_comment(CONSUMERS[own]["owner"], attestation)])
     assert status == review_check.PASS
     assert CONSUMERS[own]["owner"] in message
     status, message = _decide(config, [], [_comment(CONSUMERS[other]["owner"], attestation)])
     assert status == WAITING
-    assert "waiting for the oracle's verdict" in message
+    assert "waiting for the review's verdict" in message
 
 
 def test_beta_deputy_is_an_attester_for_beta_only():
-    attestation = f"Stand-in oracle review: APPROVE {HEAD}"
+    attestation = f"Stand-in review: APPROVE {HEAD}"
     assert _decide(_config(BETA), [], [_comment("beta-deputy", attestation)])[0] == review_check.PASS
     assert _decide(_config(ALPHA), [], [_comment("beta-deputy", attestation)])[0] == WAITING
 
@@ -91,14 +91,14 @@ def test_verdict_statuses_count_only_from_the_consumers_own_app(own, other):
     assert "latest verdict" in message and "is failure" in message
     status, message = _decide(config, [_status(CONSUMERS[other]["bot"])], [])
     assert status == WAITING
-    assert "waiting for the oracle's verdict" in message
+    assert "waiting for the review's verdict" in message
 
 
 def test_the_app_login_matches_the_bot_account_type_and_suffix():
     config = _config(BETA)
-    assert not review_check._is_oracle("beta-oracle", "User", config.binding.bot_login)
-    assert review_check._is_oracle("beta-oracle[bot]", "Bot", config.binding.bot_login)
-    assert not review_check._is_oracle("benchbox-oracle", "Bot", config.binding.bot_login)
+    assert not review_check._is_review("beta-review", "User", config.binding.bot_login)
+    assert review_check._is_review("beta-review[bot]", "Bot", config.binding.bot_login)
+    assert not review_check._is_review("benchbox-review", "Bot", config.binding.bot_login)
 
 
 @pytest.mark.parametrize("own,other", [("alpha", "beta"), ("beta", "alpha")])
@@ -146,11 +146,11 @@ def test_gate_passes_the_configured_login_to_receipt_and_promotion_checks(monkey
     )
     monkeypatch.setattr(gate, "fetch_bump_refusals", lambda *a, **k: seen.update(bump=k) or [])
     monkeypatch.setattr(
-        gate, "fetch_promotion_refusals", lambda *a, **k: seen.update(promotion=k["oracle_login"]) or (False, [])
+        gate, "fetch_promotion_refusals", lambda *a, **k: seen.update(promotion=k["review_login"]) or (False, [])
     )
     gate.evaluate("acme/r", 7, "token", config)
-    assert seen["receipt"] == "beta-oracle"
-    assert seen["promotion"] == "beta-oracle"
+    assert seen["receipt"] == "beta-review"
+    assert seen["promotion"] == "beta-review"
     assert seen["bump"] == {
         "policy_path": POLICY_PATH,
         "fixture_prefix": "fixtures/omp/",
@@ -213,7 +213,7 @@ def test_owner_instruction_and_adjudication_follow_the_consumers_attesters():
         "user_type": "User",
         "created_at": "2026-11-01T12:00:00Z",
         "updated_at": "2026-11-01T12:00:00Z",
-        "body": "Oracle adjudication: WITHDRAW D1 - wrong",
+        "body": "Review adjudication: WITHDRAW D1 - wrong",
     }
     from datetime import UTC, datetime
 
@@ -224,7 +224,7 @@ def test_owner_instruction_and_adjudication_follow_the_consumers_attesters():
 
 def test_trusted_runs_and_state_follow_the_consumers_base():
     run = {
-        "path": ".github/workflows/oracle-verdict.yml@refs/heads/x",
+        "path": ".github/workflows/review-verdict.yml@refs/heads/x",
         "repository": {"full_name": "acme/r"},
         "event": "workflow_dispatch",
         "head_sha": HEAD,
@@ -241,11 +241,11 @@ def test_missing_configuration_fails_clearly_and_never_defaults(tmp_path):
         parse_policy(data)
     root = tmp_path / "root"
     (root / ".github").mkdir(parents=True)
-    (root / ".github" / "oracle-reviewers.yml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    (root / ".github" / "review.yml").write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(gate.CheckError, match="consumer section"):
         gate.load_gate_config(POLICY_PATH, root)
     complete = yaml.safe_load(ALPHA_POLICY.read_text(encoding="utf-8"))
-    (root / ".github" / "oracle-reviewers.yml").write_text(yaml.safe_dump(complete), encoding="utf-8")
+    (root / ".github" / "review.yml").write_text(yaml.safe_dump(complete), encoding="utf-8")
     with pytest.raises(gate.CheckError, match="consumer path manifests"):
         gate.load_gate_config(POLICY_PATH, root)
 
@@ -280,7 +280,7 @@ def test_gate_cli_requires_a_policy_and_names_no_default():
 def test_gate_cli_reports_missing_manifest_configuration(tmp_path):
     (tmp_path / ".github").mkdir()
     data = yaml.safe_load(BETA_POLICY.read_text(encoding="utf-8"))
-    (tmp_path / ".github" / "oracle-reviewers.yml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    (tmp_path / ".github" / "review.yml").write_text(yaml.safe_dump(data), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
@@ -312,7 +312,7 @@ def test_wheel_sources_name_no_consumer_identity():
         if path.suffix in (".py", ".md") and path.is_file():
             text = path.read_text(encoding="utf-8").lower()
             hits = [
-                token for token in ("joeharris76", "benchbox-oracle", "benchbox-dev", "origin/develop") if token in text
+                token for token in ("joeharris76", "benchbox-review", "benchbox-dev", "origin/develop") if token in text
             ]
             if hits:
                 offenders[path.name] = hits
@@ -322,4 +322,4 @@ def test_wheel_sources_name_no_consumer_identity():
 def test_policy_round_trips_through_json_for_the_plan():
     policy = load_policy(BETA_POLICY)
     plan = json.dumps({"consumer": policy.consumer.gated_base, "bot": policy.bot_login})
-    assert json.loads(plan) == {"consumer": "main", "bot": "beta-oracle"}
+    assert json.loads(plan) == {"consumer": "main", "bot": "beta-review"}

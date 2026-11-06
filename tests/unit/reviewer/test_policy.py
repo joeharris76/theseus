@@ -22,8 +22,8 @@ def _raw() -> dict[str, Any]:
 
 def test_the_live_policy_enforces_and_posts_where_the_gate_reads(policy: Policy) -> None:
     assert (policy.mode, policy.findings_delivery) == ("enforce", "review")
-    assert policy.status_context == review_check.ORACLE_CONTEXT
-    assert policy.bot_login == "benchbox-oracle"
+    assert policy.status_context == review_check.REVIEW_CONTEXT
+    assert policy.bot_login == "benchbox-review"
 
 
 def test_live_reviewers_match_buckets_one_to_one(policy: Policy) -> None:
@@ -302,11 +302,11 @@ def test_the_live_policy_carries_its_consumer_binding(policy: Policy) -> None:
     assert policy.consumer.attesters == ("joeharris76",)
     assert policy.consumer.soundness_manifest == ".github/soundness-paths.txt"
     assert policy.consumer.inert_manifest == ".github/inert-paths.txt"
-    assert policy.consumer.omp_config == ".github/oracle-omp-config.yml"
-    assert policy.consumer.omp_fixture_prefix == "tests/fixtures/oracle_reviewers/omp_candidate/"
+    assert policy.consumer.omp_config == ".github/review-omp-config.yml"
+    assert policy.consumer.omp_fixture_prefix == "tests/fixtures/reviewers/omp_candidate/"
     binding = policy.binding()
     assert (binding.bot_login, binding.attesters, binding.gated_base) == (
-        "benchbox-oracle",
+        "benchbox-review",
         frozenset({"joeharris76"}),
         "develop",
     )
@@ -315,7 +315,7 @@ def test_the_live_policy_carries_its_consumer_binding(policy: Policy) -> None:
 def test_a_beta_consumer_policy_binds_its_own_identities() -> None:
     policy = parse_policy(yaml.safe_load(BETA_POLICY.read_text(encoding="utf-8")))
     binding = policy.binding()
-    assert binding.bot_login == "beta-oracle"
+    assert binding.bot_login == "beta-review"
     assert binding.attesters == frozenset({"beta-owner", "beta-deputy"})
     assert binding.gated_base == "main"
 

@@ -31,8 +31,8 @@ from theseus_reviewer.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientR
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-FIXTURES = DATA_FIXTURES / "oracle_reviewers" / "omp_candidate"
-OMP_CONFIG = CONSUMER_ALPHA / ".github" / "oracle-omp-config.yml"
+FIXTURES = DATA_FIXTURES / "reviewers" / "omp_candidate"
+OMP_CONFIG = CONSUMER_ALPHA / ".github" / "review-omp-config.yml"
 CONFIG_TEXT = OMP_CONFIG.read_text(encoding="utf-8")
 CONFIG = yaml.safe_load(CONFIG_TEXT)
 STATIC = json.loads((FIXTURES / "static_outputs.json").read_text(encoding="utf-8"))

@@ -28,13 +28,13 @@ from .test_cli_plan import (
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
-BOT = "benchbox-oracle"
+BOT = "benchbox-review"
 CREATED_EDIT = (None, True)
 LATER_EDIT = ("2026-10-09T00:00:00Z", False)
 EDITED = [CREATED_EDIT, LATER_EDIT]
 EDITED_IDS = ["created-edit", "edited-later"]
 RUN = "4242"
-APP_CREATOR = {"login": "benchbox-oracle[bot]", "type": "Bot"}
+APP_CREATOR = {"login": "benchbox-review[bot]", "type": "Bot"}
 USER_CREATOR = {"login": "joe", "type": "User"}
 
 
@@ -42,7 +42,7 @@ def _app_review(body: str = "Decision.\n", **over: Any) -> dict[str, Any]:
     review = {
         "id": 1,
         "node_id": "PRR_1",
-        "login": "benchbox-oracle[bot]",
+        "login": "benchbox-review[bot]",
         "user_type": "Bot",
         "state": "COMMENTED",
         "body": body,
@@ -64,7 +64,7 @@ def test_history_holds_on_an_edited_marked_app_review(edited_at: Any, created: b
     found = protocol.history(
         [_app_review(_marked_body(), last_edited_at=edited_at, includes_created_edit=created)], BOT
     )
-    assert found.error == "an oracle review was edited"
+    assert found.error == "a review was edited"
     assert found.records == [] and found.latest is None
 
 
@@ -76,7 +76,7 @@ def test_history_keeps_an_unedited_marked_app_review() -> None:
 def test_history_holds_when_any_one_review_among_several_was_edited() -> None:
     clean = _app_review(_marked_body(), id=1, node_id="PRR_1")
     edited = _app_review(_marked_body("DO_NOT_SHIP"), id=2, node_id="PRR_2", includes_created_edit=True)
-    assert protocol.history([clean, edited], BOT).error == "an oracle review was edited"
+    assert protocol.history([clean, edited], BOT).error == "a review was edited"
 
 
 @pytest.mark.parametrize("missing", ["last_edited_at", "includes_created_edit"])
@@ -90,7 +90,7 @@ def test_history_refuses_a_marked_app_review_without_edit_state(missing: str) ->
 def test_history_holds_on_an_edited_app_review_whose_marker_was_stripped() -> None:
     stripped = _app_review("Decision.\n", includes_created_edit=True)
     assert protocol.history([_app_review(_marked_body("DO_NOT_SHIP"), id=1), stripped], BOT).error == (
-        "an oracle review was edited"
+        "a review was edited"
     )
 
 
@@ -146,7 +146,7 @@ def _status(
 ) -> dict[str, Any]:
     return {
         "id": id_,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": description,
         "creator": creator,
@@ -169,7 +169,7 @@ def _status(
 )
 def test_a_record_agrees_only_with_the_status_its_decision_requires(decision: str, state: str, agrees: bool) -> None:
     record = {"decision": decision}
-    assert edits.status_agrees([_status(state)], "oracle-verdict", BOT, record) is agrees
+    assert edits.status_agrees([_status(state)], "review-verdict", BOT, record) is agrees
 
 
 def test_a_non_app_status_and_other_contexts_and_pending_never_satisfy_the_check() -> None:
@@ -178,9 +178,9 @@ def test_a_non_app_status_and_other_contexts_and_pending_never_satisfy_the_check
         _status("success", creator=USER_CREATOR),
         {**_status("success"), "context": "other"},
         _status("pending"),
-        _status("success", creator={"login": "benchbox-oracle[bot]", "type": "User"}),
+        _status("success", creator={"login": "benchbox-review[bot]", "type": "User"}),
     ]
-    assert not edits.status_agrees(statuses, "oracle-verdict", BOT, record)
+    assert not edits.status_agrees(statuses, "review-verdict", BOT, record)
 
 
 def test_the_status_is_chosen_by_the_records_run_id() -> None:
@@ -190,10 +190,10 @@ def test_the_status_is_chosen_by_the_records_run_id() -> None:
         _status("failure", "later verdict", "2026-10-08T11:00:00Z", id_=2),
         _status("success", "ok [run 222]", "2026-10-08T12:00:00Z", id_=3),
     ]
-    chosen = edits.chosen_status(statuses, "oracle-verdict", BOT, "111", "SHIP")
+    chosen = edits.chosen_status(statuses, "review-verdict", BOT, "111", "SHIP")
     assert chosen is not None and chosen["id"] == 1
-    assert edits.status_agrees(statuses, "oracle-verdict", BOT, record)
-    assert not edits.status_agrees(statuses[1:2] + statuses[2:], "oracle-verdict", BOT, record)
+    assert edits.status_agrees(statuses, "review-verdict", BOT, record)
+    assert not edits.status_agrees(statuses[1:2] + statuses[2:], "review-verdict", BOT, record)
 
 
 def test_a_record_without_a_run_id_uses_the_latest_app_decisive_status() -> None:
@@ -201,26 +201,26 @@ def test_a_record_without_a_run_id_uses_the_latest_app_decisive_status() -> None
         _status("success", at="2026-10-08T10:00:00Z", id_=1),
         _status("failure", at="2026-10-08T11:00:00Z", id_=2),
     ]
-    assert not edits.status_agrees(statuses, "oracle-verdict", BOT, {"decision": "SHIP"})
-    assert edits.status_agrees(statuses, "oracle-verdict", BOT, {"decision": "DO_NOT_SHIP"})
+    assert not edits.status_agrees(statuses, "review-verdict", BOT, {"decision": "SHIP"})
+    assert edits.status_agrees(statuses, "review-verdict", BOT, {"decision": "DO_NOT_SHIP"})
 
 
 def test_a_non_ship_record_with_a_run_id_matches_the_run_free_failure_status() -> None:
     statuses = [_status("failure", "Carried findings")]
-    assert edits.status_agrees(statuses, "oracle-verdict", BOT, {"decision": "SHIP_WITH_FIXES", "run_uuid": "111"})
+    assert edits.status_agrees(statuses, "review-verdict", BOT, {"decision": "SHIP_WITH_FIXES", "run_uuid": "111"})
     assert not edits.status_agrees(
-        [_status("success", "ok [run 222]")], "oracle-verdict", BOT, {"decision": "SHIP_WITH_FIXES", "run_uuid": "111"}
+        [_status("success", "ok [run 222]")], "review-verdict", BOT, {"decision": "SHIP_WITH_FIXES", "run_uuid": "111"}
     )
 
 
 def test_a_ship_record_with_a_run_id_never_matches_a_run_free_success() -> None:
     assert not edits.status_agrees(
-        [_status("success", "ok")], "oracle-verdict", BOT, {"decision": "SHIP", "run_uuid": "111"}
+        [_status("success", "ok")], "review-verdict", BOT, {"decision": "SHIP", "run_uuid": "111"}
     )
 
 
 def test_no_status_at_all_never_agrees() -> None:
-    assert not edits.status_agrees([], "oracle-verdict", BOT, {"decision": "SHIP"})
+    assert not edits.status_agrees([], "review-verdict", BOT, {"decision": "SHIP"})
 
 
 def _held(values: dict[str, str], plan: dict[str, Any]) -> bool:
@@ -235,7 +235,7 @@ def test_an_edited_prior_review_whose_digest_matches_the_new_head_holds_instead_
     fake.edit_states = {"PRR_1": (edited_at, created)}
     _, values, plan = _plan(monkeypatch, tmp_path, fake)
     assert _held(values, plan)
-    assert plan["decision_reason"] == "an oracle review was edited"
+    assert plan["decision_reason"] == "a review was edited"
     assert plan.get("reviewed_head") is None
 
 
@@ -270,7 +270,7 @@ def test_a_graphql_failure_fails_the_plan_step_and_leaves_a_success_status_the_l
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake = _fake(_review(_record(TWO_FILE_DIFF, "SHIP", head_sha="a" * 40)))
-    fake.statuses = [_status("success", "oracle-verdict: success [run 77]")]
+    fake.statuses = [_status("success", "review-verdict: success [run 77]")]
     fake.edit_states = edits.EditStateError("GitHub GraphQL returned errors")
     code, values, plan = _plan(monkeypatch, tmp_path, fake)
     _assert_nothing_posted(code, values, plan, fake)
@@ -318,7 +318,7 @@ def test_a_marker_stripped_edited_review_holds_the_plan_and_keeps_the_strikes_un
     fake = _fake(_review(struck), stripped)
     fake.edit_states = {"PRR_2": (None, True)}
     _, values, plan = _plan(monkeypatch, tmp_path, fake)
-    assert _held(values, plan) and plan["decision_reason"] == "an oracle review was edited"
+    assert _held(values, plan) and plan["decision_reason"] == "a review was edited"
     assert plan.get("protocol") in (None, {}) and fake.posted == []
 
 
@@ -354,8 +354,8 @@ def test_the_nearest_status_wins_over_the_latest_for_a_record_without_a_run_id()
         _status("failure", "later round", "2026-10-08T11:30:00Z", id_=2),
     ]
     near = datetime(2026, 10, 8, 10, 0, 5, tzinfo=UTC)
-    assert edits.status_agrees(statuses, "oracle-verdict", BOT, {"decision": "SHIP"}, near)
-    assert not edits.status_agrees(statuses, "oracle-verdict", BOT, {"decision": "SHIP"})
+    assert edits.status_agrees(statuses, "review-verdict", BOT, {"decision": "SHIP"}, near)
+    assert not edits.status_agrees(statuses, "review-verdict", BOT, {"decision": "SHIP"})
 
 
 def _carry_fake(decision: str, statuses: list[dict[str, Any]], **record: Any) -> Any:
@@ -383,7 +383,7 @@ def test_a_decision_over_the_status_it_requires_carries(
 def test_a_ship_record_over_an_app_failure_status_holds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _, values, plan = _plan(monkeypatch, tmp_path, _carry_fake("SHIP", [_status("failure")]))
     assert _held(values, plan)
-    assert "does not match the oracle's own status" in plan["decision_reason"]
+    assert "does not match the review's own status" in plan["decision_reason"]
 
 
 def test_a_ship_with_fixes_record_over_an_app_success_status_holds(

@@ -127,9 +127,9 @@ def test_env_passes_the_gateway_token_and_drops_provider_and_broker_variables(
 
 
 def test_execute_honors_invocation_env(tmp_path: Path) -> None:
-    argv = (sys.executable, "-c", "import os,sys; sys.exit(0 if os.environ.get('ORACLE_PROBE')=='1' else 3)")
+    argv = (sys.executable, "-c", "import os,sys; sys.exit(0 if os.environ.get('REVIEW_PROBE')=='1' else 3)")
     base = {"PATH": os.environ["PATH"]}
-    ok = execute(Invocation(argv, tmp_path, None, {**base, "ORACLE_PROBE": "1"}), 60)
+    ok = execute(Invocation(argv, tmp_path, None, {**base, "REVIEW_PROBE": "1"}), 60)
     assert ok.exit_code == 0
     missing = execute(Invocation(argv, tmp_path, None, dict(base)), 60)
     assert missing.exit_code == 3

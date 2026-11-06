@@ -10,7 +10,7 @@ from theseus_reviewer import gate, review_check
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-POLICY_REL = ".github/oracle-reviewers.yml"
+POLICY_REL = ".github/review.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
 BINDING = CONFIG.binding
 POLICY_ARGS = ["--policy", POLICY_REL, "--root", str(CONSUMER_ALPHA)]
@@ -24,7 +24,7 @@ OTHER_FILES = ["docs/index.md", "notes.md"]
 CONNECTOR = "chatgpt-codex-connector[bot]"
 RETARGETED = "2026-10-01T14:00:00Z"
 AFTER_RETARGET = "2026-10-01T15:00:00Z"
-ORACLE = "benchbox-oracle[bot]"
+REVIEW = "benchbox-review[bot]"
 LATER = "2026-10-01T14:00:00Z"
 LATEST = "2026-10-01T15:00:00Z"
 TEST_RUN_UUID = "1" * 32
@@ -52,17 +52,17 @@ def _marked_body(run_uuid: str | None = TEST_RUN_UUID, state: str = "success") -
     }
     if run_uuid is not None:
         record["run_uuid"] = run_uuid
-    return f"### oracle-verdict: {state} for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
+    return f"### review-verdict: {state} for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
 
 
 def _verdict(state: str = "success", created_at: str = AFTER_HEAD, **over: Any) -> dict[str, Any]:
     description = f"large: {state} [run {TEST_RUN_UUID}]" if state == "success" else f"large: {state}"
     status = {
         "id": 1,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": description,
-        "login": ORACLE,
+        "login": REVIEW,
         "user_type": "Bot",
         "created_at": created_at,
     }
@@ -75,7 +75,7 @@ def _unbound_status(state: str = "success", created_at: str = AFTER_HEAD, **over
 
 def _receipt_review(**over: Any) -> dict[str, Any]:
     review = {
-        "login": ORACLE,
+        "login": REVIEW,
         "user_type": "Bot",
         "commit_id": HEAD,
         "state": "COMMENTED",
@@ -88,7 +88,7 @@ def _receipt_review(**over: Any) -> dict[str, Any]:
 
 
 def _unmarked_receipt(**over: Any) -> dict[str, Any]:
-    return _receipt_review(body=f"### oracle-verdict: success for `{HEAD}`\n\nDetails.", **over)
+    return _receipt_review(body=f"### review-verdict: success for `{HEAD}`\n\nDetails.", **over)
 
 
 def _alpha_matcher(listed_files: int, changed_files: int) -> Any:
@@ -98,7 +98,7 @@ def _alpha_matcher(listed_files: int, changed_files: int) -> Any:
     )
 
 
-def _oracle(**kwargs: Any) -> tuple[int, str]:
+def _run_review(**kwargs: Any) -> tuple[int, str]:
     return review_check.decide(
         HEAD,
         kwargs.pop("files", SOUNDNESS_FILES),
@@ -112,11 +112,11 @@ def _oracle(**kwargs: Any) -> tuple[int, str]:
 
 
 def _decide(**kwargs: Any) -> tuple[int, str]:
-    return _oracle(**{"statuses": [], **kwargs})
+    return _run_review(**{"statuses": [], **kwargs})
 
 
 def test_exempt_only_change_skips() -> None:
-    assert _decide(files=OTHER_FILES) == (0, "oracle-review: only exempt paths changed")
+    assert _decide(files=OTHER_FILES) == (0, "review: only exempt paths changed")
 
 
 def test_machine_read_doc_needs_review() -> None:
@@ -128,7 +128,7 @@ def test_code_outside_the_soundness_list_needs_review() -> None:
 
 
 def test_gate_template_matching_the_markdown_exemption_needs_review() -> None:
-    assert _decide(files=["_project/scripts/oracle_reviewers/templates/gate.md"])[0] == 1
+    assert _decide(files=["_project/scripts/reviewers/templates/gate.md"])[0] == 1
 
 
 def test_soundness_manifest_beats_the_markdown_exemption() -> None:
@@ -136,7 +136,7 @@ def test_soundness_manifest_beats_the_markdown_exemption() -> None:
 
 
 def test_exempt_docs_are_skipped() -> None:
-    assert _decide(files=["docs/foo.md"]) == (0, "oracle-review: only exempt paths changed")
+    assert _decide(files=["docs/foo.md"]) == (0, "review: only exempt paths changed")
 
 
 @pytest.mark.parametrize(
@@ -150,7 +150,7 @@ def test_exempt_docs_are_skipped() -> None:
 def test_a_success_status_without_a_bound_unedited_receipt_names_the_recovery_not_a_verdict_run(
     scenario: dict[str, Any],
 ) -> None:
-    status, message = _oracle(**scenario)
+    status, message = _run_review(**scenario)
     assert status == review_check.WAITING
     assert "push a new head" in message
     assert "a byte-identical rebase is enough" in message
@@ -160,25 +160,25 @@ def test_a_success_status_without_a_bound_unedited_receipt_names_the_recovery_no
 
 def test_an_exempt_success_verdict_never_satisfies_a_gate_that_requires_a_review() -> None:
     exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
-    status, message = _oracle(statuses=[exempt])
+    status, message = _run_review(statuses=[exempt])
     assert status == 1
     assert "require a review of this head" in message
-    assert _oracle(statuses=[exempt], files=OTHER_FILES)[0] == 0
+    assert _run_review(statuses=[exempt], files=OTHER_FILES)[0] == 0
 
 
 def test_a_truncated_file_list_does_not_block_a_reviewed_success_verdict() -> None:
-    assert _oracle(statuses=[_verdict("success")])[0] == 0
+    assert _run_review(statuses=[_verdict("success")])[0] == 0
 
 
 def test_the_apps_success_verdict_on_the_head_passes() -> None:
-    assert _oracle() == (0, f"oracle-review: pass (oracle verdict for {HEAD})")
+    assert _run_review() == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_no_verdict_waits_and_names_the_standin_marker() -> None:
     assert _decide() == (
         1,
-        f"oracle-review: waiting for the oracle's verdict on {HEAD}, or a stand-in attestation "
-        f"'Stand-in oracle review: APPROVE {HEAD}' from a listed attester",
+        f"review: waiting for the review's verdict on {HEAD}, or a stand-in attestation "
+        f"'Stand-in review: APPROVE {HEAD}' from a listed attester",
     )
 
 
@@ -192,36 +192,36 @@ def test_no_verdict_waits_and_names_the_standin_marker() -> None:
     ],
     ids=["failure", "pending", "latest-failure", "latest-pending"],
 )
-def test_the_latest_oracle_verdict_must_be_success(statuses: list[dict[str, Any]]) -> None:
-    status, message = _oracle(statuses=statuses)
+def test_the_latest_review_verdict_must_be_success(statuses: list[dict[str, Any]]) -> None:
+    status, message = _run_review(statuses=statuses)
     assert status == 1
-    assert "the oracle's latest verdict" in message
+    assert "the review's latest verdict" in message
 
 
-def test_latest_oracle_success_wins() -> None:
+def test_latest_review_success_wins() -> None:
     statuses = [_verdict("failure", created_at=BEFORE_HEAD), _verdict("success")]
-    assert _oracle(statuses=statuses)[0] == 0
+    assert _run_review(statuses=statuses)[0] == 0
 
 
 def test_the_latest_verdict_is_chosen_by_time_not_by_listing_order() -> None:
-    assert _oracle(statuses=[_verdict("success"), _verdict("failure", created_at=BEFORE_HEAD)])[0] == 0
-    assert _oracle(statuses=[_verdict("failure"), _verdict("success", created_at=BEFORE_HEAD)])[0] == 1
+    assert _run_review(statuses=[_verdict("success"), _verdict("failure", created_at=BEFORE_HEAD)])[0] == 0
+    assert _run_review(statuses=[_verdict("failure"), _verdict("success", created_at=BEFORE_HEAD)])[0] == 1
 
 
 def test_verdicts_posted_in_the_same_second_are_ordered_by_id() -> None:
     first = _verdict("failure", id=7)
     second = _verdict("success", id=8)
-    assert _oracle(statuses=[second, first])[0] == 0
-    assert _oracle(statuses=[_verdict("success", id=7), _verdict("failure", id=8)])[0] == 1
+    assert _run_review(statuses=[second, first])[0] == 0
+    assert _run_review(statuses=[_verdict("success", id=7), _verdict("failure", id=8)])[0] == 1
 
 
 @pytest.mark.parametrize(
     "status",
     [
-        _verdict(context="oracle-review-shadow"),
-        _verdict(context="oracle-gate"),
-        _verdict(context="ci/oracle-verdict"),
-        _verdict(login="benchbox-oracle", user_type="User"),
+        _verdict(context="review-shadow"),
+        _verdict(context="review-gate"),
+        _verdict(context="ci/review-verdict"),
+        _verdict(login="benchbox-review", user_type="User"),
         _verdict(user_type=None),
         _verdict(login=CONNECTOR, user_type="Bot"),
         _verdict(login="joeharris76", user_type="User"),
@@ -241,19 +241,19 @@ def test_verdicts_posted_in_the_same_second_are_ordered_by_id() -> None:
     ],
 )
 def test_only_the_apps_verdict_status_counts(status: dict[str, Any]) -> None:
-    assert _oracle(statuses=[status])[0] == 1
+    assert _run_review(statuses=[status])[0] == 1
 
 
 def test_a_forged_success_does_not_hide_the_apps_failure() -> None:
     forged = _verdict("success", created_at=LATEST, login="joeharris76", user_type="User")
-    status, message = _oracle(statuses=[_verdict("failure"), forged])
-    assert status == 1 and "the oracle's latest verdict" in message
+    status, message = _run_review(statuses=[_verdict("failure"), forged])
+    assert status == 1 and "the review's latest verdict" in message
 
 
 def test_decide_takes_no_review_thread_state() -> None:
     assert "threads" not in inspect.signature(review_check.decide).parameters
     assert not hasattr(review_check, "fetch_threads")
-    assert _oracle() == (0, f"oracle-review: pass (oracle verdict for {HEAD})")
+    assert _run_review() == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_rename_with_a_non_exempt_side_needs_review() -> None:
@@ -266,7 +266,7 @@ def test_rename_with_a_non_exempt_side_needs_review() -> None:
 
 def test_rename_within_exempt_paths_skips() -> None:
     files = review_check.changed_paths([{"filename": "docs/new.md", "previous_filename": "docs/old.md"}])
-    assert _decide(files=files) == (0, "oracle-review: only exempt paths changed")
+    assert _decide(files=files) == (0, "review: only exempt paths changed")
 
 
 def test_changed_paths_without_a_rename_keeps_only_the_filename() -> None:
@@ -292,12 +292,12 @@ def test_gate_paths_beat_the_exemption() -> None:
 
 
 def test_verdict_before_a_retarget_waits() -> None:
-    assert _oracle(base_date=RETARGETED)[0] == review_check.WAITING
+    assert _run_review(base_date=RETARGETED)[0] == review_check.WAITING
 
 
 def test_verdict_after_a_retarget_passes() -> None:
     assert (
-        _oracle(
+        _run_review(
             statuses=[_verdict(created_at=AFTER_RETARGET)],
             reviews=[_receipt_review(submitted_at=AFTER_RETARGET)],
             base_date=RETARGETED,
@@ -307,67 +307,67 @@ def test_verdict_after_a_retarget_passes() -> None:
 
 
 def test_a_success_status_needs_a_receipt_on_this_pull_request() -> None:
-    assert _oracle(statuses=[_verdict()], reviews=[])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[])[0] == 1
 
 
 def test_a_receipt_from_another_head_does_not_count() -> None:
-    assert _oracle(statuses=[_verdict()], reviews=[_receipt_review(commit_id=OLDER)])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[_receipt_review(commit_id=OLDER)])[0] == 1
 
 
 def test_a_receipt_from_another_creator_does_not_count() -> None:
-    assert _oracle(statuses=[_verdict()], reviews=[_receipt_review(login="joeharris76", user_type="User")])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[_receipt_review(login="joeharris76", user_type="User")])[0] == 1
 
 
 def test_an_edited_receipt_does_not_count() -> None:
     edited = _receipt_review(last_edited_at=LATER, includes_created_edit=True)
-    assert _oracle(statuses=[_verdict()], reviews=[edited])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[edited])[0] == 1
 
 
 def test_a_created_edit_flag_on_the_receipt_does_not_count() -> None:
     flagged = _receipt_review(last_edited_at=None, includes_created_edit=True)
-    assert _oracle(statuses=[_verdict()], reviews=[flagged])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[flagged])[0] == 1
 
 
 def test_a_receipt_that_disagrees_with_the_status_does_not_count() -> None:
-    disagreeing = _receipt_review(body=f"### oracle-verdict: failure for `{HEAD}`\n\nDetails.")
-    status, message = _oracle(statuses=[_verdict()], reviews=[disagreeing])
+    disagreeing = _receipt_review(body=f"### review-verdict: failure for `{HEAD}`\n\nDetails.")
+    status, message = _run_review(statuses=[_verdict()], reviews=[disagreeing])
     assert status == 1
-    assert "no unedited oracle review" in message
+    assert "no unedited review" in message
 
 
 def test_a_bound_receipt_matching_the_status_run_passes() -> None:
     run = "a" * 32
-    assert _oracle(statuses=[_uuid_status(run)], reviews=[_marked_receipt(run)])[0] == 0
+    assert _run_review(statuses=[_uuid_status(run)], reviews=[_marked_receipt(run)])[0] == 0
 
 
 def test_a_receipt_from_another_run_does_not_count() -> None:
-    assert _oracle(statuses=[_uuid_status("a" * 32)], reviews=[_marked_receipt("b" * 32)])[0] == 1
+    assert _run_review(statuses=[_uuid_status("a" * 32)], reviews=[_marked_receipt("b" * 32)])[0] == 1
 
 
 def test_a_status_run_without_a_marked_receipt_does_not_count() -> None:
-    assert _oracle(statuses=[_uuid_status("a" * 32)], reviews=[_unmarked_receipt()])[0] == 1
+    assert _run_review(statuses=[_uuid_status("a" * 32)], reviews=[_unmarked_receipt()])[0] == 1
 
 
 def test_a_marked_receipt_with_an_unbound_status_does_not_count() -> None:
-    assert _oracle(statuses=[_unbound_status()], reviews=[_marked_receipt("a" * 32)])[0] == 1
+    assert _run_review(statuses=[_unbound_status()], reviews=[_marked_receipt("a" * 32)])[0] == 1
 
 
 def test_an_unmarked_receipt_with_a_bound_status_does_not_count() -> None:
-    assert _oracle(statuses=[_uuid_status("a" * 32)], reviews=[_unmarked_receipt()])[0] == 1
+    assert _run_review(statuses=[_uuid_status("a" * 32)], reviews=[_unmarked_receipt()])[0] == 1
 
 
 def test_an_unbound_status_with_an_unmarked_receipt_does_not_count() -> None:
-    assert _oracle(statuses=[_unbound_status()], reviews=[_unmarked_receipt()])[0] == 1
+    assert _run_review(statuses=[_unbound_status()], reviews=[_unmarked_receipt()])[0] == 1
 
 
 def test_an_exempt_status_keeps_its_meaning_with_a_run_suffix() -> None:
     exempt = _verdict("success", description=f"{review_check.EXEMPT_SUCCESS_DESCRIPTION} [run {'a' * 32}]")
-    assert _oracle(statuses=[exempt])[0] == 1
+    assert _run_review(statuses=[exempt])[0] == 1
 
 
 def test_a_shadow_header_receipt_does_not_count() -> None:
-    shadow = _receipt_review(body=f"### oracle-review-shadow: success for `{HEAD}`\n\nDetails.")
-    assert _oracle(statuses=[_verdict()], reviews=[shadow])[0] == 1
+    shadow = _receipt_review(body=f"### review-shadow: success for `{HEAD}`\n\nDetails.")
+    assert _run_review(statuses=[_verdict()], reviews=[shadow])[0] == 1
 
 
 def _marked_receipt(run_uuid: str | None, **over: Any) -> dict[str, Any]:
@@ -392,7 +392,7 @@ def _marked_receipt(run_uuid: str | None, **over: Any) -> dict[str, Any]:
     }
     if run_uuid is not None:
         record["run_uuid"] = run_uuid
-    body = f"### oracle-verdict: success for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
+    body = f"### review-verdict: success for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
     return _receipt_review(body=body, **over)
 
 
@@ -407,16 +407,16 @@ def test_a_receipt_without_edit_evidence_does_not_count() -> None:
     bare = {
         key: value for key, value in _receipt_review().items() if key not in ("last_edited_at", "includes_created_edit")
     }
-    assert _oracle(statuses=[_verdict()], reviews=[bare])[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=[bare])[0] == 1
 
 
 def test_a_receipt_newer_than_the_status_still_counts() -> None:
     newer = _receipt_review(submitted_at=LATEST)
-    assert _oracle(statuses=[_verdict()], reviews=[newer])[0] == 0
+    assert _run_review(statuses=[_verdict()], reviews=[newer])[0] == 0
 
 
 def test_a_receipt_before_a_retarget_does_not_count() -> None:
-    assert _oracle(statuses=[_verdict(created_at=AFTER_RETARGET)], base_date=RETARGETED)[0] == 1
+    assert _run_review(statuses=[_verdict(created_at=AFTER_RETARGET)], base_date=RETARGETED)[0] == 1
 
 
 def test_latest_base_change_picks_the_newest_retarget() -> None:
@@ -438,7 +438,7 @@ def _attestation(
     user_type: str = "User",
     body: str | None = None,
 ) -> dict[str, Any]:
-    text = body or f"{prefix}Stand-in oracle review: APPROVE {sha}\n"
+    text = body or f"{prefix}Stand-in review: APPROVE {sha}\n"
     return {
         "login": login,
         "user_type": user_type,
@@ -464,18 +464,18 @@ def test_standin_attestation_for_the_head_passes() -> None:
         _attestation(updated_at="2026-10-01T14:00:00Z"),
         _attestation(login="joeharris76[bot]", user_type="Bot"),
         _attestation(user_type="Bot"),
-        _attestation(body=f"```\nStand-in oracle review: APPROVE {HEAD}\n```\n"),
-        _attestation(body=f"- draft:\n  ```\nStand-in oracle review: APPROVE {HEAD}\n  ```\n"),
-        _attestation(body=f"```\nStand-in oracle review: APPROVE {HEAD}\n"),
-        _attestation(body=f"~~~\nStand-in oracle review: APPROVE {HEAD}\n~~~\n"),
-        _attestation(body=f"<!--\nStand-in oracle review: APPROVE {HEAD}\n-->\n"),
-        _attestation(body=f"<PRE>\nStand-in oracle review: APPROVE {HEAD}\n</PRE>\n"),
-        _attestation(body=f"see `\nStand-in oracle review: APPROVE {HEAD}\n`\n"),
-        _attestation(body=f'[a]: /u "\nStand-in oracle review: APPROVE {HEAD}\n"\n'),
-        _attestation(body=f"<details>\nStand-in oracle review: APPROVE {HEAD}\n</details>\n"),
-        _attestation(body=f"<code>\nStand-in oracle review: APPROVE {HEAD}\n</code>\n"),
-        _attestation(body=f"No P0/P1 findings.\n\nStand-in oracle review: APPROVE {HEAD}\n"),
-        _attestation(body=f"I would write Stand-in oracle review: APPROVE {HEAD} here"),
+        _attestation(body=f"```\nStand-in review: APPROVE {HEAD}\n```\n"),
+        _attestation(body=f"- draft:\n  ```\nStand-in review: APPROVE {HEAD}\n  ```\n"),
+        _attestation(body=f"```\nStand-in review: APPROVE {HEAD}\n"),
+        _attestation(body=f"~~~\nStand-in review: APPROVE {HEAD}\n~~~\n"),
+        _attestation(body=f"<!--\nStand-in review: APPROVE {HEAD}\n-->\n"),
+        _attestation(body=f"<PRE>\nStand-in review: APPROVE {HEAD}\n</PRE>\n"),
+        _attestation(body=f"see `\nStand-in review: APPROVE {HEAD}\n`\n"),
+        _attestation(body=f'[a]: /u "\nStand-in review: APPROVE {HEAD}\n"\n'),
+        _attestation(body=f"<details>\nStand-in review: APPROVE {HEAD}\n</details>\n"),
+        _attestation(body=f"<code>\nStand-in review: APPROVE {HEAD}\n</code>\n"),
+        _attestation(body=f"No P0/P1 findings.\n\nStand-in review: APPROVE {HEAD}\n"),
+        _attestation(body=f"I would write Stand-in review: APPROVE {HEAD} here"),
         _attestation(sha=HEAD.upper()),
     ],
     ids=[
@@ -514,8 +514,8 @@ def test_a_later_valid_attestation_counts_after_an_earlier_invalid_one() -> None
     assert _decide(comments=[_attestation(sha=OLDER), _attestation()])[0] == review_check.PASS
 
 
-def test_the_oracle_verdict_message_wins_over_a_standin() -> None:
-    assert _oracle(comments=[_attestation()]) == (0, f"oracle-review: pass (oracle verdict for {HEAD})")
+def test_the_review_verdict_message_wins_over_a_standin() -> None:
+    assert _run_review(comments=[_attestation()]) == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_fetch_comments_maps_author_type_and_edit_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -535,21 +535,21 @@ def _standin_comment() -> dict[str, Any]:
     return {
         "login": "joeharris76",
         "user_type": "User",
-        "body": f"Stand-in oracle review: APPROVE {HEAD}",
+        "body": f"Stand-in review: APPROVE {HEAD}",
         "created_at": AFTER_HEAD,
         "updated_at": AFTER_HEAD,
     }
 
 
-def test_standin_after_a_failing_oracle_verdict_overrides_it() -> None:
+def test_standin_after_a_failing_review_verdict_overrides_it() -> None:
     failing = [_verdict("failure", created_at=HEAD_DATE)]
-    assert _oracle(statuses=failing, comments=[_standin_comment()]) == (
+    assert _run_review(statuses=failing, comments=[_standin_comment()]) == (
         0,
-        f"oracle-review: pass (stand-in review attested by joeharris76 for {HEAD})",
+        f"review: pass (stand-in review attested by joeharris76 for {HEAD})",
     )
     early = {**_standin_comment(), "created_at": BEFORE_HEAD, "updated_at": BEFORE_HEAD}
-    assert _oracle(statuses=failing, comments=[early])[0] == 1
-    assert _oracle(statuses=[], comments=[early])[0] == 0
+    assert _run_review(statuses=failing, comments=[early])[0] == 1
+    assert _run_review(statuses=[], comments=[early])[0] == 0
 
 
 def _standin_at(created_at: str) -> dict[str, Any]:
@@ -562,38 +562,38 @@ def test_pending_verdicts_do_not_void_a_standin_posted_after_the_last_decisive_v
         _verdict("pending", created_at=LATER),
         _verdict("pending", created_at=LATEST),
     ]
-    assert _oracle(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
+    assert _run_review(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
 
 
 def test_a_standin_before_the_last_decisive_verdict_still_waits_after_later_pending_verdicts() -> None:
     statuses = [_verdict("failure", created_at=AFTER_HEAD), _verdict("pending", created_at=LATEST)]
-    assert _oracle(statuses=statuses, comments=[_standin_at(HEAD_DATE)])[0] == 1
+    assert _run_review(statuses=statuses, comments=[_standin_at(HEAD_DATE)])[0] == 1
 
 
 def test_a_status_from_another_creator_does_not_advance_the_standin_window() -> None:
     forged = _verdict("failure", created_at=LATER, login="joeharris76", user_type="User")
     statuses = [_verdict("failure", created_at=HEAD_DATE), forged]
-    assert _oracle(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
+    assert _run_review(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
 
 
 def test_another_context_does_not_advance_the_standin_window() -> None:
-    other = _verdict("failure", created_at=LATER, context="oracle-gate")
+    other = _verdict("failure", created_at=LATER, context="review-gate")
     statuses = [_verdict("failure", created_at=HEAD_DATE), other]
-    assert _oracle(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
+    assert _run_review(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 0
 
 
 def test_a_later_decisive_verdict_voids_an_earlier_standin() -> None:
     statuses = [_verdict("failure", created_at=HEAD_DATE), _verdict("failure", created_at=LATER)]
-    assert _oracle(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 1
+    assert _run_review(statuses=statuses, comments=[_standin_at(AFTER_HEAD)])[0] == 1
 
 
 def test_the_verdict_still_comes_from_the_latest_status() -> None:
     statuses = [_verdict("failure", created_at=HEAD_DATE), _verdict("success", created_at=LATER)]
-    assert _oracle(statuses=statuses)[0] == 0
+    assert _run_review(statuses=statuses)[0] == 0
     statuses.reverse()
-    assert _oracle(statuses=statuses)[0] == 0
+    assert _run_review(statuses=statuses)[0] == 0
     statuses = [_verdict("success", created_at=HEAD_DATE), _verdict("failure", created_at=LATER)]
-    assert _oracle(statuses=statuses)[0] == 1
+    assert _run_review(statuses=statuses)[0] == 1
 
 
 def test_force_push_back_to_an_attested_head_keeps_the_attestation() -> None:
@@ -648,7 +648,7 @@ def _gate() -> int:
 
 def _review(body: str, **over: Any) -> dict[str, Any]:
     return {
-        "user": {"login": ORACLE, "type": "Bot"},
+        "user": {"login": REVIEW, "type": "Bot"},
         "commit_id": HEAD,
         "state": "COMMENTED",
         "submitted_at": AFTER_HEAD,
@@ -658,10 +658,10 @@ def _review(body: str, **over: Any) -> dict[str, Any]:
     }
 
 
-def test_the_gate_requires_the_oracle_and_prints_no_parity(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
+def test_the_gate_requires_the_review_and_prints_no_parity(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _stub_main(monkeypatch, [_verdict()])
     assert _gate() == 0
-    assert capsys.readouterr().out.splitlines() == [f"oracle-review: pass (oracle verdict for {HEAD})"]
+    assert capsys.readouterr().out.splitlines() == [f"review: pass (review verdict for {HEAD})"]
     _stub_main(monkeypatch, [_verdict(login=CONNECTOR)])
     assert _gate() == 1
 
@@ -676,10 +676,10 @@ def test_the_gate_requires_the_oracle_and_prints_no_parity(monkeypatch: pytest.M
     ],
     ids=["absent", "pending", "failure", "success"],
 )
-def test_the_gate_requires_an_oracle_decision_for_verdict_workflow_only(
+def test_the_gate_requires_a_review_decision_for_verdict_workflow_only(
     monkeypatch: pytest.MonkeyPatch, statuses: list[dict[str, Any]], expected_status: int
 ) -> None:
-    _stub_main(monkeypatch, statuses, files=[".github/workflows/oracle-verdict.yml"])
+    _stub_main(monkeypatch, statuses, files=[".github/workflows/review-verdict.yml"])
     assert _gate() == expected_status
 
 
@@ -768,7 +768,7 @@ def test_annotate_receipt_marks_a_receipt_without_a_node_id_as_edited() -> None:
     reviews = [_receipt_review()]
     assert "node_id" not in reviews[0]
     review_check.annotate_receipt("t", reviews, HEAD, BINDING.bot_login)
-    assert _oracle(statuses=[_verdict()], reviews=reviews)[0] == 1
+    assert _run_review(statuses=[_verdict()], reviews=reviews)[0] == 1
 
 
 def test_annotate_checks_every_receipt_the_gate_may_decide_on(
@@ -776,7 +776,7 @@ def test_annotate_checks_every_receipt_the_gate_may_decide_on(
 ) -> None:
     def _normalized(body: str, submitted_at: str, node_id: str) -> dict[str, Any]:
         return {
-            "login": ORACLE,
+            "login": REVIEW,
             "user_type": "Bot",
             "commit_id": HEAD,
             "state": "COMMENTED",
@@ -797,7 +797,7 @@ def test_annotate_checks_every_receipt_the_gate_may_decide_on(
     reviews = [earlier, later]
     review_check.annotate_receipt("t", reviews, HEAD, BINDING.bot_login)
     assert sorted(seen) == ["node_new", "node_old"]
-    assert _oracle(statuses=[_verdict()], reviews=reviews)[0] == 0
+    assert _run_review(statuses=[_verdict()], reviews=reviews)[0] == 0
 
 
 OTHER_RUN_UUID = "2" * 32
@@ -813,18 +813,18 @@ def _other_pr_success() -> dict[str, Any]:
 
 def test_a_newer_success_for_another_pull_request_does_not_strand_this_one() -> None:
     own = _verdict()
-    assert _oracle(statuses=[own])[0] == review_check.PASS
-    assert _oracle(statuses=[own, _other_pr_success()])[0] == review_check.PASS
+    assert _run_review(statuses=[own])[0] == review_check.PASS
+    assert _run_review(statuses=[own, _other_pr_success()])[0] == review_check.PASS
 
 
 def test_a_newer_success_with_no_receipt_here_does_not_hide_a_failure_after_it() -> None:
     failure = _verdict("failure", created_at=LATEST, id=3)
-    assert _oracle(statuses=[_verdict(), _other_pr_success(), failure])[0] == review_check.WAITING
+    assert _run_review(statuses=[_verdict(), _other_pr_success(), failure])[0] == review_check.WAITING
 
 
 def test_an_earlier_success_is_not_reused_across_a_later_failure_and_new_success() -> None:
     statuses = [_verdict(), _verdict("failure", created_at=LATER, id=3), _other_pr_success()]
-    assert _oracle(statuses=statuses)[0] == review_check.WAITING
+    assert _run_review(statuses=statuses)[0] == review_check.WAITING
 
 
 def test_an_edited_receipt_for_the_newest_run_here_is_not_bypassed_by_an_older_run() -> None:
@@ -835,16 +835,16 @@ def test_an_edited_receipt_for_the_newest_run_here_is_not_bypassed_by_an_older_r
         body=_marked_body(newer_run), submitted_at=LATEST, last_edited_at=LATEST, includes_created_edit=True
     )
     reviews = [_receipt_review(submitted_at=BEFORE_HEAD), edited]
-    assert _oracle(statuses=[older, newest], reviews=reviews)[0] == review_check.WAITING
+    assert _run_review(statuses=[older, newest], reviews=reviews)[0] == review_check.WAITING
 
 
 def test_a_withheld_verdict_between_two_successes_blocks_the_earlier_one() -> None:
     statuses = [_verdict(), _verdict("pending", created_at=LATER, id=3), _other_pr_success() | {"created_at": LATEST}]
-    assert _oracle(statuses=statuses)[0] == review_check.WAITING
+    assert _run_review(statuses=statuses)[0] == review_check.WAITING
 
 
 def test_a_success_with_no_matching_receipt_here_still_waits() -> None:
-    assert _oracle(statuses=[_other_pr_success()])[0] == review_check.WAITING
+    assert _run_review(statuses=[_other_pr_success()])[0] == review_check.WAITING
 
 
 def test_annotate_receipt_raises_when_the_edit_check_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -861,7 +861,7 @@ def test_annotate_receipt_raises_when_the_edit_check_is_unreadable(monkeypatch: 
 
 def test_a_standin_still_counts_against_an_exempt_success_verdict() -> None:
     exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
-    status, message = _oracle(statuses=[exempt], comments=[_attestation(created_at=LATER)])
+    status, message = _run_review(statuses=[exempt], comments=[_attestation(created_at=LATER)])
     assert status == review_check.PASS
     assert "stand-in review attested" in message
 
@@ -877,20 +877,20 @@ def test_the_gate_rejects_an_exempt_success_verdict_when_a_review_is_required(
 
 
 def test_a_shadow_header_review_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    shadow = _review(f"### oracle-review-shadow: success for `{HEAD}`\n\nDecision: **SHIP**.\n")
+    shadow = _review(f"### review-shadow: success for `{HEAD}`\n\nDecision: **SHIP**.\n")
     _stub_main(monkeypatch, [], reviews=[shadow])
     assert _gate() == review_check.WAITING
-    _stub_main(monkeypatch, [_verdict(context="oracle-review-shadow")], reviews=[shadow])
+    _stub_main(monkeypatch, [_verdict(context="review-shadow")], reviews=[shadow])
     assert _gate() == review_check.WAITING
 
 
 def test_fetch_statuses_reads_the_head_commit_and_keeps_the_creator_type(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = {
         "id": 9,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": "success",
         "description": "large: SHIP",
-        "creator": {"login": ORACLE, "type": "Bot"},
+        "creator": {"login": REVIEW, "type": "Bot"},
         "created_at": AFTER_HEAD,
         "target_url": "https://example.invalid",
     }
@@ -924,24 +924,24 @@ def _refusal_description() -> str:
         },
     }
     payload = report.status_payload(plan, report.refused(plan), "https://example.invalid/run")
-    assert payload["context"] == review_check.ORACLE_CONTEXT and payload["state"] == "failure"
+    assert payload["context"] == review_check.REVIEW_CONTEXT and payload["state"] == "failure"
     return payload["description"]
 
 
 def test_a_refused_pull_request_is_told_to_open_a_new_one() -> None:
-    status, message = _oracle(statuses=[_verdict("failure", description=_refusal_description())])
+    status, message = _run_review(statuses=[_verdict("failure", description=_refusal_description())])
     assert status == review_check.WAITING
     assert "refused to review" in message and "close this pull request and open a new one" in message
-    failure_status, failure_message = _oracle(statuses=[_verdict("failure")])
+    failure_status, failure_message = _run_review(statuses=[_verdict("failure")])
     assert failure_status == review_check.WAITING and "refused" not in failure_message
 
 
 def test_a_standin_after_a_refusal_passes() -> None:
     statuses = [_verdict("failure", description=_refusal_description(), created_at=AFTER_HEAD)]
     later = "2026-10-08T23:59:59Z"
-    status, message = _oracle(statuses=statuses, comments=[_attestation(created_at=later)])
+    status, message = _run_review(statuses=statuses, comments=[_attestation(created_at=later)])
     assert status == review_check.PASS and "stand-in review attested" in message
-    early = _oracle(statuses=statuses, comments=[_attestation(created_at=BEFORE_HEAD)])
+    early = _run_review(statuses=statuses, comments=[_attestation(created_at=BEFORE_HEAD)])
     assert early[0] == review_check.WAITING
 
 
@@ -962,8 +962,8 @@ def test_the_api_root_is_overridden_only_by_a_loopback_server(value: str, expect
 
 
 def test_a_verdict_posted_before_the_base_changed_is_not_a_verdict_for_the_new_base() -> None:
-    status, message = _oracle(statuses=[_verdict("success", created_at=AFTER_HEAD)], base_date=RETARGETED)
-    assert status == review_check.WAITING and "waiting for the oracle's verdict" in message
+    status, message = _run_review(statuses=[_verdict("success", created_at=AFTER_HEAD)], base_date=RETARGETED)
+    assert status == review_check.WAITING and "waiting for the review's verdict" in message
 
 
 BETA_BINDING = gate.load_gate_config(POLICY_REL, CONSUMER_BETA).binding
@@ -982,10 +982,10 @@ def _beta(**kwargs: Any) -> tuple[int, str]:
     )
 
 
-def test_the_oracle_identity_comes_from_the_binding() -> None:
-    assert _oracle()[0] == review_check.PASS
+def test_the_review_identity_comes_from_the_binding() -> None:
+    assert _run_review()[0] == review_check.PASS
     assert _beta(statuses=[_verdict()], reviews=[_receipt_review()])[0] == review_check.WAITING
-    beta_login = "beta-oracle[bot]"
+    beta_login = "beta-review[bot]"
     status, _ = _beta(statuses=[_verdict(login=beta_login)], reviews=[_receipt_review(login=beta_login)])
     assert status == review_check.PASS
 

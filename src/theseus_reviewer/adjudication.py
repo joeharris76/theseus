@@ -6,15 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-PREFIX = "Oracle adjudication: "
-TRIGGER = PREFIX.rstrip()
+from . import legacy
+
+PREFIX = "Review adjudication: "
+TRIGGERS = (PREFIX.rstrip(), legacy.ADJUDICATION_PREFIX.rstrip())
 WITHDRAW = "WITHDRAW"
 MAINTAIN = "MAINTAIN"
 ACTIONS = (WITHDRAW, MAINTAIN)
 GRAMMAR = f"{PREFIX}WITHDRAW|MAINTAIN D<n> - <reason>"
 REASON_LIMIT = 200
 _COMMENT = re.compile(
-    rf"{re.escape(PREFIX)}(?P<action>{'|'.join(ACTIONS)}) (?P<id>D[1-9][0-9]{{0,3}}) - "
+    rf"(?:{re.escape(PREFIX)}|{re.escape(legacy.ADJUDICATION_PREFIX)})(?P<action>{'|'.join(ACTIONS)}) (?P<id>D[1-9][0-9]{{0,3}}) - "
     rf"(?P<reason>\S[^\n]{{0,{REASON_LIMIT - 1}}})"
 )
 

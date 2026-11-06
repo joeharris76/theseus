@@ -15,12 +15,12 @@ import pytest
 from tests.conftest import ALPHA_POLICY as POLICY_PATH
 from tests.conftest import FIXTURES
 
-from theseus_reviewer import absence, omp_pin, omp_watch
+from theseus_reviewer import absence, legacy, omp_pin, omp_watch
 from theseus_reviewer.omp_watch import PinChange, PolicyCommit, Record
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-CAPTURED = json.loads((FIXTURES / "oracle_reviewers" / "omp_watch" / "attempts.json").read_text(encoding="utf-8"))
+CAPTURED = json.loads((FIXTURES / "reviewers" / "omp_watch" / "attempts.json").read_text(encoding="utf-8"))
 BRANCH = "develop"
 WATCH_WORKFLOW = ".github/workflows/omp-pin-watch.yml"
 MERGED_AT = datetime(2026, 10, 29, 3, 17, 50, tzinfo=UTC)
@@ -29,7 +29,7 @@ PREVIOUS_POLICY = POLICY.replace("18.13.3", "18.12.1")
 CHANGE = PinChange(
     "ca66bf1",
     MERGED_AT,
-    "chore(oracle): pin omp 18.13.3 (#3713)",
+    "chore(review): pin omp 18.13.3 (#3713)",
     "joeharris76@gmail.com",
     "18.13.3",
     "18.12.1",
@@ -291,11 +291,12 @@ def test_a_history_without_a_version_change_or_a_prior_pin_is_not_watched() -> N
 @pytest.mark.parametrize(
     ("author", "subject", "expected"),
     [
-        (omp_watch.BOT_AUTHOR_EMAIL, "revert(oracle): restore omp 18.12.1", True),
-        (omp_watch.BOT_AUTHOR_EMAIL, "chore(oracle): pin omp 18.13.4", False),
-        ("joeharris76@gmail.com", "revert(oracle): restore omp 18.12.1", False),
-        ("joeharris76@gmail.com", 'Revert "chore(oracle): pin omp 18.13.3" (#3679) (#3707)', False),
-        ("joeharris76@gmail.com", "chore(oracle): pin omp 18.13.3 (#3713)", False),
+        (omp_watch.BOT_AUTHOR_EMAIL, "revert(review): restore omp 18.12.1", True),
+        (omp_watch.BOT_AUTHOR_EMAIL, f"{legacy.REVERT_SUBJECT_PREFIX}18.12.1", True),
+        (omp_watch.BOT_AUTHOR_EMAIL, "chore(review): pin omp 18.13.4", False),
+        ("joeharris76@gmail.com", "revert(review): restore omp 18.12.1", False),
+        ("joeharris76@gmail.com", 'Revert "chore(review): pin omp 18.13.3" (#3679) (#3707)', False),
+        ("joeharris76@gmail.com", "chore(review): pin omp 18.13.3 (#3713)", False),
     ],
 )
 def test_only_the_restoring_pull_request_the_watch_opens_is_exempt_from_being_watched(
@@ -320,7 +321,7 @@ def test_the_revert_body_states_the_numbers_and_the_evidence_the_pin_gate_demand
     body = omp_watch.render_revert_body(CHANGE, result)
     assert "Restores the pinned omp build 18.12.1 after 18.13.3 merged" in body
     assert "theseus omp-candidate-check check` for version 18.12.1" in body
-    assert "more than 2 times the baseline" in body and "oracle-gate" in body
+    assert "more than 2 times the baseline" in body and "review-gate" in body
     assert "does not mirror builds" in body
 
 
@@ -355,13 +356,13 @@ def _artifact(identifier: int, created: str, run: int | None = None, **fields: A
 def _run(run_id: int, **fields: Any) -> dict[str, Any]:
     run: dict[str, Any] = {
         "id": run_id,
-        "path": ".github/workflows/oracle-verdict.yml",
+        "path": ".github/workflows/review-verdict.yml",
         "event": "issue_comment",
         "head_branch": "develop",
         "repository": {"full_name": "O/R"},
         "run_started_at": "2026-10-29T04:00:00Z",
         "created_at": "2026-10-29T03:59:00Z",
-        "display_title": f"oracle-verdict (issue_comment pr=3700 head={'a' * 40})",
+        "display_title": f"review-verdict (issue_comment pr=3700 head={'a' * 40})",
         "pull_requests": [],
     }
     run.update(fields)
@@ -490,7 +491,7 @@ def test_collection_reads_only_live_unseen_artifacts_inside_the_horizon_for_omp_
         4: _attempt(outcome="verdict", absence=None),
         6: _attempt(),
     }
-    host = _Host({"oracle-verdict-attempt-1": items}, payloads)
+    host = _Host({"review-verdict-attempt-1": items}, payloads)
     records = _collect(host, [6])
     assert sorted(record.artifact_id for record in records) == [1, 4]
     assert sorted(path.split("/")[-2] for path in host.downloads) == ["1", "2", "4"]
@@ -499,7 +500,7 @@ def test_collection_reads_only_live_unseen_artifacts_inside_the_horizon_for_omp_
 def test_collection_follows_pages_until_one_reaches_past_the_horizon(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(omp_watch, "ARTIFACT_PAGE", 2)
     items = [_artifact(index, f"2026-10-{28 - index:02d}T05:00:00Z") for index in range(1, 8)]
-    host = _Host({"oracle-verdict-attempt-1": items}, {index: _attempt() for index in range(1, 8)})
+    host = _Host({"review-verdict-attempt-1": items}, {index: _attempt() for index in range(1, 8)})
     assert sorted(record.artifact_id for record in _collect(host)) == [1, 2, 3, 4, 5, 6]
 
 
@@ -509,7 +510,7 @@ def test_an_artifact_that_is_not_an_archive_with_one_json_document_is_refused() 
     with pytest.raises(omp_watch.WatchError):
         omp_watch._unzip(b"not a zip", ".json")
     with pytest.raises(omp_watch.WatchError):
-        _collect(_Host({"oracle-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z")]}, {1: "{"}))
+        _collect(_Host({"review-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z")]}, {1: "{"}))
 
 
 @pytest.mark.parametrize(
@@ -526,7 +527,7 @@ def test_artifacts_from_a_run_of_another_workflow_repository_event_or_branch_are
     fields: dict[str, Any],
 ) -> None:
     host = _Host(
-        {"oracle-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z"), _artifact(2, "2026-10-29T05:00:00Z")]},
+        {"review-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z"), _artifact(2, "2026-10-29T05:00:00Z")]},
         {1: _attempt(), 2: _attempt()},
         {1: _run(1, **fields)},
     )
@@ -535,7 +536,7 @@ def test_artifacts_from_a_run_of_another_workflow_repository_event_or_branch_are
 
 
 def test_an_artifact_whose_run_cannot_be_read_is_skipped_and_tried_again_on_the_next_watch() -> None:
-    host = _Host({"oracle-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z")]}, {1: _attempt()}, {1: {}})
+    host = _Host({"review-verdict-attempt-1": [_artifact(1, "2026-10-29T05:00:00Z")]}, {1: _attempt()}, {1: {}})
     assert _collect(host) == []
     assert host.downloads == []
 
@@ -555,20 +556,20 @@ def test_a_pull_request_target_run_counts_only_when_its_pull_request_targets_dev
     listed: list[dict[str, Any]], titled: str | None, trusted: bool
 ) -> None:
     host = _Host({}, {}, pulls={} if titled is None else {3700: titled})
-    title = "oracle-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
+    title = "review-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
     run = _run(1, event="pull_request_target", head_branch="feature/x", pull_requests=listed, display_title=title)
     assert (
-        omp_watch.produced_by(run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, BRANCH, host.getter)
+        omp_watch.produced_by(run, "o/r", omp_watch.REVIEW_WORKFLOWS, omp_watch.REVIEW_EVENTS, BRANCH, host.getter)
         is trusted
     )
 
 
 def test_a_pull_request_target_run_whose_pull_request_cannot_be_read_is_not_trusted() -> None:
     host = _Host({}, {})
-    title = "oracle-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
+    title = "review-verdict (pull_request_target pr=3700 head=" + "a" * 40 + ")"
     run = _run(1, event="pull_request_target", head_branch="feature/x", display_title=title)
     assert not omp_watch.produced_by(
-        run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, BRANCH, host.getter
+        run, "o/r", omp_watch.REVIEW_WORKFLOWS, omp_watch.REVIEW_EVENTS, BRANCH, host.getter
     )
 
 
@@ -636,7 +637,7 @@ def _evaluate(
 ) -> tuple[int, Path, dict[str, str]]:
     history = [PolicyCommit("sha", MERGED_AT, "subject", POLICY)]
     monkeypatch.setattr(omp_watch, "policy_history", lambda path: history)
-    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/oracle-reviewers.yml")
+    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/review.yml")
     monkeypatch.setattr(omp_watch, "latest_pin_change", lambda _: change)
     monkeypatch.setattr(omp_watch, "restore_ledger", lambda *_, **__: list(BEFORE))
     monkeypatch.setattr(omp_watch, "collect", lambda *_args, **_kwargs: list(window))
@@ -679,7 +680,7 @@ def test_a_clean_window_writes_no_revert(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 
 def test_a_revert_is_not_watched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    reverted = replace(CHANGE, subject="revert(oracle): restore omp 18.12.1", author_email=omp_watch.BOT_AUTHOR_EMAIL)
+    reverted = replace(CHANGE, subject="revert(review): restore omp 18.12.1", author_email=omp_watch.BOT_AUTHOR_EMAIL)
     code, out, published = _evaluate(monkeypatch, tmp_path, [], reverted)
     assert code == 0 and published == {"state": omp_watch.IDLE, "version": ""}
     assert not (out / omp_watch.LEDGER_FILE).exists()
@@ -691,7 +692,7 @@ def test_a_ledger_that_cannot_be_restored_fails_the_run_instead_of_judging_a_par
     def broken(*_args: Any, **_kwargs: Any) -> list[Record]:
         raise omp_watch.WatchError("the ledger is not JSON")
 
-    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/oracle-reviewers.yml")
+    monkeypatch.setattr(omp_watch, "_policy_git_path", lambda policy: ".github/review.yml")
     monkeypatch.setattr(omp_watch, "policy_history", lambda path: [])
     monkeypatch.setattr(omp_watch, "latest_pin_change", lambda _: CHANGE)
     monkeypatch.setattr(omp_watch, "restore_ledger", broken)
@@ -751,7 +752,7 @@ def test_the_policy_history_carries_each_commit_author_subject_and_the_policy_it
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    target = tmp_path / ".github" / "oracle-reviewers.yml"
+    target = tmp_path / ".github" / "review.yml"
     target.parent.mkdir()
     environment = {
         "GIT_CONFIG_GLOBAL": os.devnull,
@@ -772,16 +773,16 @@ def test_the_policy_history_carries_each_commit_author_subject_and_the_policy_it
 
     run("init", "-q")
     for version, author, subject in (
-        ("18.12.1", "a@example.com", "chore(oracle): pin omp 18.12.1"),
-        ("18.13.3", omp_watch.BOT_AUTHOR_EMAIL, "chore(oracle): pin omp 18.13.3 (#1)"),
+        ("18.12.1", "a@example.com", "chore(review): pin omp 18.12.1"),
+        ("18.13.3", omp_watch.BOT_AUTHOR_EMAIL, "chore(review): pin omp 18.13.3 (#1)"),
     ):
         target.write_text(POLICY.replace("18.13.3", version), encoding="utf-8")
-        run("add", ".github/oracle-reviewers.yml")
+        run("add", ".github/review.yml")
         run("commit", "-q", "-m", subject, GIT_AUTHOR_NAME="a", GIT_AUTHOR_EMAIL=author)
-    history = omp_watch.policy_history(".github/oracle-reviewers.yml")
+    history = omp_watch.policy_history(".github/review.yml")
     assert [(commit.author_email, commit.subject) for commit in history] == [
-        (omp_watch.BOT_AUTHOR_EMAIL, "chore(oracle): pin omp 18.13.3 (#1)"),
-        ("a@example.com", "chore(oracle): pin omp 18.12.1"),
+        (omp_watch.BOT_AUTHOR_EMAIL, "chore(review): pin omp 18.13.3 (#1)"),
+        ("a@example.com", "chore(review): pin omp 18.12.1"),
     ]
     change = omp_watch.latest_pin_change(history)
     assert change is not None and (change.version, change.previous_version) == ("18.13.3", "18.12.1")
@@ -793,7 +794,7 @@ def test_the_trusted_branch_is_the_one_the_consumer_gates(head_branch: str, bran
     run = _run(1, event="schedule", head_branch=head_branch)
     host = _Host({}, {})
     assert omp_watch.produced_by(
-        run, "o/r", omp_watch.ORACLE_WORKFLOW, omp_watch.ORACLE_EVENTS, branch, host.getter
+        run, "o/r", omp_watch.REVIEW_WORKFLOWS, omp_watch.REVIEW_EVENTS, branch, host.getter
     ) is (trusted)
 
 

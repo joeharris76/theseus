@@ -39,7 +39,7 @@ def test_a_dispute_beyond_the_first_page_of_a_long_thread_is_still_judged(harnes
     assert [(item["id"], item["path"]) for item in run.plan["disputes"]] == [("D1", CHECKER)], run.plan[
         "decision_reason"
     ]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def test_a_withdrawal_citing_a_file_the_reviewer_only_listed_is_not_credited(harness: Harness) -> None:
@@ -51,8 +51,8 @@ def test_a_withdrawal_citing_a_file_the_reviewer_only_listed_is_not_credited(har
     run = harness.review(102)
 
     assert run.plan["protocol"]["kind"] == "follow-up", run.plan["decision_reason"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] != ["success"]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] != ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     body = harness.github.reviews[102][-1]["body"]
     assert "- D1 (maintained): README.md:1 shows that callers intern every value." in body
     assert "the withdrawal names no examined head-commit file and line that refutes it" in body

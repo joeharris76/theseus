@@ -31,7 +31,7 @@ An install is built in a private staging directory and renamed into place, so an
 
 ## Smoke
 
-`uv build` produces the wheel; the installer test suite (`tests/unit/test_bootstrap.py`) exercises the matrix against synthetic wheels and a loopback mirror (`ORACLE_PROMOTION_MIRROR`, the same loopback convention as `promotion-check`).
+`uv build` produces the wheel; the installer test suite (`tests/unit/test_bootstrap.py`) exercises the matrix against synthetic wheels and a loopback mirror (`REVIEW_PROMOTION_MIRROR`, the same loopback convention as `promotion-check`).
 
 ## Windows
 

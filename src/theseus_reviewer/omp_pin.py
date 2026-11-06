@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-BINARY_ENV = "ORACLE_OMP_BINARY"
+BINARY_ENV = "REVIEW_OMP_BINARY"
 CACHE_ENV = "THESEUS_OMP_CACHE"
 MIRROR_ENV = "THESEUS_OMP_DOWNLOAD_MIRROR"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -263,7 +263,7 @@ def command_install(args: argparse.Namespace) -> int:
         text = sys.stdin.read() if args.policy == "-" else Path(args.policy).read_text(encoding="utf-8")
         binary = install(pin_from_text(text))
     except (OSError, PinError) as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 1
     print(binary)
     return 0

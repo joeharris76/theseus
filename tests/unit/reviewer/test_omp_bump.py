@@ -223,7 +223,7 @@ def test_a_newer_release_that_passes_the_suite_becomes_a_pin_edit_and_an_evidenc
     assert "result: partial" in body
     assert "-      --old-flag=<value>   removed later" in body
     assert "theseus omp-candidate-check check` for version 18.13.2" in body
-    assert "the oracle reviewing this pull request runs the previous build and reads only the YAML" in body
+    assert "the reviewer reviewing this pull request runs the previous build and reads only the YAML" in body
 
 
 def test_a_release_older_than_the_pin_opens_nothing(tmp_path: Path) -> None:

@@ -21,12 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ALPHA_ROOT = REPO_ROOT / "tests" / "fixtures" / "consumer" / "alpha"
 SLUG = "BenchBox-dev/BenchBox"
 CHECKER = "benchbox/core/equivalence/checker.py"
-RECORDED_STREAM = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
-POLICY = ".github/oracle-reviewers.yml"
-WORKFLOW = ".github/workflows/oracle-verdict.yml"
+RECORDED_STREAM = REPO_ROOT / "tests" / "fixtures" / "reviewers" / "omp_multi_turn_review.jsonl"
+POLICY = ".github/review.yml"
+WORKFLOW = ".github/workflows/review-verdict.yml"
 PINNED_OMP = omp_pin.pin_from_text((ALPHA_ROOT / POLICY).read_text(encoding="utf-8")).version
 TRUSTED_FILES = (
-    ".github/oracle-omp-config.yml",
+    ".github/review-omp-config.yml",
     WORKFLOW,
     ".github/soundness-paths.txt",
     ".github/inert-paths.txt",
@@ -89,11 +89,11 @@ class ReviewRun:
 
     @property
     def plan(self) -> dict[str, Any]:
-        path = self.temp / "oracle-plan" / "plan.json"
+        path = self.temp / "review-plan" / "plan.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
     def attempts(self) -> list[dict[str, Any]]:
-        folder = self.temp / "oracle-attempts"
+        folder = self.temp / "review-attempts"
         return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(folder.glob("attempt-*.json"))]
 
     def step_summary(self) -> str:
@@ -101,7 +101,7 @@ class ReviewRun:
         return path.read_text(encoding="utf-8") if path.is_file() else ""
 
     def captures(self) -> list[dict[str, Any]]:
-        folder = self.temp / "oracle-attempts" / "captures"
+        folder = self.temp / "review-attempts" / "captures"
         return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(folder.glob("capture-*.json"))]
 
 
@@ -316,7 +316,7 @@ class Harness:
         head = pull["head"]["sha"]
         trusted = event_name == "pull_request_target"
         run = self.github.add_run(
-            "oracle-verdict.yml",
+            "review-verdict.yml",
             event=event_name,
             pr=pr,
             head_sha=head if trusted else git(self.repo, "rev-parse", "develop"),
@@ -390,7 +390,7 @@ class Harness:
         if adjudicate is not None:
             argv = [*argv, "--adjudicate", adjudicate]
         self.record_out.unlink(missing_ok=True)
-        return self.run("local-review", argv, {**env, "ORACLE_LOCAL_RECORD_OUT": str(self.record_out)}, cwd=checkout)
+        return self.run("local-review", argv, {**env, "REVIEW_LOCAL_RECORD_OUT": str(self.record_out)}, cwd=checkout)
 
     @property
     def record_out(self) -> Path:
@@ -423,8 +423,8 @@ class Harness:
             git(checkout, "branch", "--quiet", "-f", "develop", "origin/develop")
         values = {
             **self.base_env(),
-            "ORACLE_GATEWAY_URL": self.github.url,
-            "ORACLE_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
+            "REVIEW_GATEWAY_URL": self.github.url,
+            "REVIEW_CLOUD_GATEWAY_TOKEN": GATEWAY_TOKEN,
             "GH_TOKEN": OWNER_TOKEN,
             "GH_ENTERPRISE_TOKEN": OWNER_TOKEN,
             "TYPESAFE_BASE_URL": self.jev.url,
@@ -436,7 +436,7 @@ class Harness:
 
     @property
     def local_state(self) -> Path:
-        return self.home / ".cache" / "theseus" / "local-oracle"
+        return self.home / ".cache" / "theseus" / "local-review"
 
     def local_captures(self) -> list[dict[str, Any]]:
         paths = sorted((self.local_state / "captures").glob("*/capture-*.json"))

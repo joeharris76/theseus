@@ -379,7 +379,7 @@ def _open(identifier: str = "D1", **over: Any) -> dict[str, Any]:
 def _wire(record: dict[str, Any]) -> str:
     raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
     packed = base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode("ascii").rstrip("=")
-    return f"<!-- oracle-protocol: v1 {packed} -->"
+    return f"<!-- review-protocol: v1 {packed} -->"
 
 
 def _scrambled(length: int, seed: str) -> str:
@@ -486,7 +486,7 @@ def test_a_marker_trim_leaves_a_title_or_path_that_fits_its_limit_untouched(
 
 def _review(record: dict[str, Any], submitted_at: str | None, review_id: int) -> dict[str, Any]:
     return {
-        "login": "benchbox-oracle[bot]",
+        "login": "benchbox-review[bot]",
         "user_type": "Bot",
         "state": "COMMENTED",
         "submitted_at": submitted_at,
@@ -501,16 +501,16 @@ def test_history_orders_reviews_by_submission_time_then_id() -> None:
     early = _marker_record(round=1)
     late = _marker_record(round=2)
     reviews = [_review(late, "2026-10-05T13:00:00Z", 1), _review(early, "2026-10-05T12:00:00Z", 9)]
-    assert protocol.history(reviews, "benchbox-oracle").latest == late
+    assert protocol.history(reviews, "benchbox-review").latest == late
     tied = [_review(late, "2026-10-05T12:00:00Z", 9), _review(early, "2026-10-05T12:00:00Z", 1)]
-    assert protocol.history(tied, "benchbox-oracle").latest == late
+    assert protocol.history(tied, "benchbox-review").latest == late
     undated = [_review(late, "2026-10-05T12:00:00Z", 1), _review(early, None, 9)]
-    assert protocol.history(undated, "benchbox-oracle").latest == late
+    assert protocol.history(undated, "benchbox-review").latest == late
 
 
 def test_history_with_a_malformed_marker_has_no_records() -> None:
-    broken = {**_review(_marker_record(), "2026-10-05T12:00:00Z", 1), "body": "<!-- oracle-protocol: v1 !!! -->"}
-    found = protocol.history([broken], "benchbox-oracle")
+    broken = {**_review(_marker_record(), "2026-10-05T12:00:00Z", 1), "body": "<!-- review-protocol: v1 !!! -->"}
+    found = protocol.history([broken], "benchbox-review")
     assert found.records == [] and found.latest is None and found.error is not None
 
 
@@ -570,7 +570,7 @@ def test_an_unchanged_patch_on_a_new_head_carries_the_latest_round() -> None:
 
 
 def test_marker_lines_are_stripped_and_the_other_lines_kept() -> None:
-    text = "keep one\n<!-- oracle-defect: c1-D2 -->\nkeep two"
+    text = "keep one\n<!-- review-defect: c1-D2 -->\nkeep two"
     assert protocol.strip_marker_lines(text) == "keep one\nkeep two"
     assert protocol.strip_marker_lines("") == ""
 

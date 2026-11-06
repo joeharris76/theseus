@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from theseus_reviewer import legacy
+
 from .fake_github import ACCOUNTS, OWNER_TOKEN
 from .golden import assert_golden, logical_steps, posted, run_capture
 from .harness import CHECKER, REPO_ROOT, Harness, ReviewRun
@@ -20,7 +22,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.medium]
 FIXED_CHECKER = "def checker(a, b):\n    if a is None or b is None:\n        return False\n    return a == b\n"
 SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no defects.", "files_examined": [CHECKER]}
 RAW_REPLY = {"kind": "text", "text": "RAW-REPLY-SENTINEL looks fine to me, nothing to report"}
-ANSWERS = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "jev_recovery_answers.json"
+ANSWERS = REPO_ROOT / "tests" / "fixtures" / "reviewers" / "jev_recovery_answers.json"
 WITHDRAWN = {
     "decision": "SHIP",
     "summary": "The dispute holds; D1 is withdrawn.",
@@ -121,7 +123,7 @@ def test_golden_edited_prior_review_holds(harness: Harness) -> None:
 def test_golden_carry_that_disagrees_with_the_app_status_holds(harness: Harness) -> None:
     first = _reviewed(harness, 75, "feat/disagree")
     for status in harness.github.statuses[first]:
-        if status["context"] == "oracle-verdict":
+        if status["context"] in legacy.context_aliases("review-verdict"):
             status["state"] = "failure"
     harness.write({"README.md": "seed\nunrelated\n"}, "touch readme")
     _rebase(harness, "feat/disagree")
@@ -137,7 +139,7 @@ def test_golden_unreadable_edit_state_posts_nothing(harness: Harness) -> None:
     posted_before = len(harness.github.reviews[76])
     run = harness.review(76)
     assert len(harness.github.reviews[76]) == posted_before
-    assert harness.github.oracle_statuses(head) == []
+    assert harness.github.review_statuses(head) == []
     _check("unreadable_edit_state_posts_nothing", harness, run, 76, head)
 
 
@@ -196,7 +198,7 @@ def test_a_review_without_the_app_secrets_fails_before_anything_runs_and_posts_n
     run = harness.review(87, app=False)
     refusal = run.steps["app_refusal"]
     assert refusal.code == 1
-    assert refusal.stdout.startswith("::error::") and "environment oracle" in refusal.stdout
+    assert refusal.stdout.startswith("::error::") and "environment review" in refusal.stdout
     assert set(run.steps) == {"app_refusal"}
     assert run.run["conclusion"] == "failure"
     assert not any(posted(harness, 87, head).values())

@@ -28,12 +28,12 @@ def _blocked_claude(harness: Harness, pr: int, provider: str) -> str:
     harness.script_omp([_quota(provider), SHIP])
     run = harness.review(pr)
     assert run.steps["finalize"].outputs["state"] == "pending"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]
     return head
 
 
 def _recorded_block(harness: Harness, pr: int) -> dict:
-    return harness.github.artifact_json(f"oracle-verdict-state-{pr}", "state.json")["pool_blocked_until"]["claude"]
+    return harness.github.artifact_json(f"review-verdict-state-{pr}", "state.json")["pool_blocked_until"]["claude"]
 
 
 def test_a_fallback_providers_quota_reset_does_not_block_the_next_head(harness: Harness) -> None:
@@ -46,7 +46,7 @@ def test_a_fallback_providers_quota_reset_does_not_block_the_next_head(harness: 
 
     assert harness.omp_calls() == 2
     assert run.plan["pool_blocked_until"] == {}
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
     assert block["provider"] == "openai-codex"
     assert datetime.fromisoformat(block["until"]) - datetime.fromisoformat(block["recorded_at"]) <= timedelta(hours=1)
 
@@ -60,7 +60,7 @@ def test_a_primary_providers_quota_reset_blocks_the_pool_for_at_most_the_backoff
 
     assert harness.omp_calls() == 1
     assert list(run.plan["pool_blocked_until"]) == ["claude"]
-    [status] = harness.github.oracle_statuses(head)
+    [status] = harness.github.review_statuses(head)
     assert status["state"] == "pending"
     assert "claude pool blocked until" in status["description"] and "anthropic" in status["description"]
     assert block["provider"] == "anthropic"
@@ -79,8 +79,8 @@ def test_a_primary_providers_block_is_cleared_once_the_backoff_passes_and_the_pr
 
     assert harness.omp_calls() == 2
     assert run.plan["pool_blocked_until"] == {}
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
-    assert harness.github.artifact_json("oracle-verdict-state-93", "state.json")["pool_blocked_until"] == {}
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
+    assert harness.github.artifact_json("review-verdict-state-93", "state.json")["pool_blocked_until"] == {}
 
 
 def test_a_manual_dispatch_during_the_backoff_leaves_the_recorded_block_unchanged(harness: Harness) -> None:

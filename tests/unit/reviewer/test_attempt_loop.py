@@ -32,7 +32,7 @@ JOB_TOKEN = "ghs_" + "Q1w2E3r4" * 5
 SECRET_ENV = {
     "OMP_GATEWAY_TOKEN": GATEWAY_TOKEN,
     "TYPESAFE_API_KEY": TYPESAFE_KEY,
-    "ORACLE_GATEWAY_URL": GATEWAY_URL,
+    "REVIEW_GATEWAY_URL": GATEWAY_URL,
     "TS_OAUTH_CI_CLIENT_ID": "kXq7Lm2NpR4tVw9",
     "TS_OAUTH_CI_SECRET": "tskey-client-" + "kXq7Lm2NpR4tVw9-Zb3Yc8Wd5Xe",
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "eyJhbGciOi" + "Pq7Rs8Tu" * 6,
@@ -74,7 +74,7 @@ class Loop:
         monkeypatch.setenv("GITHUB_RUN_ID", RUN_ID)
         monkeypatch.setenv("GITHUB_OUTPUT", str(self.output))
         monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-        monkeypatch.setenv("ORACLE_GATEWAY_URL", GATEWAY_URL)
+        monkeypatch.setenv("REVIEW_GATEWAY_URL", GATEWAY_URL)
         monkeypatch.setenv("OMP_GATEWAY_TOKEN", GATEWAY_TOKEN)
 
     def fake(self, name: str, **params: Any) -> None:

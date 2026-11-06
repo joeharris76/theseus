@@ -13,15 +13,22 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
+from . import legacy
 from .matchers import Matchers
 from .policy import Binding, PromotionRules
 
-ORACLE_CONTEXT = "oracle-verdict"
-_ORACLE_VERDICT = re.compile(rf"### {ORACLE_CONTEXT}: (?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`")
+REVIEW_CONTEXT = "review-verdict"
+_REVIEW_VERDICT = re.compile(
+    rf"### (?:{re.escape(REVIEW_CONTEXT)}|{re.escape(legacy.VERDICT_HEADING_CONTEXT)}): "
+    rf"(?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`"
+)
 _RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
 REFUSED_DESCRIPTION_PREFIX = "refused after"
-_STANDIN_MARKER = re.compile(r"Stand-in oracle review: APPROVE ([0-9a-f]{40})")
+STANDIN_APPROVAL = "Stand-in review: APPROVE"
+_STANDIN_MARKER = re.compile(
+    rf"(?:{re.escape(STANDIN_APPROVAL)}|{re.escape(legacy.STANDIN_APPROVAL)}) ([0-9a-f]{{40}})"
+)
 OPEN_FINDINGS_LABEL = "SHIP WITH FIXES"
 REPOSTED_MARK = " (reposted)"
 _ESCALATED = re.compile(r"escalated (?P<ids>D[0-9]+(?:,D[0-9]+)*)")
@@ -74,7 +81,7 @@ def _login(value: str | None) -> str:
     return (value or "").removesuffix("[bot]")
 
 
-def _is_oracle(login: str | None, account_type: str | None, bot_login: str) -> bool:
+def _is_review(login: str | None, account_type: str | None, bot_login: str) -> bool:
     return _login(login) == bot_login and account_type == "Bot"
 
 
@@ -104,7 +111,7 @@ def _receipt_candidates(
     return [
         review
         for review in reviews
-        if _is_oracle(review.get("login"), review.get("user_type"), bot_login)
+        if _is_review(review.get("login"), review.get("user_type"), bot_login)
         and review.get("commit_id") == head_sha
         and review.get("state") not in {"PENDING", "DISMISSED"}
         and review.get("submitted_at")
@@ -138,7 +145,7 @@ def _receipt_agrees(receipt: dict[str, Any], head_sha: str, status_uuid: str | N
         or "includes_created_edit" not in receipt
         or receipt.get("last_edited_at") is not None
         or receipt.get("includes_created_edit")
-        or verdict_state(receipt.get("body"), head_sha, _ORACLE_VERDICT) != "success"
+        or verdict_state(receipt.get("body"), head_sha, _REVIEW_VERDICT) != "success"
     ):
         return False
     receipt_uuid = _receipt_run_uuid(receipt)
@@ -175,8 +182,8 @@ def _verdict_statuses(
         (
             status
             for status in statuses
-            if status.get("context") == ORACLE_CONTEXT
-            and _is_oracle(status.get("login"), status.get("user_type"), bot_login)
+            if status.get("context") in legacy.context_aliases(REVIEW_CONTEXT)
+            and _is_review(status.get("login"), status.get("user_type"), bot_login)
             and status.get("created_at")
             and _survives_base_change(_parse_time(status["created_at"]), base_time)
         ),
@@ -218,12 +225,12 @@ def _open_findings_message(verdicts: list[dict[str, Any]], head_sha: str) -> str
     match = _ESCALATED.search((decisive or {}).get("description") or "")
     if match:
         return (
-            f"oracle-review: {match.group('ids')} on {head_sha} stayed open through repeated dispute re-reviews and "
+            f"review: {match.group('ids')} on {head_sha} stayed open through repeated dispute re-reviews and "
             f"need the owner's ruling: post '{GRAMMAR}' for each after an Owner instruction comment naming this "
             "pull request, head and finding, or push a fix"
         )
     return (
-        f"oracle-review: the oracle's latest verdict for {head_sha} lists open findings, which a stand-in cannot "
+        f"review: the review's latest verdict for {head_sha} lists open findings, which a stand-in cannot "
         "waive: fix them, or dispute a finding with file:line counter-evidence in its review thread"
     )
 
@@ -244,12 +251,12 @@ def decide(
 ) -> tuple[int, str]:
     refused = list(bump_refusals)
     if refused:
-        return WAITING, f"oracle-review: omp pin bump refused: {'; '.join(refused)}"
+        return WAITING, f"review: omp pin bump refused: {'; '.join(refused)}"
     promo_refused = list(promotion_refusals)
     if promo_refused:
-        return WAITING, f"oracle-review: theseus promotion refused: {'; '.join(promo_refused)}"
+        return WAITING, f"review: theseus promotion refused: {'; '.join(promo_refused)}"
     if not is_promotion and not paths(files):
-        return PASS, "oracle-review: only exempt paths changed"
+        return PASS, "review: only exempt paths changed"
     base_time = _parse_time(base_date) if base_date else None
     verdicts = _verdict_statuses(statuses, base_time, binding.bot_login)
     latest = verdicts[-1] if verdicts else None
@@ -269,41 +276,41 @@ def decide(
     if latest and verdict != "success" and not standin:
         if (latest.get("description") or "").startswith(REFUSED_DESCRIPTION_PREFIX):
             return WAITING, (
-                f"oracle-review: the oracle refused to review {head_sha} after repeated DO NOT SHIP decisions; "
+                f"review: the review refused to review {head_sha} after repeated DO NOT SHIP decisions; "
                 "close this pull request and open a new one, or post a stand-in attestation after that verdict"
             )
         if findings_open:
             return WAITING, _open_findings_message(verdicts, head_sha)
         return WAITING, (
-            f"oracle-review: the oracle's latest verdict for {head_sha} is {verdict}, not success; fix the "
+            f"review: the review's latest verdict for {head_sha} is {verdict}, not success; fix the "
             "findings, or post a stand-in attestation after that verdict"
         )
     if not (latest or standin):
         return WAITING, (
-            f"oracle-review: waiting for the oracle's verdict on {head_sha}, or a stand-in attestation "
-            f"'Stand-in oracle review: APPROVE {head_sha}' from a listed attester"
+            f"review: waiting for the review's verdict on {head_sha}, or a stand-in attestation "
+            f"'Stand-in review: APPROVE {head_sha}' from a listed attester"
         )
 
     if verdict == "success":
         if _strip_run_suffix(latest.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
             if standin is None:
                 return WAITING, (
-                    f"oracle-review: the oracle-verdict status for {head_sha} reports only exempt paths changed, "
+                    f"review: the review-verdict status for {head_sha} reports only exempt paths changed, "
                     "but the gate's current rules require a review of this head; push a new head (a byte-identical "
                     "rebase is enough), or have the owner stand-in post an attestation"
                 )
         else:
             if _receipt_backed_success(verdicts, reviews, head_sha, base_time, binding.bot_login):
-                return PASS, f"oracle-review: pass (oracle verdict for {head_sha})"
+                return PASS, f"review: pass (review verdict for {head_sha})"
             if standin is None:
                 return WAITING, (
-                    f"oracle-review: the oracle-verdict status for {head_sha} is success, but this pull request "
-                    f"has no unedited oracle review of {head_sha} from the same verdict run agreeing with it; "
+                    f"review: the review-verdict status for {head_sha} is success, but this pull request "
+                    f"has no unedited review of {head_sha} from the same verdict run agreeing with it; "
                     "push a new head (a byte-identical rebase is enough) so the verdict runs again, or have the "
                     "owner stand-in post an attestation"
                 )
     assert standin is not None
-    return PASS, f"oracle-review: pass (stand-in review attested by {standin.get('login')} for {head_sha})"
+    return PASS, f"review: pass (stand-in review attested by {standin.get('login')} for {head_sha})"
 
 
 def _request(token: str, url: str, body: dict[str, Any] | None = None) -> Any:
@@ -559,7 +566,7 @@ def fetch_promotion_refusals(
     base_date: str | None = None,
     *,
     statuses: Iterable[dict[str, Any]] = (),
-    oracle_login: str,
+    review_login: str,
     rules: PromotionRules,
     comments: Sequence[dict[str, Any]] = (),
 ) -> tuple[bool, list[str]]:
@@ -587,7 +594,7 @@ def fetch_promotion_refusals(
             matcher_raw = fetch_optional_bytes(token, head_repo, parsed_head.matcher.path, head_sha)
             matcher_sha256 = hashlib.sha256(matcher_raw).hexdigest() if matcher_raw is not None else None
     base_time = _parse_time(base_date) if base_date else None
-    verdict_list = _verdict_statuses(statuses, base_time, oracle_login)
+    verdict_list = _verdict_statuses(statuses, base_time, review_login)
     expected_uuid = (
         _status_run_uuid(verdict_list[-1]) if verdict_list and verdict_list[-1].get("state") == "success" else None
     )
@@ -600,7 +607,7 @@ def fetch_promotion_refusals(
         repo=repo,
         complete=complete,
         base_time=base_time,
-        oracle_login=oracle_login,
+        review_login=review_login,
         rules=rules,
         comments=comments,
         is_ancestor=_token_ancestor_check(token, repo),

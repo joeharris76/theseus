@@ -30,6 +30,7 @@ from . import (
     findings,
     gitdiff,
     github,
+    legacy,
     omp_pin,
     processes,
     promotion,
@@ -83,9 +84,9 @@ class DiffNotStagedError(Exception):
     pass
 
 
-WORKFLOW_FILE = "oracle-verdict.yml"
+WORKFLOW_FILE = "review-verdict.yml"
 GATEWAY_TOKEN_ENV = "OMP_GATEWAY_TOKEN"
-GATEWAY_CLIENT = "oracle-ci"
+GATEWAY_CLIENT = "review-ci"
 GATEWAY_TOKEN_MIN_LENGTH = 32
 NEW_DIFF_ACTIONS = ("opened", "synchronize")
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -148,7 +149,7 @@ def _read_json(path: Path) -> Any:
 
 def _pr_number(value: str) -> int:
     if not re.fullmatch(r"[1-9][0-9]{0,8}", value or ""):
-        raise SystemExit(f"oracle-verdict: invalid pull request number {value!r}")
+        raise SystemExit(f"review-verdict: invalid pull request number {value!r}")
     return int(value)
 
 
@@ -207,7 +208,7 @@ def _finish_plan(out_dir: Path, plan: dict[str, Any]) -> int:
         }
     )
     subject = "the local change" if plan["pr"] is None else f"#{plan['pr']}"
-    _summary(f"oracle-verdict plan for {subject}: {plan['decision']} ({plan['decision_reason']})")
+    _summary(f"review-verdict plan for {subject}: {plan['decision']} ({plan['decision_reason']})")
     return 0
 
 
@@ -296,7 +297,7 @@ def _dispute_step(
     try:
         threads = github.review_threads(plan["repo"], plan["pr"])
     except (github.GitHubError, KeyError, ValueError) as exc:
-        _summary(f"oracle-verdict: open review threads could not be read: {exc}")
+        _summary(f"review-verdict: open review threads could not be read: {exc}")
         return None, step
     if threads is not None and protocol.live_disputes(_disputed_threads(threads, policy.bot_login), found.latest):
         step = _protocol_round(
@@ -328,7 +329,7 @@ def _base_changed_at(
     try:
         return github.base_changed_at(repo, pr), False
     except (github.GitHubError, KeyError, ValueError) as exc:
-        _summary(f"oracle-verdict: the base-change history could not be read: {exc}")
+        _summary(f"review-verdict: the base-change history could not be read: {exc}")
         return None, True
 
 
@@ -358,7 +359,7 @@ def _backoff_reset(
     try:
         reset_at = github.backoff_reset_at(repo, pr, head_sha, binding.attesters)
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
-        _summary(f"oracle-verdict: the owner's backoff reset could not be read, so none applies: {exc}")
+        _summary(f"review-verdict: the owner's backoff reset could not be read, so none applies: {exc}")
         return None
     if not retry.reset_applies(previous, head_sha, reset_at):
         return reset_at
@@ -368,10 +369,10 @@ def _backoff_reset(
         resolved = sweep.with_timeouts(grouped.get(pr, ()), lambda run: github.run_timed_out(repo, run), reset_at)
         spent = sweep.reset_spent(resolved, reset_at, head_sha, exclude=current)
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
-        _summary(f"oracle-verdict: the owner's backoff reset could not be confirmed unused: {exc}")
+        _summary(f"review-verdict: the owner's backoff reset could not be confirmed unused: {exc}")
         return None
     if spent:
-        _summary("oracle-verdict: the owner's backoff reset was already used by a later run")
+        _summary("review-verdict: the owner's backoff reset was already used by a later run")
         return None
     return reset_at
 
@@ -396,7 +397,7 @@ def _refused_marked(finished: int, marked: bool, plan: Mapping[str, Any]) -> int
     if not marked:
         return finished
     print(
-        f"oracle-verdict: error: the sweep's retry of head {plan['head_sha']} was refused: {plan['decision_reason']}",
+        f"review-verdict: error: the sweep's retry of head {plan['head_sha']} was refused: {plan['decision_reason']}",
         file=sys.stderr,
     )
     return 1
@@ -436,7 +437,7 @@ def _plan_adjudication(out_dir: Path, plan: dict[str, Any], policy: Policy, even
         found = _plan_history(repo, pr, policy.bot_login)
         previous = github.latest_state(repo, pr, policy.consumer.gated_base)
     except edits.EditStateError as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 2
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         plan["decision_reason"] = f"the adjudication could not be checked: {exc}"
@@ -488,9 +489,22 @@ def adjudicate_round(
     return _plan_carry(out_dir, plan, policy.bot_login, step, found.latest_at)
 
 
+RERUN_COMMAND = "/review"
+_RERUN_COMMAND = re.compile(
+    rf"(?:{re.escape(RERUN_COMMAND)}|{re.escape(legacy.OWNER_COMMAND)})(?![\w-])", re.IGNORECASE
+)
+
+
+def _is_rerun_command(event: Mapping[str, Any]) -> bool:
+    body = (event.get("comment") or {}).get("body") or ""
+    return _RERUN_COMMAND.match(body.strip()) is not None
+
+
 def _is_adjudication(event_name: str, event: Mapping[str, Any]) -> bool:
     body = (event.get("comment") or {}).get("body") or ""
-    return event_name == "issue_comment" and body.lstrip().casefold().startswith(adjudication.TRIGGER.casefold())
+    return event_name == "issue_comment" and body.lstrip().casefold().startswith(
+        tuple(t.casefold() for t in adjudication.TRIGGERS)
+    )
 
 
 def _settled_round(
@@ -526,7 +540,7 @@ def _plan_repost(
         statuses = github.commit_statuses(plan["repo"], previous["head_sha"])
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         print(
-            f"oracle-verdict: error: the status of head {previous['head_sha']} could not be read: {exc}",
+            f"review-verdict: error: the status of head {previous['head_sha']} could not be read: {exc}",
             file=sys.stderr,
         )
         return 2
@@ -554,7 +568,7 @@ def _plan_repost(
 def _status_mismatch(previous: Mapping[str, Any]) -> str:
     return (
         f"the recorded {protocol.LABELS[previous['decision']]} decision on head {previous['head_sha']} "
-        "does not match the oracle's own status for that head"
+        "does not match the review's own status for that head"
     )
 
 
@@ -643,7 +657,7 @@ def command_plan(args: argparse.Namespace) -> int:
         policy = load_policy(Path(args.policy))
         matchers = load_matchers(policy.consumer, Path.cwd())
     except (OSError, PolicyError) as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 2
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
@@ -651,7 +665,7 @@ def command_plan(args: argparse.Namespace) -> int:
     event = _event()
     gated_base = policy.consumer.gated_base
     if event_name == "workflow_dispatch" and os.environ.get("GITHUB_REF") != f"refs/heads/{gated_base}":
-        print(f"oracle-verdict: error: dispatch runs only from {gated_base}", file=sys.stderr)
+        print(f"review-verdict: error: dispatch runs only from {gated_base}", file=sys.stderr)
         return 2
     pr = _pr_number(args.pr)
     out_dir = Path(args.out)
@@ -684,6 +698,9 @@ def command_plan(args: argparse.Namespace) -> int:
     )
     if _is_adjudication(event_name, event):
         return _plan_adjudication(out_dir, plan, policy, event)
+    if event_name == "issue_comment" and not _is_rerun_command(event):
+        plan["decision_reason"] = "the comment is not a review command"
+        return _finish_plan(out_dir, plan)
     try:
         previous = github.latest_state(repo, pr, gated_base)
     except (github.GitHubError, KeyError, ValueError) as exc:
@@ -714,7 +731,7 @@ def command_plan(args: argparse.Namespace) -> int:
     try:
         found = _plan_history(repo, pr, policy.bot_login)
     except edits.EditStateError as exc:
-        print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 2
     if found.error is not None:
         plan.update({"decision": HOLD, "decision_reason": found.error})
@@ -727,7 +744,7 @@ def command_plan(args: argparse.Namespace) -> int:
             built = gitdiff.build(repo, merge_base, plan["head_sha"])
             gitdiff.verify_paths(built, (path for item in files for path in item.paths))
         except gitdiff.GitDiffError as exc:
-            print(f"oracle-verdict: diff: {exc}", file=sys.stderr)
+            print(f"review-verdict: diff: {exc}", file=sys.stderr)
             built = None
             unbuildable = exc if isinstance(exc, gitdiff.GitVersionError) else None
     if github.get_json(f"repos/{repo}/pulls/{pr}")["head"]["sha"] != plan["head_sha"]:
@@ -829,7 +846,7 @@ def _resolve_promotion_bundle(
 ) -> tuple[promotion.PromotionBundle | None, str | None]:
     if inputs.promotion is not None:
         return inputs.promotion, None
-    local_root_raw = os.environ.get("ORACLE_LOCAL_ROOT", "").strip()
+    local_root_raw = os.environ.get("REVIEW_LOCAL_ROOT", "").strip()
     pr_paths = [path for item in inputs.files for path in item.paths]
     lock_item = next((item for item in inputs.files if promotion.LOCK_PATH in item.paths), None)
     if not local_root_raw or (lock_item is None and not promotion.has_planted_promotion_path(pr_paths)):
@@ -915,7 +932,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
             plan["open_findings"] = dedup.open_fingerprints(threads, policy.bot_login)
             plan["disputes"] = _disputed_threads(threads, policy.bot_login)
         except (github.GitHubError, KeyError, ValueError) as exc:
-            _summary(f"oracle-verdict: open review threads could not be read, so none are suppressed: {exc}")
+            _summary(f"review-verdict: open review threads could not be read, so none are suppressed: {exc}")
     claims = (
         findings.ingest(inputs.body, plan["protocol"]["patch_digest"])
         if step.kind == protocol.FIRST and not found.records and inputs.body
@@ -945,15 +962,15 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     return _finish_plan(out_dir, plan)
 
 
-def _oracle_history(repo: str, pr: int, bot_login: str) -> protocol.History:
-    reviews = github.oracle_reviews(repo, pr)
+def _review_history(repo: str, pr: int, bot_login: str) -> protocol.History:
+    reviews = github.reviews(repo, pr)
     marked = [review for review in reviews if protocol.is_app_review(review, bot_login)]
     node_ids = [review.get("node_id") for review in marked]
     if not all(isinstance(node_id, str) and node_id for node_id in node_ids):
-        raise edits.EditStateError("an oracle review carries no node id, so its edit state cannot be read")
+        raise edits.EditStateError("a review carries no node id, so its edit state cannot be read")
     states = github.review_edit_states(node_ids) if node_ids else {}
     if any(node_id not in states for node_id in node_ids):
-        raise edits.EditStateError("the edit state of an oracle review was not returned")
+        raise edits.EditStateError("the edit state of a review was not returned")
     return protocol.history(
         [
             {
@@ -971,11 +988,11 @@ def _oracle_history(repo: str, pr: int, bot_login: str) -> protocol.History:
 
 def _plan_history(repo: str, pr: int, bot_login: str) -> protocol.History:
     try:
-        return _oracle_history(repo, pr, bot_login)
+        return _review_history(repo, pr, bot_login)
     except edits.EditStateError:
         raise
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
-        return protocol.History([], f"the oracle's review history could not be read: {exc}")
+        return protocol.History([], f"the review's review history could not be read: {exc}")
 
 
 def _plan_carry(
@@ -986,7 +1003,7 @@ def _plan_carry(
         disagreement = None if plan.get("history") == "local" else _carry_disagreement(plan, bot_login, previous, near)
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         print(
-            f"oracle-verdict: error: the status of head {previous['head_sha']} could not be read: {exc}",
+            f"review-verdict: error: the status of head {previous['head_sha']} could not be read: {exc}",
             file=sys.stderr,
         )
         return 2
@@ -1352,7 +1369,7 @@ def _chain_reviewer(plan: Mapping[str, Any], name: str) -> Reviewer:
     for item in plan["chain"]:
         if item["name"] == name:
             return Reviewer.from_json(item)
-    raise SystemExit(f"oracle-verdict: {name!r} is not in this run's reviewer chain")
+    raise SystemExit(f"review-verdict: {name!r} is not in this run's reviewer chain")
 
 
 def _assemble_prompt(
@@ -1471,11 +1488,11 @@ def command_review(args: argparse.Namespace) -> int:
     plan = _read_json(plan_path)
     reviewer = _chain_reviewer(plan, args.reviewer)
     if reviewer.harness != args.harness:
-        raise SystemExit(f"oracle-verdict: {reviewer.name} does not run on the {args.harness} job")
+        raise SystemExit(f"review-verdict: {reviewer.name} does not run on the {args.harness} job")
     try:
         classification = Classification.from_json(_read_json(Path(args.classification)))
     except (OSError, ValueError, KeyError) as exc:
-        raise SystemExit(f"oracle-verdict: classification unreadable: {exc}") from exc
+        raise SystemExit(f"review-verdict: classification unreadable: {exc}") from exc
     workspace = Path(args.workspace)
     try:
         unread = selection.retry_unread(
@@ -1486,7 +1503,7 @@ def command_review(args: argparse.Namespace) -> int:
         prompt = None
         outcome = runner.ReviewOutcome(None, Absence(ERROR, str(exc)), str(exc))
     except (OversizeError, ValueError) as exc:
-        raise SystemExit(f"oracle-verdict: {exc}") from exc
+        raise SystemExit(f"review-verdict: {exc}") from exc
     if prompt is not None:
         outcome = runner.review(
             reviewer,
@@ -1568,7 +1585,7 @@ def decided_attempts(
     workspace: str | Path | None,
 ) -> tuple[SelectionInput, attempt_files.LoadedAttempts, selection.Step, list[str]]:
     if plan.get("promotion") and workspace is not None:
-        for sibling in ("plan", "oracle-plan"):
+        for sibling in ("plan", "review-plan"):
             candidate = attempts_dir.parent / sibling
             if (candidate / promotion.PROMOTION_PLAN_DIR).is_dir():
                 promotion.stage_promotion_workspace(candidate, Path(workspace))
@@ -1587,7 +1604,7 @@ def command_finalize(args: argparse.Namespace) -> int:
         f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{plan['repo']}/actions/runs/{plan['run_id']}"
     )
     if plan["run_id"] != os.environ["GITHUB_RUN_ID"]:
-        raise SystemExit("oracle-verdict: the plan belongs to another run")
+        raise SystemExit("review-verdict: the plan belongs to another run")
     now = getattr(args, "now", None) or _now()
     if plan["decision"] == SUCCESS:
         final = report.fixed(retry.SUCCESS, "only exempt paths changed")
@@ -1673,7 +1690,7 @@ def command_finalize(args: argparse.Namespace) -> int:
             "has_state": "true" if (out_dir / "state" / github.STATE_FILE).is_file() else "false",
         }
     )
-    _defer_summary(out_dir, f"oracle-verdict #{plan['pr']} {plan['head_sha']}: {final.state}: {final.description}")
+    _defer_summary(out_dir, f"review-verdict #{plan['pr']} {plan['head_sha']}: {final.state}: {final.description}")
     if final.body:
         _defer_summary(out_dir, final.body)
     return 0
@@ -1689,7 +1706,7 @@ def _reread_history(plan: Mapping[str, Any]) -> protocol.History:
         if attempt:
             sleep(GUARD_PAUSE_SECONDS)
         try:
-            return _oracle_history(plan["repo"], plan["pr"], plan["bot_login"])
+            return _review_history(plan["repo"], plan["pr"], plan["bot_login"])
         except (edits.EditStateError, github.GitHubError, KeyError, TypeError, ValueError) as exc:
             error = exc
     raise HistoryUnreadable(
@@ -1701,12 +1718,12 @@ def guard_decision(plan: Mapping[str, Any]) -> tuple[int, bool]:
     try:
         found = _reread_history(plan)
     except HistoryUnreadable as exc:
-        print(f"oracle-verdict: error: {exc}; nothing is posted for head {plan['head_sha']}", file=sys.stderr)
+        print(f"review-verdict: error: {exc}; nothing is posted for head {plan['head_sha']}", file=sys.stderr)
         return 2, False
     if found.error is not None:
         if plan.get("decision") == HOLD:
             return 0, False
-        print(f"oracle-verdict: error: {found.error}; nothing is posted for head {plan['head_sha']}", file=sys.stderr)
+        print(f"review-verdict: error: {found.error}; nothing is posted for head {plan['head_sha']}", file=sys.stderr)
         return 2, False
     latest = found.latest
     rules = plan.get("protocol") or {}
@@ -1722,7 +1739,7 @@ def guard_decision(plan: Mapping[str, Any]) -> tuple[int, bool]:
         and published
     )
     if done:
-        _summary(f"oracle-verdict: head {plan['head_sha']} already has a decision; this run posts nothing")
+        _summary(f"review-verdict: head {plan['head_sha']} already has a decision; this run posts nothing")
     return 0, done
 
 
@@ -1767,7 +1784,7 @@ def _surface_twice_failed(
         {"state": "pending", "context": status_context, "description": description, "target_url": run_url},
         token,
     )
-    _summary(f"oracle-verdict #{number} {head}: {description}")
+    _summary(f"review-verdict #{number} {head}: {description}")
 
 
 def _state_after_base_change(
@@ -1911,7 +1928,7 @@ def _stateless_retry(
     if sweep.stateless_failures(head_runs) == 0:
         return None
     if _has_decisive_status(repo, head, status_context, bot_login, number, base_changed_at):
-        _summary(f"retry not dispatched for #{number}: the head already has a decisive oracle-verdict status")
+        _summary(f"retry not dispatched for #{number}: the head already has a decisive review-verdict status")
         return None
     reason = _bounded_retry(
         repo, number, head, head_runs, None, rules, now, status_context, bot_login, token, base_changed_at
@@ -1924,7 +1941,9 @@ def _own_statuses(
 ) -> list[dict[str, Any]]:
     found = []
     for status in github.commit_statuses(repo, head):
-        if status.get("context") != status_context or not github.is_app_status(status, bot_login):
+        if status.get("context") not in legacy.context_aliases(status_context) or not github.is_app_status(
+            status, bot_login
+        ):
             continue
         created = github.parse_time(status.get("created_at"))
         if created is None or not base_change.survives(created, base_changed_at):
@@ -1958,7 +1977,7 @@ def _decided_unpublished(
         return False
     if not _has_decisive_status(repo, head, status_context, bot_login, number, base_changed_at):
         return False
-    _summary(f"retry not dispatched for #{number}: the head already has a decisive oracle-verdict status")
+    _summary(f"retry not dispatched for #{number}: the head already has a decisive review-verdict status")
     return True
 
 
@@ -1970,7 +1989,7 @@ def _already_surfaced(
         return False
     newest = max(mine, key=lambda status: status.get("updated_at") or status.get("created_at") or "")
     return newest.get("state") == "pending" and str(newest.get("description") or "").startswith(
-        github.SWEEP_FAILURE_SURFACE_PREFIX
+        github.SWEEP_FAILURE_SURFACE_PREFIXES
     )
 
 
@@ -2015,13 +2034,13 @@ def command_sweep(args: argparse.Namespace) -> int:
     now = _now()
     token = os.environ.get("SURFACE_TOKEN", "")
     if not token:
-        raise SystemExit("oracle-verdict: error: SURFACE_TOKEN is not set")
+        raise SystemExit("review-verdict: error: SURFACE_TOKEN is not set")
     runs: dict[int, tuple[sweep.Run, ...]] | None
     try:
         listing = github.verdict_runs(repo, WORKFLOW_FILE, now - sweep.RUN_WINDOW)
     except github.GitHubError as exc:
         _summary(
-            "oracle-verdict: the runs listing failed; this sweep dispatches only due retries "
+            "review-verdict: the runs listing failed; this sweep dispatches only due retries "
             f"and skips stateless retries: {exc}"
         )
         runs = None
@@ -2038,11 +2057,11 @@ def command_sweep(args: argparse.Namespace) -> int:
         try:
             busy = github.in_flight_pulls(repo, WORKFLOW_FILE)
         except github.GitHubError as exc:
-            _summary(f"oracle-verdict: the fallback in-flight lookup also failed ({exc}); dispatching nothing")
+            _summary(f"review-verdict: the fallback in-flight lookup also failed ({exc}); dispatching nothing")
             busy = None
     if busy is None:
         print(
-            "oracle-verdict: error: the sweep could not tell which pull requests have a run in flight", file=sys.stderr
+            "review-verdict: error: the sweep could not tell which pull requests have a run in flight", file=sys.stderr
         )
         return 1
     full = runs is not None
@@ -2088,12 +2107,12 @@ def command_sweep(args: argparse.Namespace) -> int:
             continue
         dispatched += 1
         _summary(f"retry dispatched for #{number}: {reason}")
-    _summary(f"oracle-verdict sweep dispatched {dispatched} retr{'y' if dispatched == 1 else 'ies'}")
+    _summary(f"review-verdict sweep dispatched {dispatched} retr{'y' if dispatched == 1 else 'ies'}")
     if errors:
-        print(f"oracle-verdict: error: the sweep could not handle {len(errors)} pull request(s)", file=sys.stderr)
+        print(f"review-verdict: error: the sweep could not handle {len(errors)} pull request(s)", file=sys.stderr)
         return 1
     if runs is None:
-        print("oracle-verdict: error: the sweep ran degraded because the runs listing failed", file=sys.stderr)
+        print("review-verdict: error: the sweep ran degraded because the runs listing failed", file=sys.stderr)
         return 1
     return 0
 
@@ -2102,38 +2121,38 @@ def command_reset_backoff(args: argparse.Namespace) -> int:
     pr = _pr_number(args.pr)
     head = args.head or ""
     if not re.fullmatch(r"[0-9a-f]{40}", head):
-        raise SystemExit("oracle-verdict: the head must be the full 40-character commit")
+        raise SystemExit("review-verdict: the head must be the full 40-character commit")
     if not reset.valid_reason(args.reason or ""):
-        raise SystemExit(f"oracle-verdict: the reason must be one line of at most {reset.REASON_LIMIT} characters")
+        raise SystemExit(f"review-verdict: the reason must be one line of at most {reset.REASON_LIMIT} characters")
     try:
         attesters = frozenset(load_policy(Path(args.policy)).consumer.attesters)
     except (OSError, PolicyError) as exc:
-        raise SystemExit(f"oracle-verdict: error: {exc}") from exc
+        raise SystemExit(f"review-verdict: error: {exc}") from exc
     repo = args.repo or os.environ.get("GITHUB_REPOSITORY") or github.current_repository()
     login = github.current_login()
     if login not in attesters:
-        raise SystemExit(f"oracle-verdict: {login} is not an owner account that may reset a backoff")
+        raise SystemExit(f"review-verdict: {login} is not an owner account that may reset a backoff")
     pull = github.get_json(f"repos/{repo}/pulls/{pr}")
     if pull["state"] != "open" or pull["head"]["sha"] != head:
-        raise SystemExit(f"oracle-verdict: #{pr} is not open at head {head}")
+        raise SystemExit(f"review-verdict: #{pr} is not open at head {head}")
     comments = github.get_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100")
     if not reset.has_owner_instruction(comments, head, attesters):
-        raise SystemExit(f"oracle-verdict: post an 'Owner instruction' comment on #{pr} that names head {head} first")
+        raise SystemExit(f"review-verdict: post an 'Owner instruction' comment on #{pr} that names head {head} first")
     github.post_comment(repo, pr, reset.reset_body(head, args.reason))
-    _summary(f"oracle-verdict #{pr} {head}: the retry backoff is reset once: {args.reason}")
+    _summary(f"review-verdict #{pr} {head}: the retry backoff is reset once: {args.reason}")
     return 0
 
 
 def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_loopback_http: bool = False) -> None:
     url = gateway_url.strip()
     if not url:
-        raise SystemExit("oracle-verdict: error: the gateway URL is empty; set the ORACLE_GATEWAY_URL secret")
+        raise SystemExit("review-verdict: error: the gateway URL is empty; set the REVIEW_GATEWAY_URL secret")
     parsed = urlparse(url)
     secure = parsed.scheme == "https" or (
         allow_loopback_http and parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS
     )
     if not secure or not parsed.hostname:
-        raise SystemExit("oracle-verdict: error: the gateway URL must be an https:// URL")
+        raise SystemExit("review-verdict: error: the gateway URL must be an https:// URL")
     agent_dir = home / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "config.yml").write_text(config_text, encoding="utf-8")
@@ -2165,14 +2184,14 @@ def _run_slot(args: argparse.Namespace, plan: Mapping[str, Any], slot: int, revi
     out_dir = Path(args.attempts_dir)
     workspace = Path(args.workspace)
     runner.reset_workspace(workspace)
-    home = Path(tempfile.mkdtemp(prefix=f"oracle-home-{slot}-", dir=args.home_root))
+    home = Path(tempfile.mkdtemp(prefix=f"review-home-{slot}-", dir=args.home_root))
     leaked = False
     detail = selection.JOB_FAILURE_DETAIL
     try:
         with _scratch_environment(home):
             write_reviewer_home(
                 home,
-                os.environ.get("ORACLE_GATEWAY_URL", ""),
+                os.environ.get("REVIEW_GATEWAY_URL", ""),
                 Path(plan["omp_config"]).read_text(encoding="utf-8"),
                 bool(getattr(args, "allow_loopback_http", False)),
             )
@@ -2266,7 +2285,7 @@ def command_attempts(args: argparse.Namespace) -> int:
     adopting = processes.become_subreaper()
     try:
         if processes.IS_LINUX and not adopting:
-            _summary("oracle-verdict: error: the loop could not become a child subreaper")
+            _summary("review-verdict: error: the loop could not become a child subreaper")
             return 1
         for slot in range(ran + 1, int(plan["max_attempts"]) + 1):
             if classification is None:
@@ -2296,7 +2315,7 @@ def command_scan_disk(args: argparse.Namespace) -> int:
     excluded = [Path(item) for item in getattr(args, "exclude", ())]
     hits = disk_scan.scan([Path(root) for root in args.root], needles, excluded)
     for name, path in hits:
-        print(f"oracle-verdict: error: the value of {name} is on disk at {path}", file=sys.stderr)
+        print(f"review-verdict: error: the value of {name} is on disk at {path}", file=sys.stderr)
     _summary(f"disk scan of {len(args.root)} root(s) for {len(needles)} secret value(s): {len(hits)} hit(s)")
     return 1 if hits else 0
 
@@ -2308,7 +2327,7 @@ def command_redact_check(args: argparse.Namespace) -> int:
         try:
             redacted += redaction_check.sanitize(path, extra)
         except redaction_check.Unredactable as exc:
-            print(f"oracle-verdict: error: {exc}", file=sys.stderr)
+            print(f"review-verdict: error: {exc}", file=sys.stderr)
             return 1
     _summary(f"redaction check: {redacted} file(s) rewritten, no secret value remains")
     for item in getattr(args, "summary_file", ()):
@@ -2337,7 +2356,7 @@ def _gateway_accounts(path: Path, providers: list[str]) -> dict[str, list[str]]:
     }
     missing = [provider for provider, keys in accounts.items() if not keys]
     if missing:
-        raise SystemExit(f"oracle-verdict: error: no logged-in broker account for {', '.join(missing)}")
+        raise SystemExit(f"review-verdict: error: no logged-in broker account for {', '.join(missing)}")
     return accounts
 
 
@@ -2345,10 +2364,10 @@ def _gateway_client_token(path: Path) -> str:
     try:
         token = path.read_text(encoding="utf-8")
     except OSError as error:
-        raise SystemExit(f"oracle-verdict: error: cannot read the client token file {path}") from error
+        raise SystemExit(f"review-verdict: error: cannot read the client token file {path}") from error
     if len(token) < GATEWAY_TOKEN_MIN_LENGTH or token != token.strip():
         raise SystemExit(
-            f"oracle-verdict: error: the client token must be at least {GATEWAY_TOKEN_MIN_LENGTH} characters "
+            f"review-verdict: error: the client token must be at least {GATEWAY_TOKEN_MIN_LENGTH} characters "
             "with no surrounding whitespace"
         )
     return token
@@ -2359,9 +2378,9 @@ def _gateway_named_token_files(specs: list[str]) -> dict[str, Path]:
     for spec in specs:
         name, separator, path = spec.partition("=")
         if not separator or not name or not path:
-            raise SystemExit(f"oracle-verdict: error: --client expects NAME=TOKEN_FILE, got {spec!r}")
+            raise SystemExit(f"review-verdict: error: --client expects NAME=TOKEN_FILE, got {spec!r}")
         if name == GATEWAY_CLIENT or name in named:
-            raise SystemExit(f"oracle-verdict: error: duplicate gateway client name {name}")
+            raise SystemExit(f"review-verdict: error: duplicate gateway client name {name}")
         named[name] = Path(path)
     return named
 
@@ -2374,14 +2393,14 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
     for name, path in token_files.items():
         digest = hashlib.sha256(_gateway_client_token(path).encode("utf-8")).hexdigest()
         if digest in digests.values():
-            raise SystemExit(f"oracle-verdict: error: gateway client {name} shares its token with another client")
+            raise SystemExit(f"review-verdict: error: gateway client {name} shares its token with another client")
         digests[name] = digest
     models = gateway_models(yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8")))
     providers = list(dict.fromkeys(model.split("/", 1)[0] for model in models))
     unknown = [provider for provider in providers if provider not in credentials.GATEWAY_PROVIDERS]
     if unknown:
         raise SystemExit(
-            f"oracle-verdict: error: the reviewer config names providers the gateway does not serve: {unknown}"
+            f"review-verdict: error: the reviewer config names providers the gateway does not serve: {unknown}"
         )
     accounts = _gateway_accounts(Path(args.accounts), providers) if args.accounts else None
     clients: dict[str, dict[str, Any]] = {}
@@ -2520,7 +2539,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _register_passthrough(commands: Any) -> None:
     delegated: dict[str, tuple[str, str, str]] = {
-        "gate": ("Evaluate and post the oracle-gate status for a pull request head.", "gate", "run"),
+        "gate": ("Evaluate and post the review-gate status for a pull request head.", "gate", "run"),
         "promotion-check": (
             "Verify a theseus lock's artifact bytes and dependency closure against reviewed source.",
             "promotion_check",

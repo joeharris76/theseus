@@ -26,7 +26,7 @@ def _reviewed(harness: Harness, pr: int, branch: str) -> str:
     harness.github.open_pull(pr, branch)
     harness.script_omp([SHIP])
     run = harness.review(pr)
-    assert [item["state"] for item in harness.github.oracle_statuses(first)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(first)] == ["success"]
     assert run.plan["decision"] == "review"
     return first
 
@@ -41,7 +41,7 @@ def test_a_rebase_with_an_identical_merge_base_diff_carries_the_decision(harness
 
     assert run.plan["decision"] == "carry", run.plan["decision_reason"]
     assert harness.omp_calls() == 1
-    [status] = harness.github.oracle_statuses(head)
+    [status] = harness.github.review_statuses(head)
     assert status["state"] == "success" and status["description"].startswith(f"carried from {first[:12]}: SHIP")
     assert f"carried from head `{first}`" in harness.github.reviews[71][-1]["body"]
 
@@ -56,7 +56,7 @@ def test_a_rebase_onto_a_develop_that_changed_the_same_file_is_reviewed_again(ha
 
     assert run.plan["decision"] == "review", run.plan["decision_reason"]
     assert harness.omp_calls() == 2
-    [status] = harness.github.oracle_statuses(head)
+    [status] = harness.github.review_statuses(head)
     assert status["state"] == "success" and not status["description"].startswith("carried")
 
 
@@ -75,7 +75,7 @@ def test_an_edited_verdict_review_holds_instead_of_carrying_a_pass(harness: Harn
     assert run.plan["decision"] == "hold", run.plan["decision_reason"]
     assert "edited" in run.plan["decision_reason"]
     assert harness.omp_calls() == 1
-    assert [(item["state"], "carried" in item["description"]) for item in harness.github.oracle_statuses(head)] == [
+    assert [(item["state"], "carried" in item["description"]) for item in harness.github.review_statuses(head)] == [
         ("pending", False)
     ]
     assert len(harness.github.reviews[73]) == 1
@@ -90,4 +90,4 @@ def test_an_edited_verdict_review_holds_a_changed_patch_instead_of_reviewing_it(
 
     assert run.plan["decision"] == "hold", run.plan["decision_reason"]
     assert harness.omp_calls() == 1
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]

@@ -67,13 +67,13 @@ def test_a_verdict_from_one_consumers_app_does_not_satisfy_the_other_consumers_g
     assert beta.code == 3, beta.stderr
     refused = harness.github.gate_statuses(head)[-1]
     assert refused["state"] == "failure"
-    assert "waiting for the oracle's verdict" in refused["description"]
+    assert "waiting for the review's verdict" in refused["description"]
 
 
 def test_a_standin_from_one_consumers_owner_is_rejected_by_the_other(harness: Harness, beta_trusted: Path) -> None:
     head = harness.branch("feat/checker", {CHECKER: FIXED_CHECKER}, "guard None operands")
     harness.github.open_pull(42, "feat/checker")
-    _comment(harness, 42, f"Stand-in oracle review: APPROVE {head}", OWNER_TOKEN)
+    _comment(harness, 42, f"Stand-in review: APPROVE {head}", OWNER_TOKEN)
 
     alpha = harness.gate(42, head)
     assert alpha.code == 0, alpha.stderr
@@ -81,9 +81,9 @@ def test_a_standin_from_one_consumers_owner_is_rejected_by_the_other(harness: Ha
 
     beta = _gate(harness, beta_trusted, 42, head)
     assert beta.code == 3, beta.stderr
-    assert "waiting for the oracle's verdict" in harness.github.gate_statuses(head)[-1]["description"]
+    assert "waiting for the review's verdict" in harness.github.gate_statuses(head)[-1]["description"]
 
-    _comment(harness, 42, f"Stand-in oracle review: APPROVE {head}", BETA_TOKEN)
+    _comment(harness, 42, f"Stand-in review: APPROVE {head}", BETA_TOKEN)
     accepted = _gate(harness, beta_trusted, 42, head)
     assert accepted.code == 0, accepted.stderr
     assert "stand-in review attested by beta-owner" in harness.github.gate_statuses(head)[-1]["description"]

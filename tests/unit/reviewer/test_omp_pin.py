@@ -63,7 +63,7 @@ def test_the_committed_policy_pins_every_published_platform_with_https_urls_and_
         lambda data: data["omp"]["builds"].update({"../evil-x64": data["omp"]["builds"]["linux-x64"]}),
         lambda data: data["omp"]["builds"].update({"linux/x64": data["omp"]["builds"]["linux-x64"]}),
         lambda data: data["omp"]["builds"].update(
-            {"linux-x64\nORACLE_OMP_BINARY=/tmp/x": data["omp"]["builds"]["linux-x64"]}
+            {"linux-x64\nREVIEW_OMP_BINARY=/tmp/x": data["omp"]["builds"]["linux-x64"]}
         ),
         lambda data: data["omp"]["builds"].update({"Linux-X64": data["omp"]["builds"]["linux-x64"]}),
         lambda data: data["omp"]["builds"].update({"linux": data["omp"]["builds"]["linux-x64"]}),
@@ -425,7 +425,7 @@ def test_bare_python_disk_scan_runs_without_pyyaml(tmp_path: Path) -> None:
             "--root",
             str(tmp_path),
             "--env",
-            "NONEXISTENT_ORACLE_SMOKE_SECRET",
+            "NONEXISTENT_REVIEW_SMOKE_SECRET",
         ],
         cwd=root,
         env={**os.environ, "PYTHONPATH": str(root), "MUTANT_UNDER_TEST": ""},
@@ -439,7 +439,7 @@ def test_a_relative_cache_override_yields_an_absolute_binary_path_that_survives_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv(omp_pin.CACHE_ENV, ".cache/oracle-omp")
+    monkeypatch.setenv(omp_pin.CACHE_ENV, ".cache/review-omp")
     pin = _pin(target=omp_pin.current_platform())
     binary = omp_pin.install(pin, fetch=Fetcher())
     scratch = tmp_path / "scratch" / "omp-cwd"

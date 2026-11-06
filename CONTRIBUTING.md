@@ -2,7 +2,7 @@
 
 ## Merge policy
 
-Until a separately authenticated Theseus oracle gate is live, only merges whose full diff has been reviewed by the repository owner (`@joeharris76`) are allowed. A failing or absent gate is never permission to self-approve. Required status checks are necessary, not sufficient.
+Until a separately authenticated Theseus review gate is live, only merges whose full diff has been reviewed by the repository owner (`@joeharris76`) are allowed. A failing or absent gate is never permission to self-approve. Required status checks are necessary, not sufficient.
 
 Pull requests that change CI, workflows, release tooling, lock or installer logic, or anything that reads credentials need explicit owner review of the whole diff, including generated and vendored files.
 

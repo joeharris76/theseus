@@ -15,4 +15,4 @@ Owner actions on `joeharris76/theseus`. Repository, visibility, license and defa
 | Security | Private vulnerability reporting, Dependabot alerts and security updates enabled |
 | Tags | Tag protection or ruleset restricting release tags to the owner |
 
-The oracle gate's required check is added only by the later first-live-gate work, after a separately authenticated Theseus gate exists.
+The review gate's required check is added only by the later first-live-gate work, after a separately authenticated Theseus gate exists.

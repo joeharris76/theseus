@@ -16,7 +16,7 @@ from theseus_reviewer.policy import Policy
 
 pytestmark = [pytest.mark.unit, pytest.mark.medium]
 
-FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers" / "pr3902_compaction.json"
+FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "replays" / "pr3902_compaction.json"
 NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)
 COMPACTION_START = "auto_compaction_start"
 

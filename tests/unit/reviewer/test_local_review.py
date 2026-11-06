@@ -32,10 +32,10 @@ CLOUD_URL = "https://cloud-gateway.example.ts.net:4000"
 TYPESAFE_KEY = "tsk-live-" + "Zy9Xw8Vu" * 4
 TS_AUTHKEY = "tskey-auth-" + "Pq7Lm2Nv" * 4
 GITHUB_ACCESS = {"GH_TOKEN": "ghp_" + "a1B2c3D4" * 4, "GITHUB_TOKEN": "ghs_" + "e5F6g7H8" * 4}
-POLICY_RELATIVE = ".github/oracle-reviewers.yml"
+POLICY_RELATIVE = ".github/review.yml"
 SOUNDNESS_RELATIVE = ".github/soundness-paths.txt"
 INERT_RELATIVE = ".github/inert-paths.txt"
-OMP_CONFIG_RELATIVE = ".github/oracle-omp-config.yml"
+OMP_CONFIG_RELATIVE = ".github/review-omp-config.yml"
 POLICY_TEXT = POLICY_PATH.read_text(encoding="utf-8")
 MANIFEST_TEXT = (CONSUMER_ALPHA / SOUNDNESS_RELATIVE).read_text(encoding="utf-8")
 INERT_TEXT = (CONSUMER_ALPHA / INERT_RELATIVE).read_text(encoding="utf-8")
@@ -45,13 +45,13 @@ TRUSTED_FILES = (
     (INERT_RELATIVE, INERT_TEXT),
     (OMP_CONFIG_RELATIVE, OMP_CONFIG_TEXT),
 )
-HOST_TOKENS = {"ORACLE_HOST_TOKEN_LOCAL": LOCAL_TOKEN, "ORACLE_HOST_TOKEN_CLOUD": CLOUD_TOKEN}
+HOST_TOKENS = {"REVIEW_HOST_TOKEN_LOCAL": LOCAL_TOKEN, "REVIEW_HOST_TOKEN_CLOUD": CLOUD_TOKEN}
 WITHHELD_VALUES = {
     "TYPESAFE_API_KEY": TYPESAFE_KEY,
     "TS_AUTHKEY": TS_AUTHKEY,
     "OMP_GATEWAY_TOKEN": CLOUD_TOKEN,
-    "ORACLE_CLOUD_GATEWAY_TOKEN": CLOUD_TOKEN,
-    "ORACLE_GATEWAY_URL": CLOUD_URL,
+    "REVIEW_CLOUD_GATEWAY_TOKEN": CLOUD_TOKEN,
+    "REVIEW_GATEWAY_URL": CLOUD_URL,
     **GITHUB_ACCESS,
 }
 
@@ -94,8 +94,8 @@ def _judged(findings: list[dict[str, Any]], decision: str | None = None, max_def
 def test_the_state_directory_is_fixed_per_user_with_no_environment_override(
     home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("THESEUS_LOCAL_ORACLE_DIR", str(tmp_path / "elsewhere"))
-    assert local.state_dir() == home / ".cache" / "theseus" / "local-oracle"
+    monkeypatch.setenv("THESEUS_LOCAL_REVIEW_DIR", str(tmp_path / "elsewhere"))
+    assert local.state_dir() == home / ".cache" / "theseus" / "local-review"
     assert not hasattr(local, "STATE_DIR_ENV")
 
 
@@ -329,7 +329,7 @@ def _run(tmp_path: Path, key: str = TYPESAFE_KEY) -> local.Run:
 def _grants(run: local.Run, phase: str) -> set[str]:
     environ = run._environ(phase, run.grants(phase))
     return {name for name in environ if name in local.WITHHELD_FROM_PHASES or name in HOST_TOKENS} | {
-        name for name in ("ORACLE_GATEWAY_URL",) if name in environ
+        name for name in ("REVIEW_GATEWAY_URL",) if name in environ
     }
 
 
@@ -345,7 +345,7 @@ def test_every_phase_receives_exactly_the_secrets_it_needs(
     run = _run(tmp_path)
     key = {"TYPESAFE_API_KEY"}
     hosts = set(HOST_TOKENS)
-    gateway_pair = {"OMP_GATEWAY_TOKEN", "ORACLE_GATEWAY_URL"}
+    gateway_pair = {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"}
     monkeypatch.setattr(local, "_handed_over", {"TS_AUTHKEY": TS_AUTHKEY})
 
     assert _grants(run, "prepare") == key | set(GITHUB_ACCESS) | {"GH_ENTERPRISE_TOKEN"}
@@ -432,7 +432,7 @@ def test_a_second_review_of_the_same_patch_names_the_lock_holder_then_refuses(
         held.write("branch feat/other, started 2026-10-30 10:00:00Z")
         held.flush()
         fcntl.flock(held, fcntl.LOCK_EX)
-        with pytest.raises(local.Unavailable, match="another local oracle review of this patch"):
+        with pytest.raises(local.Unavailable, match="another local review of this patch"):
             with local.exclusive(lock, local.Reporter(), "branch feat/me"):
                 raise AssertionError("the lock must not be granted")
     assert "branch feat/other, started 2026-10-30 10:00:00Z" in capsys.readouterr().out
@@ -606,8 +606,8 @@ def test_cloud_credentials_read_the_proxy_from_the_gateway_status_file(
 ) -> None:
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
-    monkeypatch.setenv("ORACLE_GATEWAY_URL", CLOUD_URL)
-    monkeypatch.setenv("ORACLE_CLOUD_GATEWAY_TOKEN", CLOUD_TOKEN)
+    monkeypatch.setenv("REVIEW_GATEWAY_URL", CLOUD_URL)
+    monkeypatch.setenv("REVIEW_CLOUD_GATEWAY_TOKEN", CLOUD_TOKEN)
     assert local.resolve_credentials().proxy == ""
     _write_status(repo, "http://127.0.0.1:1055")
     assert local.resolve_credentials().proxy == "http://127.0.0.1:1055"
@@ -653,7 +653,7 @@ def test_a_cloud_session_without_the_cloud_client_refuses_instead_of_using_the_l
 
 
 def test_a_session_cannot_inject_a_reviewer_proxy_through_its_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ORACLE_GATEWAY_PROXY", "http://evil.example:8080")
+    monkeypatch.setenv("REVIEW_GATEWAY_PROXY", "http://evil.example:8080")
     assert not {"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "PI_PROXY"} & set(omp_env())
     with gateway_proxy("http://evil.example:8080"):
         assert not {"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "PI_PROXY"} & set(omp_env())
@@ -664,11 +664,11 @@ def test_a_session_cannot_inject_a_reviewer_proxy_through_its_environment(monkey
 
 def test_a_renamed_gate_file_still_flags_the_gate_through_its_old_path() -> None:
     plan = {
-        "gate_path_list": [".github/workflows/oracle-verdict.yml"],
+        "gate_path_list": [".github/workflows/review-verdict.yml"],
         "reviewed_files": [
             {
                 "path": ".github/workflows/renamed-review.yml",
-                "previous_path": ".github/workflows/oracle-verdict.yml",
+                "previous_path": ".github/workflows/review-verdict.yml",
                 "additions": 0,
                 "deletions": 0,
                 "status": "renamed",
@@ -676,11 +676,11 @@ def test_a_renamed_gate_file_still_flags_the_gate_through_its_old_path() -> None
         ],
     }
 
-    assert local.cli.plan_gate_flags(plan) == [".github/workflows/oracle-verdict.yml"]
+    assert local.cli.plan_gate_flags(plan) == [".github/workflows/review-verdict.yml"]
 
 
 def test_the_known_credential_names_cover_the_values_the_phases_withhold() -> None:
-    assert {"TYPESAFE_API_KEY", "OMP_GATEWAY_TOKEN", "ORACLE_GATEWAY_URL"} <= set(credentials.NAMES)
+    assert {"TYPESAFE_API_KEY", "OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"} <= set(credentials.NAMES)
     assert set(local.HOST_TOKEN_FILES) | {"TS_AUTHKEY", "GH_TOKEN"} <= local.WITHHELD_FROM_PHASES
 
 
@@ -885,7 +885,7 @@ def test_a_phase_runs_the_installed_package_from_the_trusted_root_with_the_trust
 
     def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         seen.update(argv=argv, cwd=kwargs["cwd"], env=kwargs["env"])
-        return subprocess.CompletedProcess(argv, 0, "slot 1: started\noracle-local: hello\n", "")
+        return subprocess.CompletedProcess(argv, 0, "slot 1: started\nreview-local: hello\n", "")
 
     run.runner = fake_run
     monkeypatch.setenv("PYTHONPATH", "/ambient")
@@ -950,7 +950,7 @@ def test_the_theseus_module_entry_refuses_an_unreadable_policy_without_a_base_re
 
 def test_an_empty_base_ref_defaults_to_the_gated_base_of_the_trusted_commits_policy(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo")
-    policy = repo / ".github" / "oracle-reviewers.yml"
+    policy = repo / ".github" / "review.yml"
     policy.parent.mkdir(parents=True)
     trusted_text = POLICY_PATH.read_text(encoding="utf-8")
     policy.write_text(trusted_text, encoding="utf-8")
@@ -958,7 +958,7 @@ def test_an_empty_base_ref_defaults_to_the_gated_base_of_the_trusted_commits_pol
     _git(repo, "commit", "--quiet", "-m", "policy")
     trusted = _git(repo, "rev-parse", "HEAD").strip()
     policy.write_text(trusted_text.replace("gated_base: develop", "gated_base: attacker-branch"), encoding="utf-8")
-    args = argparse.Namespace(base_ref="", trusted_ref=trusted, policy=".github/oracle-reviewers.yml")
+    args = argparse.Namespace(base_ref="", trusted_ref=trusted, policy=".github/review.yml")
 
     local._default_base_ref(args, repo)
 
@@ -982,7 +982,7 @@ def test_the_repository_comes_from_the_flag_then_the_environment_then_the_origin
     repo = _repo(tmp_path / "repo")
     monkeypatch.delenv(local.REPOSITORY_ENV, raising=False)
 
-    with pytest.raises(local.Refused, match="pass --repo or set ORACLE_LOCAL_REPOSITORY"):
+    with pytest.raises(local.Refused, match="pass --repo or set REVIEW_LOCAL_REPOSITORY"):
         local._repository(repo)
     _git(repo, "remote", "add", "origin", "git@github.com:acme/widgets.git")
     assert local._repository(repo) == "acme/widgets"

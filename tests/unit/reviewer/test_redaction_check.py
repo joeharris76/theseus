@@ -98,7 +98,7 @@ def test_sanitize_accepts_a_marker_without_a_secret(tmp_path: Path, monkeypatch:
 @pytest.mark.parametrize("data", ["AAAA", "eJwDAAAAAAE"])
 def test_sanitize_ignores_marker_shaped_text_no_reader_can_decode(tmp_path: Path, data: str) -> None:
     path = tmp_path / "review.json"
-    path.write_text(json.dumps({"detail": f"quoted <!-- oracle-protocol: v1 {data} -->"}), encoding="utf-8")
+    path.write_text(json.dumps({"detail": f"quoted <!-- review-protocol: v1 {data} -->"}), encoding="utf-8")
     assert redaction_check.sanitize(path, ()) is False
 
 
@@ -120,7 +120,7 @@ def test_sanitize_survives_a_deeply_nested_trailing_marker(tmp_path: Path, depth
     nested = b"[" * depth + b"]" * depth
     packed = base64.urlsafe_b64encode(zlib.compress(nested, 9)).decode("ascii").rstrip("=")
     path = tmp_path / "review.json"
-    path.write_text(json.dumps({"detail": f"<!-- oracle-protocol: v1 {packed} -->"}), encoding="utf-8")
+    path.write_text(json.dumps({"detail": f"<!-- review-protocol: v1 {packed} -->"}), encoding="utf-8")
     assert redaction_check.sanitize(path, ()) is False
 
 
@@ -132,7 +132,7 @@ def test_sanitize_finds_a_secret_in_a_deeply_nested_marker(tmp_path: Path, monke
     nested = b'{"a":' * 800 + json.dumps(TOKEN).encode() + b"}" * 800
     packed = base64.urlsafe_b64encode(zlib.compress(nested, 9)).decode("ascii").rstrip("=")
     path = tmp_path / "review.json"
-    path.write_text(json.dumps({"body": f"<!-- oracle-protocol: v1 {packed} -->"}), encoding="utf-8")
+    path.write_text(json.dumps({"body": f"<!-- review-protocol: v1 {packed} -->"}), encoding="utf-8")
     with pytest.raises(redaction_check.Unredactable):
         redaction_check.sanitize(path, ())
 

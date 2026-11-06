@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from theseus_reviewer import legacy
 from theseus_reviewer._vendor import yaml
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -57,10 +58,10 @@ def test_the_attempt_and_capture_artifacts_are_retained_for_thirty_days() -> Non
         for _, step in all_steps(document)
         if step.get("uses", "").startswith("actions/upload-artifact@")
     }
-    attempts = {name: days for name, days in uploads.items() if name.startswith("oracle-verdict-attempt-")}
-    assert sorted(attempts) == [f"oracle-verdict-attempt-{number}" for number in range(1, 6)]
+    attempts = {name: days for name, days in uploads.items() if name.startswith("review-verdict-attempt-")}
+    assert sorted(attempts) == [f"review-verdict-attempt-{number}" for number in range(1, 6)]
     assert set(attempts.values()) == {30}
-    assert uploads["oracle-verdict-capture"] == 30
+    assert uploads["review-verdict-capture"] == 30
 
 
 def test_every_action_in_every_workflow_is_pinned_to_a_full_commit_sha() -> None:
@@ -366,19 +367,19 @@ def test_the_app_is_minted_only_after_the_reviewer_has_run_and_the_result_is_fin
     mint = names.index("Mint the App token")
     for name in names:
         step = step_named(review, "review", name)
-        if "ORACLE_APP" in yaml.safe_dump(step):
+        if "REVIEW_APP" in yaml.safe_dump(step):
             assert name in {"Mint the App token", APP_REFUSAL}
     assert mint > max(i for i, name in enumerate(names) if "attempt loop" in name or "Run the attempt" in name)
     assert mint > names.index("Decide the verdict and redact every secret value from the results")
     assert mint < names.index("Post the result")
-    assert "ORACLE_APP_PRIVATE_KEY" not in yaml.safe_dump(
+    assert "REVIEW_APP_PRIVATE_KEY" not in yaml.safe_dump(
         [step.get("env") for _, step in all_steps(review) if "env" in step]
     )
 
 
 def test_gateway_and_provider_secrets_reach_only_the_phases_that_use_them() -> None:
     review = load(WORKFLOWS / "review.yml")
-    gateway = {"ORACLE_GATEWAY_TOKEN", "ORACLE_GATEWAY_URL"}
+    gateway = {"REVIEW_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"}
     for step in steps_of(review, "review"):
         used = set(SECRET.findall(yaml.safe_dump(step.get("env", {}))))
         if used & gateway:
@@ -409,7 +410,7 @@ def test_the_bridge_matches_the_review_workflow_name_not_its_file_name() -> None
     gate = load(WORKFLOWS / "gate.yml")
     inputs = gate["on"]["workflow_call"]["inputs"]
     condition = gate["jobs"]["bridge"]["if"]
-    assert inputs["review_workflow_name"]["default"] == "oracle-review"
+    assert inputs["review_workflow_name"]["default"] == "review-request"
     assert "github.event.workflow_run.name == inputs.review_workflow_name" in condition
     assert "github.event.workflow_run.repository.full_name == github.repository" in condition
     assert "path" not in condition
@@ -438,8 +439,8 @@ def callee_needs(callee_name: str) -> dict[str, str]:
 @pytest.mark.parametrize(
     ("example", "callee_name", "name", "group"),
     [
-        ("oracle-verdict.yml", "review.yml", "oracle-verdict", "oracle-verdict-"),
-        ("oracle-gate.yml", "gate.yml", "oracle-gate", "oracle-gate-"),
+        ("review-verdict.yml", "review.yml", "review-verdict", "review-verdict-"),
+        ("review-gate.yml", "gate.yml", "review-gate", "review-gate-"),
     ],
 )
 def test_the_example_callers_keep_protocol_names_pin_the_callee_and_grant_the_permission_ceiling(
@@ -457,7 +458,7 @@ def test_the_example_callers_keep_protocol_names_pin_the_callee_and_grant_the_pe
     uses, _, ref = job["uses"].partition("@")
     assert uses == f"joeharris76/theseus/.github/workflows/{callee_name}"
     assert ref == job["with"]["theseus_ref"] == PLACEHOLDER
-    assert job["with"]["environment"] == "oracle" and job["with"]["gated_base"] == "main"
+    assert job["with"]["environment"] == "review" and job["with"]["gated_base"] == "main"
     declared = set(load(WORKFLOWS / callee_name)["on"]["workflow_call"]["inputs"])
     assert set(job["with"]) <= declared
     required = {
@@ -471,16 +472,16 @@ def test_the_example_callers_keep_protocol_names_pin_the_callee_and_grant_the_pe
 def test_the_example_callers_use_distinct_noncolliding_concurrency_groups() -> None:
     groups = {
         load(EXAMPLES / name)["concurrency"]["group"].split("${{")[0].strip('"')
-        for name in ("oracle-verdict.yml", "oracle-gate.yml")
+        for name in ("review-verdict.yml", "review-gate.yml")
     }
-    assert groups == {"oracle-verdict-", "oracle-gate-"}
+    assert groups == {"review-verdict-", "review-gate-"}
     assert "ci-" not in "".join(groups)
 
 
 def test_the_example_bridge_trigger_names_the_workflow_that_the_review_event_caller_declares() -> None:
-    gate = load(EXAMPLES / "oracle-gate.yml")
-    review = load(EXAMPLES / "oracle-review.yml")
-    assert gate["on"]["workflow_run"]["workflows"] == [review["name"]] == ["oracle-review"]
+    gate = load(EXAMPLES / "review-gate.yml")
+    review = load(EXAMPLES / "review-request.yml")
+    assert gate["on"]["workflow_run"]["workflows"] == [review["name"]] == ["review-request"]
     assert gate["on"]["workflow_run"]["types"] == ["completed"]
     assert review["permissions"] == {}
     assert set(review["on"]) == {"pull_request_review"}
@@ -495,10 +496,10 @@ def test_the_callee_caller_workflow_defaults_match_the_example_file_names() -> N
     review_inputs = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["inputs"]
     gate_inputs = load(WORKFLOWS / "gate.yml")["on"]["workflow_call"]["inputs"]
     assert (
-        review_inputs["caller_workflow"]["default"] == "oracle-verdict.yml"
-        and (EXAMPLES / "oracle-verdict.yml").is_file()
+        review_inputs["caller_workflow"]["default"] == "review-verdict.yml"
+        and (EXAMPLES / "review-verdict.yml").is_file()
     )
-    assert gate_inputs["caller_workflow"]["default"] == "oracle-gate.yml" and (EXAMPLES / "oracle-gate.yml").is_file()
+    assert gate_inputs["caller_workflow"]["default"] == "review-gate.yml" and (EXAMPLES / "review-gate.yml").is_file()
 
 
 GUARD_STEP = "Refuse a malformed pin, a foreign caller or a dispatch from another branch"
@@ -512,9 +513,9 @@ def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
             "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "THESEUS_REF": "a" * 40,
             "GATED_BASE": "main",
-            "CALLER_WORKFLOW": "oracle-verdict.yml",
+            "CALLER_WORKFLOW": "review-verdict.yml",
             "TAILSCALE_TAG": tag,
-            "WORKFLOW_REF": "o/r/.github/workflows/oracle-verdict.yml@refs/heads/main",
+            "WORKFLOW_REF": "o/r/.github/workflows/review-verdict.yml@refs/heads/main",
             "REPOSITORY": "o/r",
             "EVENT_NAME": "push",
             "CURRENT_REF": "refs/heads/main",
@@ -525,17 +526,17 @@ def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_the_review_callee_takes_an_optional_tailscale_tag_that_defaults_to_the_shared_identity() -> None:
+def test_the_review_callee_requires_a_tailscale_tag_and_has_no_default_identity() -> None:
     document = load(WORKFLOWS / "review.yml")
     spec = document["on"]["workflow_call"]["inputs"]["tailscale_tag"]
-    assert spec["required"] is False and spec["type"] == "string" and spec["default"] == "tag:oracle-ci"
+    assert spec["required"] is True and spec["type"] == "string" and "default" not in spec
     assert step_named(document, "guard", GUARD_STEP)["env"]["TAILSCALE_TAG"] == "${{ inputs.tailscale_tag }}"
     join = step_named(document, "review", "Join the tailnet to reach the credential gateway")
     assert join["with"]["tags"] == "${{ inputs.tailscale_tag }}"
-    assert "tag:oracle-ci" not in yaml.safe_dump(document["jobs"])
+    assert "tag:" not in yaml.safe_dump(document["jobs"]).replace("tag:[a-z0-9-]", "")
 
 
-@pytest.mark.parametrize("tag", ["tag:oracle-ci", "tag:theseus-ci", "tag:a1-b2"])
+@pytest.mark.parametrize("tag", ["tag:review-ci", "tag:theseus-ci", "tag:a1-b2"])
 def test_the_guard_accepts_a_well_formed_tailscale_tag(tag: str) -> None:
     assert _guard_with_tag(tag).returncode == 0
 
@@ -544,9 +545,9 @@ def test_the_guard_accepts_a_well_formed_tailscale_tag(tag: str) -> None:
     "tag",
     [
         "",
-        "oracle-ci",
+        "review-ci",
         "tag:",
-        "tag:Oracle",
+        "tag:Review",
         "tag:a_b",
         "tag:a b",
         "tag:a,tag:b",
@@ -573,14 +574,14 @@ def test_a_secret_bearing_job_fails_loudly_first_when_the_app_secrets_are_empty(
     assert first["if"] == "env.HAS_APP != 'true'"
     result = subprocess.run(
         ["bash", "-c", first["run"]],
-        env={"PATH": "/usr/bin:/bin", "ENVIRONMENT": "oracle"},
+        env={"PATH": "/usr/bin:/bin", "ENVIRONMENT": "review"},
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 1
     assert result.stdout.startswith("::error::")
-    assert "environment oracle" in result.stdout
+    assert "environment review" in result.stdout
     declared = document["on"]["workflow_call"]["secrets"]
     assert all(secret in result.stdout for secret in declared)
     assert "inherit" not in result.stdout
@@ -606,15 +607,106 @@ def test_each_callee_declares_exactly_the_secrets_it_references_and_all_are_requ
 def test_the_callees_declare_the_secrets_the_docs_list() -> None:
     declared = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["secrets"]
     assert set(declared) == {
-        "ORACLE_APP_ID",
-        "ORACLE_APP_PRIVATE_KEY",
-        "ORACLE_GATEWAY_TOKEN",
-        "ORACLE_GATEWAY_URL",
+        "REVIEW_APP_ID",
+        "REVIEW_APP_PRIVATE_KEY",
+        "REVIEW_GATEWAY_TOKEN",
+        "REVIEW_GATEWAY_URL",
         "TS_OAUTH_CI_CLIENT_ID",
         "TS_OAUTH_CI_SECRET",
         "TYPESAFE_API_KEY",
     }
     assert set(load(WORKFLOWS / "gate.yml")["on"]["workflow_call"]["secrets"]) == {
-        "ORACLE_APP_ID",
-        "ORACLE_APP_PRIVATE_KEY",
+        "REVIEW_APP_ID",
+        "REVIEW_APP_PRIVATE_KEY",
     }
+
+
+@pytest.mark.parametrize(
+    ("example", "callee_name"), [("review-verdict.yml", "review.yml"), ("review-gate.yml", "gate.yml")]
+)
+def test_an_example_caller_that_maps_the_secrets_by_name_satisfies_the_callee_exactly(
+    example: str, callee_name: str
+) -> None:
+    (job,) = load(EXAMPLES / example)["jobs"].values()
+    declared = load(WORKFLOWS / callee_name)["on"]["workflow_call"]["secrets"]
+    assert set(job["secrets"]) == set(declared)
+    assert all(spec["required"] is True for spec in declared.values())
+    assert all(job["secrets"][name] == f"${{{{ secrets.{name} }}}}" for name in declared)
+    inputs = load(WORKFLOWS / callee_name)["on"]["workflow_call"]["inputs"]
+    required = {name for name, spec in inputs.items() if spec["required"]}
+    assert required <= set(job["with"])
+
+
+def test_the_review_secrets_are_the_declared_names_and_no_callee_declares_the_retired_ones() -> None:
+    review = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["secrets"]
+    assert {name for name in review if name.startswith("REVIEW_")} == {
+        "REVIEW_APP_ID",
+        "REVIEW_APP_PRIVATE_KEY",
+        "REVIEW_GATEWAY_TOKEN",
+        "REVIEW_GATEWAY_URL",
+    }
+    assert "OMP_GATEWAY_TOKEN" not in review
+    for path in [*WORKFLOWS.glob("*.yml"), *EXAMPLES.glob("*.yml")]:
+        text = STARTS_WITH.sub("", path.read_text(encoding="utf-8"))
+        assert legacy.WORD not in text.lower()
+
+
+def test_the_tailscale_tag_is_a_required_input_without_a_default_and_keeps_its_validation() -> None:
+    spec = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["inputs"]["tailscale_tag"]
+    assert spec["required"] is True and "default" not in spec
+    guard = steps_of(load(WORKFLOWS / "review.yml"), "guard")[0]["run"]
+    assert "^tag:[a-z0-9-]+$" in guard
+
+
+def test_the_default_consumer_files_and_caller_names_use_the_review_vocabulary() -> None:
+    review = load(WORKFLOWS / "review.yml")["on"]["workflow_call"]["inputs"]
+    gate = load(WORKFLOWS / "gate.yml")["on"]["workflow_call"]["inputs"]
+    assert review["policy_path"]["default"] == gate["policy_path"]["default"] == ".github/review.yml"
+    assert review["caller_workflow"]["default"] == "review-verdict.yml"
+    assert gate["caller_workflow"]["default"] == "review-gate.yml"
+    assert gate["review_workflow_name"]["default"] == "review-request"
+    assert load(EXAMPLES / "review-request.yml")["name"] == "review-request"
+
+
+COMMAND_PREFIXES = {"/review", "/oracle-review", "review adjudication:", "oracle adjudication:"}
+STANDIN_PREFIXES = {"stand-in review: approve", "stand-in oracle review: approve"}
+ADJUDICATION_PREFIXES = {"review adjudication: ", "oracle adjudication: "}
+STARTS_WITH = re.compile(r"startsWith\(github\.event\.(?:comment\.body|changes\.body\.from), '([^']*)'\)")
+
+
+def _prefixes(text: str) -> set[str]:
+    return {item.lower() for item in STARTS_WITH.findall(text)}
+
+
+def _starts(prefixes: set[str], body: str) -> bool:
+    return any(body.lower().startswith(prefix) for prefix in prefixes)
+
+
+def test_the_comment_expressions_group_only_exact_prefix_commands() -> None:
+    for path in (WORKFLOWS / "review.yml", EXAMPLES / "review-verdict.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert "contains(github.event.comment.body" not in text
+        assert _prefixes(text) == COMMAND_PREFIXES
+    prefixes = COMMAND_PREFIXES
+    for body in (
+        "/review",
+        "/Review",
+        "/oracle-review",
+        "/Oracle-Review again",
+        "Review adjudication: WITHDRAW D1 - x",
+    ):
+        assert _starts(prefixes, body)
+    for body in ("/cc please re-review", "> /review", "Owner instruction: see Review adjudication:", "see /review", ""):
+        assert not _starts(prefixes, body)
+
+
+def test_the_gate_expressions_match_only_exact_prefix_attestations() -> None:
+    for path in (WORKFLOWS / "gate.yml", EXAMPLES / "review-gate.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert "contains(github.event.comment.body, '" not in text.replace(
+            "contains(github.event.comment.body, 'Omp", ""
+        )
+        assert _prefixes(text) == STANDIN_PREFIXES | ADJUDICATION_PREFIXES
+    prefixes = STANDIN_PREFIXES | ADJUDICATION_PREFIXES
+    assert _starts(prefixes, "Stand-in Oracle Review: APPROVE " + "a" * 40)
+    assert not _starts(prefixes, "> Stand-in review: APPROVE " + "a" * 40)

@@ -24,7 +24,7 @@ BASE = "develop"
 
 def _run(**over: Any) -> dict[str, Any]:
     run = {
-        "path": ".github/workflows/oracle-verdict.yml",
+        "path": ".github/workflows/review-verdict.yml",
         "repository": {"full_name": REPO},
         "event": "issue_comment",
         "head_sha": SHA,
@@ -390,7 +390,7 @@ def test_latest_state_without_artifacts_is_none(monkeypatch: pytest.MonkeyPatch)
 
 def test_review_threads_pages_and_keeps_the_first_comment(monkeypatch: pytest.MonkeyPatch) -> None:
     pages = [
-        {"hasNextPage": True, "endCursor": "c1", "nodes": [_thread(False, "a.py", "benchbox-oracle", "**High**: A")]},
+        {"hasNextPage": True, "endCursor": "c1", "nodes": [_thread(False, "a.py", "benchbox-review", "**High**: A")]},
         {"hasNextPage": False, "endCursor": None, "nodes": [_thread(True, "b.py", None, "")]},
     ]
     calls: list[tuple[str, ...]] = []
@@ -407,7 +407,7 @@ def test_review_threads_pages_and_keeps_the_first_comment(monkeypatch: pytest.Mo
         {
             "resolved": False,
             "path": "a.py",
-            "author": "benchbox-oracle",
+            "author": "benchbox-review",
             "author_type": "Bot",
             "body": "**High**: A",
             "edited": False,
@@ -437,7 +437,7 @@ def test_review_threads_follow_a_thread_past_its_first_page_of_comments(monkeypa
     def comment(body: str) -> dict[str, Any]:
         return {"author": {"__typename": "User", "login": "joe"}, "authorAssociation": "OWNER", "body": body}
 
-    thread = _thread(False, "a.py", "benchbox-oracle", "**High**: A")
+    thread = _thread(False, "a.py", "benchbox-review", "**High**: A")
     thread["comments"] = {
         "pageInfo": {"hasNextPage": True, "endCursor": "k1"},
         "nodes": [thread["comments"]["nodes"][0], comment("early reply")],
@@ -495,12 +495,12 @@ def _serve_threads(monkeypatch: pytest.MonkeyPatch, nodes: list[dict[str, Any]])
     ids=["edited-later", "created-edit"],
 )
 def test_review_threads_flag_an_edited_first_comment(monkeypatch: pytest.MonkeyPatch, edit: dict[str, Any]) -> None:
-    _serve_threads(monkeypatch, [_thread(False, "a.py", "benchbox-oracle", "**High**: A", edit)])
+    _serve_threads(monkeypatch, [_thread(False, "a.py", "benchbox-review", "**High**: A", edit)])
     assert [thread["edited"] for thread in github.review_threads(REPO, 7)] == [True]
 
 
 def test_review_threads_refuse_a_first_comment_without_edit_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    node = _thread(False, "a.py", "benchbox-oracle", "**High**: A")
+    node = _thread(False, "a.py", "benchbox-review", "**High**: A")
     del node["comments"]["nodes"][0]["includesCreatedEdit"]
     _serve_threads(monkeypatch, [node])
     with pytest.raises(github.GitHubError, match="edit state"):
@@ -571,13 +571,13 @@ def test_review_edit_states_raise_when_gh_fails(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the fake gh is a POSIX shebang script and PATH is colon-joined")
-def test_oracle_reviews_reads_every_page_through_gh_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reviews_are_read_from_every_page_through_gh_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pages = [
         [
             {
                 "id": index,
                 "node_id": f"PRR_{index}",
-                "user": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+                "user": {"login": "benchbox-review[bot]", "type": "Bot"},
                 "body": f"r{index}",
             }
             for index in part
@@ -603,9 +603,9 @@ def test_oracle_reviews_reads_every_page_through_gh_api(tmp_path: Path, monkeypa
     )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{script.parent}:/usr/bin:/bin")
-    reviews = github.oracle_reviews(REPO, PR)
+    reviews = github.reviews(REPO, PR)
     assert [review["id"] for review in reviews] == list(range(151))
-    assert reviews[150]["login"] == "benchbox-oracle[bot]" and reviews[150]["body"] == "r150"
+    assert reviews[150]["login"] == "benchbox-review[bot]" and reviews[150]["body"] == "r150"
     assert reviews[150]["node_id"] == "PRR_150"
     argv = json.loads(argv_log.read_text(encoding="utf-8"))
     assert argv[0] == "api" and argv[-1] == f"repos/{REPO}/pulls/{PR}/reviews?per_page=100"
@@ -761,17 +761,17 @@ def test_failed_steps_names_every_step_that_failed_timed_out_or_was_cancelled(
 @pytest.mark.parametrize(
     ("creator", "expected"),
     [
-        ({"login": "benchbox-oracle[bot]", "type": "Bot"}, True),
-        ({"login": "benchbox-oracle", "type": "Bot"}, True),
-        ({"login": "benchbox-oracle[bot]", "type": "User"}, False),
+        ({"login": "benchbox-review[bot]", "type": "Bot"}, True),
+        ({"login": "benchbox-review", "type": "Bot"}, True),
+        ({"login": "benchbox-review[bot]", "type": "User"}, False),
         ({"login": "someone", "type": "User"}, False),
-        ("benchbox-oracle[bot]", False),
+        ("benchbox-review[bot]", False),
         ({}, False),
         (None, False),
     ],
 )
-def test_only_the_oracle_app_marks_a_status_as_its_own(creator: Any, expected: bool) -> None:
-    assert github.is_app_status({"creator": creator}, "benchbox-oracle") is expected
+def test_only_the_review_app_marks_a_status_as_its_own(creator: Any, expected: bool) -> None:
+    assert github.is_app_status({"creator": creator}, "benchbox-review") is expected
 
 
 def test_commit_statuses_lists_paginated_statuses_with_creator_metadata(
@@ -779,11 +779,11 @@ def test_commit_statuses_lists_paginated_statuses_with_creator_metadata(
 ) -> None:
     entries: list[Any] = [
         {
-            "context": "oracle-verdict",
+            "context": "review-verdict",
             "state": "pending",
             "description": "verdict in progress",
             "target_url": "https://github.com/BenchBox-dev/benchbox/actions/runs/1",
-            "creator": {"login": "benchbox-oracle[bot]", "type": "Bot"},
+            "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
             "created_at": "2026-10-26T17:35:11Z",
             "updated_at": "2026-10-26T17:35:11Z",
         },
@@ -800,7 +800,7 @@ def test_verdict_runs_retries_once_with_a_short_pause(monkeypatch: pytest.Monkey
     calls: list[tuple[str, ...]] = []
     pauses: list[float] = []
     payload = [
-        {"total_count": 1, "workflow_runs": [{"id": 3, "display_title": "oracle-verdict (workflow_dispatch pr=7)"}]}
+        {"total_count": 1, "workflow_runs": [{"id": 3, "display_title": "review-verdict (workflow_dispatch pr=7)"}]}
     ]
 
     def fake_gh(*args: str, accept: str | None = None) -> str:
@@ -812,7 +812,7 @@ def test_verdict_runs_retries_once_with_a_short_pause(monkeypatch: pytest.Monkey
     monkeypatch.setattr(github, "_gh", fake_gh)
     monkeypatch.setattr(github, "sleep", pauses.append)
     assert (
-        github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
+        github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
         == payload[0]["workflow_runs"]
     )
     assert len(calls) == 2 and all(call[:2] == ("--paginate", "--slurp") for call in calls)
@@ -824,7 +824,7 @@ def test_verdict_runs_retries_a_json_decode_error(monkeypatch: pytest.MonkeyPatc
     pauses: list[float] = []
     monkeypatch.setattr(github, "_gh", lambda *args, accept=None: next(replies))
     monkeypatch.setattr(github, "sleep", pauses.append)
-    assert github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [{"id": 3}]
+    assert github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [{"id": 3}]
     assert pauses == [github.RUN_LIST_PAUSE_SECONDS]
 
 
@@ -832,7 +832,7 @@ def test_verdict_runs_raises_a_github_error_when_the_json_stays_invalid(monkeypa
     monkeypatch.setattr(github, "_gh", lambda *args, accept=None: "not json")
     monkeypatch.setattr(github, "sleep", lambda seconds: None)
     with pytest.raises(github.GitHubError, match="invalid JSON"):
-        github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
+        github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
 
 
 def test_verdict_runs_raises_after_the_bounded_retries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -846,7 +846,7 @@ def test_verdict_runs_raises_after_the_bounded_retries(monkeypatch: pytest.Monke
     monkeypatch.setattr(github, "_gh", fake_gh)
     monkeypatch.setattr(github, "sleep", pauses.append)
     with pytest.raises(github.GitHubError, match="Bad Gateway"):
-        github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
+        github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
     assert len(calls) == github.RUN_LIST_ATTEMPTS
     assert pauses == [github.RUN_LIST_PAUSE_SECONDS]
 
@@ -859,12 +859,12 @@ def _listing(*titles: str, total: int | None = None) -> str:
 def test_in_flight_pulls_reads_every_page_of_each_active_status(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple[str, ...]] = []
     pages = {
-        "status=pending": _listing("oracle-verdict (workflow_dispatch pr=11)"),
-        "status=waiting": _listing("oracle-verdict (workflow_dispatch pr=12)"),
-        "status=requested": _listing("oracle-verdict (workflow_dispatch pr=13)"),
-        "status=queued": _listing("oracle-verdict (workflow_dispatch pr=7)"),
+        "status=pending": _listing("review-verdict (workflow_dispatch pr=11)"),
+        "status=waiting": _listing("review-verdict (workflow_dispatch pr=12)"),
+        "status=requested": _listing("review-verdict (workflow_dispatch pr=13)"),
+        "status=queued": _listing("review-verdict (workflow_dispatch pr=7)"),
         "status=in_progress": _listing(
-            "oracle-verdict (pull_request_target pr=9)", "oracle-verdict (schedule pr=sweep)"
+            "review-verdict (pull_request_target pr=9)", "review-verdict (schedule pr=sweep)"
         ),
     }
 
@@ -873,12 +873,12 @@ def test_in_flight_pulls_reads_every_page_of_each_active_status(monkeypatch: pyt
         return next(page for key, page in pages.items() if key in args[-1])
 
     monkeypatch.setattr(github, "_gh", fake_gh)
-    assert github.in_flight_pulls(REPO, "oracle-verdict.yml") == frozenset({7, 9, 11, 12, 13})
+    assert github.in_flight_pulls(REPO, "review-verdict.yml") == frozenset({7, 9, 11, 12, 13})
     assert seen == [
         (
             "--paginate",
             "--slurp",
-            f"repos/{REPO}/actions/workflows/oracle-verdict.yml/runs?status={status}&per_page=100",
+            f"repos/{REPO}/actions/workflows/review-verdict.yml/runs?status={status}&per_page=100",
         )
         for status in ("pending", "waiting", "requested", "queued", "in_progress")
     ]
@@ -886,10 +886,10 @@ def test_in_flight_pulls_reads_every_page_of_each_active_status(monkeypatch: pyt
 
 def test_in_flight_pulls_rejects_a_listing_shorter_than_its_reported_total(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        github, "_gh", lambda *args, accept=None: _listing("oracle-verdict (workflow_dispatch pr=11)", total=101)
+        github, "_gh", lambda *args, accept=None: _listing("review-verdict (workflow_dispatch pr=11)", total=101)
     )
     with pytest.raises(github.RunListingCapped):
-        github.in_flight_pulls(REPO, "oracle-verdict.yml")
+        github.in_flight_pulls(REPO, "review-verdict.yml")
 
 
 def test_post_status_posts_with_the_given_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -901,9 +901,9 @@ def test_post_status_posts_with_the_given_token(monkeypatch: pytest.MonkeyPatch)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(github.subprocess, "run", fake_run)
-    payload = {"state": "pending", "context": "oracle-verdict", "description": "d", "target_url": "u"}
+    payload = {"state": "pending", "context": "review-verdict", "description": "d", "target_url": "u"}
     github.post_status(REPO, SHA, payload, "app-token")
-    assert len(calls) == 1
+    assert len(calls) == 2
     argv, env = calls[0]
     assert argv[:4] == ["gh", "api", "--method", "POST"] and f"repos/{REPO}/statuses/{SHA}" in argv
     assert env["GH_TOKEN"] == "app-token" and environment.get("GH_TOKEN") != "app-token"
@@ -977,7 +977,7 @@ def test_dispatch_gate_runs_the_gate_workflow_from_develop_with_the_given_token(
         "gh",
         "workflow",
         "run",
-        "oracle-gate.yml",
+        "review-gate.yml",
         "--repo",
         REPO,
         "--ref",
@@ -1066,7 +1066,7 @@ def test_post_gate_raises_when_the_gate_could_not_be_posted(
 ) -> None:
     _fake_gate_command(monkeypatch, tmp_path, code)
     with pytest.raises(
-        github.GitHubError, match=f"could not post oracle-gate for #7 at {SHA}: exit {code}: gate output"
+        github.GitHubError, match=f"could not post review-gate for #7 at {SHA}: exit {code}: gate output"
     ):
         github.post_gate(REPO, 7, SHA, "app-token", tmp_path / "policy.yml")
 
@@ -1092,7 +1092,7 @@ def test_a_capped_runs_listing_raises_without_retrying(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(github, "sleep", lambda seconds: None)
     with pytest.raises(github.GitHubError, match=f"{runs} of {total} runs"):
-        github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
+        github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
     assert len(calls) == 1
 
 
@@ -1100,7 +1100,7 @@ def test_a_listing_without_a_total_count_raises(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(github, "_gh", lambda *args, accept=None: json.dumps([_page(1, None)]))
     monkeypatch.setattr(github, "sleep", lambda seconds: None)
     with pytest.raises(github.GitHubError, match="total run count"):
-        github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
+        github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC))
 
 
 def test_a_complete_listing_across_pages_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1109,7 +1109,7 @@ def test_a_complete_listing_across_pages_is_returned(monkeypatch: pytest.MonkeyP
         {"total_count": 3, "workflow_runs": [{"id": 3}]},
     ]
     monkeypatch.setattr(github, "_gh", lambda *args, accept=None: json.dumps(pages))
-    assert github.verdict_runs(REPO, "oracle-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [
+    assert github.verdict_runs(REPO, "review-verdict.yml", datetime(2026, 10, 19, tzinfo=UTC)) == [
         {"id": 1},
         {"id": 2},
         {"id": 3},
@@ -1119,11 +1119,11 @@ def test_a_complete_listing_across_pages_is_returned(monkeypatch: pytest.MonkeyP
 @pytest.mark.parametrize(
     ("title", "expected"),
     [
-        (f"oracle-verdict (workflow_dispatch pr=7 head={SHA})", ("7", SHA)),
-        (f"oracle-verdict (pull_request_target pr=9 head={SHA})", ("9", SHA)),
-        ("oracle-verdict (issue_comment pr=7)", ("7", None)),
-        ("oracle-verdict (schedule pr=sweep)", None),
-        ("oracle-verdict (workflow_dispatch pr=7 head=nothex)", None),
+        (f"review-verdict (workflow_dispatch pr=7 head={SHA})", ("7", SHA)),
+        (f"review-verdict (pull_request_target pr=9 head={SHA})", ("9", SHA)),
+        ("review-verdict (issue_comment pr=7)", ("7", None)),
+        ("review-verdict (schedule pr=sweep)", None),
+        ("review-verdict (workflow_dispatch pr=7 head=nothex)", None),
     ],
 )
 def test_run_titles_carry_the_pull_request_and_the_head(title: str, expected: tuple[str, str | None] | None) -> None:
@@ -1143,13 +1143,13 @@ def test_dispatch_passes_the_pull_request_and_its_head(
         "run",
         lambda argv, **kwargs: (calls.append(argv), subprocess.CompletedProcess(argv, 0, "", ""))[1],
     )
-    github.dispatch(REPO, "oracle-verdict.yml", 7, SHA, BASE, reason)
+    github.dispatch(REPO, "review-verdict.yml", 7, SHA, BASE, reason)
     assert calls == [
         [
             "gh",
             "workflow",
             "run",
-            "oracle-verdict.yml",
+            "review-verdict.yml",
             "--ref",
             "develop",
             "-f",
@@ -1181,7 +1181,7 @@ def _jobs_and_annotations(
 TIMEOUT_NOTE = {"annotation_level": "failure", "message": "The job has exceeded the maximum execution time of 5m0s"}
 CONCURRENCY_NOTE = {
     "annotation_level": "failure",
-    "message": "Canceling since a higher priority waiting request for oracle-verdict-pr-3291 exists",
+    "message": "Canceling since a higher priority waiting request for review-verdict-pr-3291 exists",
 }
 CANCELED_NOTE = {"annotation_level": "failure", "message": "The operation was canceled."}
 RUNNER_NOTE = {"annotation_level": "notice", "message": "The ubuntu-latest label will migrate to Ubuntu 26"}

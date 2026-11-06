@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import legacy
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
 from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
@@ -37,14 +38,14 @@ from .review_check import (
     path_matcher,
 )
 
-GATE_CONTEXT = "oracle-gate"
+GATE_CONTEXT = "review-gate"
 DESCRIPTION_LIMIT = 140
-PENDING_DESCRIPTION = "oracle-gate: evaluating this head"
+PENDING_DESCRIPTION = "review-gate: evaluating this head"
 PULL_READ_ATTEMPTS = 3
 PULL_READ_BACKOFF_SECONDS = 2
 HEAD_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 WAITING_EXIT = 3
-RESULT_FILE_ENV = "ORACLE_GATE_RESULT_FILE"
+RESULT_FILE_ENV = "REVIEW_GATE_RESULT_FILE"
 
 
 class UngatedBase(Exception):
@@ -104,6 +105,17 @@ def post_pending(token: str, repo: str, head_sha: str) -> None:
 
 
 def _post_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any]) -> None:
+    failures: list[CheckError] = []
+    for context in (*legacy.mirror_contexts(payload["context"]), payload["context"]):
+        try:
+            _post_one_payload(token, repo, head_sha, {**payload, "context": context})
+        except CheckError as exc:
+            failures.append(exc)
+    if failures:
+        raise CheckError("; ".join(str(item) for item in failures))
+
+
+def _post_one_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any]) -> None:
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         f"{API_ROOT}/repos/{repo}/statuses/{head_sha}",
@@ -216,7 +228,7 @@ def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, i
             reviews,
             base_date,
             statuses=statuses,
-            oracle_login=config.binding.bot_login,
+            review_login=config.binding.bot_login,
             rules=promo_policy,
             comments=comments,
         )
@@ -247,7 +259,7 @@ def _head_sha(value: str) -> str:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Post the oracle-gate commit status for a pull request head from the same "
+            "Post the review-gate commit status for a pull request head from the same "
             "decision the shared review checker reads."
         )
     )
@@ -262,13 +274,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _fail_closed(args: argparse.Namespace, token: str, exc: EvaluationFailed) -> int:
-    print(f"oracle-gate: error: {exc}", file=sys.stderr)
+    print(f"review-gate: error: {exc}", file=sys.stderr)
     if args.no_post:
         return ERROR
     try:
         post_status(token, args.repo, exc.head_sha, ERROR, f"{GATE_CONTEXT}: evaluation error: {exc}")
     except CheckError as post_exc:
-        print(f"oracle-gate: error: {post_exc}", file=sys.stderr)
+        print(f"review-gate: error: {post_exc}", file=sys.stderr)
     return ERROR
 
 
@@ -276,10 +288,10 @@ def _graphql_head(args: argparse.Namespace, token: str) -> str | None:
     try:
         head_sha = fetch_head_oid(token, args.repo, args.pr)
     except Exception as exc:
-        print(f"oracle-gate: error: cannot read the head of #{args.pr} through GraphQL: {exc}", file=sys.stderr)
+        print(f"review-gate: error: cannot read the head of #{args.pr} through GraphQL: {exc}", file=sys.stderr)
         return None
     if not isinstance(head_sha, str) or not HEAD_SHA_PATTERN.fullmatch(head_sha):
-        print(f"oracle-gate: error: GraphQL returned no usable head for #{args.pr}", file=sys.stderr)
+        print(f"review-gate: error: GraphQL returned no usable head for #{args.pr}", file=sys.stderr)
         return None
     return head_sha
 
@@ -289,7 +301,7 @@ def _owned_head(args: argparse.Namespace, token: str) -> str | None:
     if head_sha is None:
         return None
     if args.head_sha is not None and args.head_sha != head_sha:
-        print(f"oracle-gate: error: {args.head_sha} is not the head of #{args.pr}; nothing is posted", file=sys.stderr)
+        print(f"review-gate: error: {args.head_sha} is not the head of #{args.pr}; nothing is posted", file=sys.stderr)
         return None
     return head_sha
 
@@ -299,7 +311,7 @@ def _read_failed(args: argparse.Namespace, token: str, exc: Exception, known_hea
     if head_sha is None and not args.no_post:
         head_sha = _owned_head(args, token)
     if head_sha is None:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        print(f"review-gate: error: {exc}", file=sys.stderr)
         return ERROR
     return _fail_closed(args, token, EvaluationFailed(head_sha, exc))
 
@@ -308,13 +320,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
-        print("oracle-gate: error: GITHUB_TOKEN is not set", file=sys.stderr)
+        print("review-gate: error: GITHUB_TOKEN is not set", file=sys.stderr)
         return ERROR
     if args.repo.count("/") != 1:
-        print("oracle-gate: error: --repo must be OWNER/NAME", file=sys.stderr)
+        print("review-gate: error: --repo must be OWNER/NAME", file=sys.stderr)
         return ERROR
     if args.pending_first and args.no_post:
-        print("oracle-gate: error: --pending-first cannot be combined with --no-post", file=sys.stderr)
+        print("review-gate: error: --pending-first cannot be combined with --no-post", file=sys.stderr)
         return ERROR
     try:
         config = load_gate_config(args.policy, Path(args.root))
@@ -329,7 +341,7 @@ def mark_pending(args: argparse.Namespace, token: str, config: GateConfig) -> No
         if base == config.consumer.gated_base:
             post_pending(token, args.repo, head_sha)
     except (PullReadFailed, CheckError) as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        print(f"review-gate: error: {exc}", file=sys.stderr)
 
 
 def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
@@ -338,14 +350,14 @@ def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
     try:
         head_sha, status, message = evaluate(args.repo, args.pr, token, config)
     except UngatedBase as exc:
-        print(f"oracle-gate: {exc}")
+        print(f"review-gate: {exc}")
         return PASS
     except PullReadFailed as exc:
         return _read_failed(args, token, exc, None)
     except EvaluationFailed as exc:
         return _fail_closed(args, token, exc)
     except (CheckError, KeyError, ValueError) as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        print(f"review-gate: error: {exc}", file=sys.stderr)
         return ERROR
     print(message)
     if args.no_post:
@@ -353,14 +365,14 @@ def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
     try:
         latest_sha, latest_status, latest_message = evaluate(args.repo, args.pr, token, config)
     except UngatedBase as exc:
-        print(f"oracle-gate: {exc}")
+        print(f"review-gate: {exc}")
         return PASS
     except PullReadFailed as exc:
         return _read_failed(args, token, exc, head_sha)
     except EvaluationFailed as exc:
         return _fail_closed(args, token, exc)
     except (CheckError, KeyError, ValueError) as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        print(f"review-gate: error: {exc}", file=sys.stderr)
         return ERROR
     if (latest_sha, latest_status, latest_message) != (head_sha, status, message):
         print(latest_message)
@@ -368,7 +380,7 @@ def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
     try:
         post_status(token, args.repo, head_sha, status, message)
     except CheckError as exc:
-        print(f"oracle-gate: error: {exc}", file=sys.stderr)
+        print(f"review-gate: error: {exc}", file=sys.stderr)
         return ERROR
     return PASS if status == PASS else WAITING
 

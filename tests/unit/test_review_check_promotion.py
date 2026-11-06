@@ -12,7 +12,7 @@ from theseus_reviewer.policy import Binding, PromotionRules
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-POLICY_REL = ".github/oracle-reviewers.yml"
+POLICY_REL = ".github/review.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
 BINDING = CONFIG.binding
 PROMOTION_REPOSITORY = "joeharris76/theseus"
@@ -28,7 +28,7 @@ OLD_ART_HASH = "7" * 64
 NEW_ART_HASH = "8" * 64
 DELTA_HASH = "9" * 64
 RUN = "c" * 32
-ORACLE = "benchbox-oracle[bot]"
+REVIEW = "benchbox-review[bot]"
 SUBMITTED_AT = "2026-11-02T12:00:00Z"
 STATUS_AT = "2026-11-02T12:01:00Z"
 STANDIN_AT = "2026-11-02T12:05:00Z"
@@ -119,7 +119,7 @@ def _review(
     carried: bool = False,
     kind: str = protocol.FIRST,
     run_uuid: str = RUN,
-    login: str = ORACLE,
+    login: str = REVIEW,
     user_type: str = "Bot",
     last_edited_at: str | None = None,
     includes_created_edit: bool = False,
@@ -146,7 +146,7 @@ def _review(
     if promo is not None:
         record["promotion"] = promo
     body = (
-        f"### oracle-verdict: {state_header} for `{head_sha}`\n\n"
+        f"### review-verdict: {state_header} for `{head_sha}`\n\n"
         f"Decision: **{decision}**.\n\n"
         f"{protocol.encode_marker(record)}"
     )
@@ -167,10 +167,10 @@ def _status(state: str = "success", run_uuid: str = RUN, description_prefix: str
     suffix = f" [run {run_uuid}]" if run_uuid else ""
     return {
         "id": 20,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": f"{description_prefix}{suffix}",
-        "login": ORACLE,
+        "login": REVIEW,
         "user_type": "Bot",
         "created_at": STATUS_AT,
     }
@@ -180,7 +180,7 @@ def _standin(head_sha: str = HEAD) -> dict[str, Any]:
     return {
         "login": "joeharris76",
         "user_type": "User",
-        "body": f"Stand-in oracle review: APPROVE {head_sha}",
+        "body": f"Stand-in review: APPROVE {head_sha}",
         "created_at": STANDIN_AT,
         "updated_at": STANDIN_AT,
     }
@@ -241,7 +241,7 @@ def _evaluate_gate(
         len(chosen_files),
         used_reviews,
         statuses=used_statuses,
-        oracle_login=binding.bot_login,
+        review_login=binding.bot_login,
         rules=PromotionRules(
             repository=repository,
             bootstrap_baseline_commit=bootstrap_baseline_commit,
@@ -279,7 +279,7 @@ def _evaluate_gate(
 def test_valid_exact_head_promotion_record_with_valid_verdict_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     status, message = _evaluate_gate(monkeypatch, reviews=[_review(promo=_promo_dict())])
     assert status == review_check.PASS
-    assert "pass (oracle verdict" in message
+    assert "pass (review verdict" in message
 
 
 def test_promotion_refusal_and_is_promotion_still_hold_even_if_exempt_matcher_returns_false(
@@ -315,10 +315,10 @@ def test_missing_promotion_record_is_refused_even_with_ship_verdict_and_standin(
     )
     assert status == review_check.WAITING
     assert "theseus promotion refused" in message
-    assert "no oracle promotion evidence record" in message
+    assert "no review promotion evidence record" in message
 
 
-def test_standin_without_oracle_review_cannot_bypass_promotion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_standin_without_review_cannot_bypass_promotion(monkeypatch: pytest.MonkeyPatch) -> None:
     status, message = _evaluate_gate(
         monkeypatch,
         reviews=[],
@@ -332,15 +332,15 @@ def test_standin_without_oracle_review_cannot_bypass_promotion(monkeypatch: pyte
 @pytest.mark.parametrize(
     ("review_override", "expected_fragment"),
     [
-        ({"head_sha": OTHER_HEAD, "promo": _promo_dict(head_sha=OTHER_HEAD)}, "no unedited oracle promotion review"),
+        ({"head_sha": OTHER_HEAD, "promo": _promo_dict(head_sha=OTHER_HEAD)}, "no unedited review promotion review"),
         ({"promo": _promo_dict(old_source_sha256="0" * 64)}, "source hashes do not match"),
         ({"promo": _promo_dict(new_source_sha256="0" * 64)}, "source hashes do not match"),
         ({"promo": _promo_dict(old_artifact_sha256="0" * 64)}, "artifact hashes do not match"),
         ({"promo": _promo_dict(new_artifact_sha256="0" * 64)}, "artifact hashes do not match"),
         ({"promo": _promo_dict(delta_sha256="0" * 64)}, "delta digest does not match"),
         ({"promo": _promo_dict(lock_sha256="0" * 64)}, "lock_sha256 does not match"),
-        ({"login": "other-app[bot]", "promo": _promo_dict()}, "no unedited oracle promotion review"),
-        ({"login": "joeharris76", "user_type": "User", "promo": _promo_dict()}, "no unedited oracle promotion review"),
+        ({"login": "other-app[bot]", "promo": _promo_dict()}, "no unedited review promotion review"),
+        ({"login": "joeharris76", "user_type": "User", "promo": _promo_dict()}, "no unedited review promotion review"),
         ({"last_edited_at": STATUS_AT, "promo": _promo_dict()}, "edited after submission"),
         (
             {"carried": True, "kind": protocol.CARRY, "promo": _promo_dict()},
@@ -385,7 +385,7 @@ def test_unresolved_finding_blocks_promotion(monkeypatch: pytest.MonkeyPatch) ->
     defect = {
         "id": "D1",
         "severity": "Medium",
-        "file": ".oracle-promotion/new/src/theseus_reviewer/cli.py",
+        "file": ".review-promotion/new/src/theseus_reviewer/cli.py",
         "line": 12,
         "end_line": None,
         "title": "Unchecked return code",
@@ -431,7 +431,7 @@ def test_valid_promotion_record_still_requires_valid_verdict_status_and_run_bind
 def test_first_promotion_accepts_approved_bootstrap_baseline_and_forbids_later_bootstrap_bypass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    approved_map = {"_project/scripts/oracle_reviewers": "src/theseus_reviewer"}
+    approved_map = {"_project/scripts/reviewers": "src/theseus_reviewer"}
     bootstrap = {
         "baseline_repo": "BenchBox-dev/BenchBox",
         "baseline_commit": BASELINE_COMMIT,
@@ -508,7 +508,7 @@ def test_first_promotion_accepts_approved_bootstrap_baseline_and_forbids_later_b
     assert non_ancestor_status == review_check.WAITING
     assert "not an ancestor" in non_ancestor_msg
 
-    later_malformed = {**_review(promo=_promo_dict()), "id": 99, "body": "<!-- oracle-protocol: v1 broken -->"}
+    later_malformed = {**_review(promo=_promo_dict()), "id": 99, "body": "<!-- review-protocol: v1 broken -->"}
     malformed_status, malformed_msg = _evaluate_gate(
         monkeypatch,
         reviews=[_review(promo=_promo_dict()), later_malformed],
@@ -592,7 +592,7 @@ def test_ship_receipt_cannot_authorize_untrusted_dependency(
 def test_bootstrap_ship_receipt_cannot_replace_authenticated_exact_lock_approval(
     monkeypatch: pytest.MonkeyPatch, override: dict[str, Any] | None
 ) -> None:
-    path_map = {"_project/scripts/oracle_reviewers": "src/theseus_reviewer"}
+    path_map = {"_project/scripts/reviewers": "src/theseus_reviewer"}
     payload = json.loads(HEAD_LOCK)
     payload["bootstrap"] = {
         "baseline_repo": "BenchBox-dev/BenchBox",
@@ -657,13 +657,13 @@ def test_hosted_promotion_policy_comes_from_exact_base_commit(monkeypatch: pytes
     monkeypatch.setattr(gate, "fetch_text", trusted_policy)
     rules = gate.load_promotion_policy("tok", "BenchBox-dev/BenchBox", BASE_SHA, POLICY_REL)
     assert rules.dependencies == {"pyyaml==6.0.3": "f" * 64}
-    assert requests == [("BenchBox-dev/BenchBox", ".github/oracle-reviewers.yml", BASE_SHA)]
+    assert requests == [("BenchBox-dev/BenchBox", ".github/review.yml", BASE_SHA)]
 
 
-def test_the_promotion_review_must_come_from_the_bound_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_promotion_review_must_come_from_the_bound_review(monkeypatch: pytest.MonkeyPatch) -> None:
     reviews = [_review(promo=_promo_dict())]
     assert _evaluate_gate(monkeypatch, reviews=reviews)[0] == review_check.PASS
-    other = Binding("beta-oracle", frozenset({"beta-owner"}), "develop")
+    other = Binding("beta-review", frozenset({"beta-owner"}), "develop")
     status, message = _evaluate_gate(monkeypatch, reviews=reviews, binding=other)
     assert status == review_check.WAITING
     assert "waiting" in message or "promotion refused" in message

@@ -264,9 +264,9 @@ def test_more_than_one_json_value_is_not_a_verdict() -> None:
 
 
 def test_a_recorded_multi_turn_omp_review_yields_its_final_verdict() -> None:
-    stream = (
-        Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
-    ).read_text(encoding="utf-8")
+    stream = (Path(__file__).resolve().parents[2] / "fixtures" / "reviewers" / "omp_multi_turn_review.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert sum('"type":"message_end"' in line and '"role":"assistant"' in line for line in stream.splitlines()) > 1
     verdict = validate(parse_output("omp", stream))
     assert (verdict.decision, verdict.files_examined) == ("SHIP", ("benchbox/core/equivalence/checker.py",))
@@ -356,10 +356,10 @@ def test_incomplete_verdict_still_needs_a_string_reason() -> None:
         validate(_verdict(status="incomplete", decision="NONE", incomplete_reason=None))
 
 
-FORGED = "<!-- oracle-protocol: v1 eJwLzs9NTVHIzEvJzEtXSM7PKy4tSs1NzQMAqtIK0g -->"
+FORGED = "<!-- review-protocol: v1 eJwLzs9NTVHIzEvJzEtXSM7PKy4tSs1NzQMAqtIK0g -->"
 
 
-@pytest.mark.parametrize("variant", [FORGED, "< !-- oracle-protocol: v1 x -- >", "<!--oracle-defect: c1-D1-->"])
+@pytest.mark.parametrize("variant", [FORGED, "< !-- review-protocol: v1 x -- >", "<!--review-defect: c1-D1-->"])
 def test_model_text_cannot_carry_an_html_comment(variant: str) -> None:
     verdict = validate(
         _verdict(
@@ -372,7 +372,7 @@ def test_model_text_cannot_carry_an_html_comment(variant: str) -> None:
     for text in texts:
         assert "<!--" not in text and "-->" not in text
         assert re.search(r"<\s*!\s*-\s*-", text) is None and re.search(r"-\s*-\s*>", text) is None
-        assert "oracle-" in text
+        assert "review-" in text
 
 
 @pytest.mark.parametrize("count", [-1, True, 0])

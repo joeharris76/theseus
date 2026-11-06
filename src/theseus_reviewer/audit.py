@@ -214,7 +214,7 @@ def command_audit(args: argparse.Namespace) -> int:
         if not isinstance(capture, dict):
             raise Undetermined("the capture is not a JSON object")
         root = Path(args.repo_root).resolve()
-        work = Path(tempfile.mkdtemp(prefix="oracle-audit-"))
+        work = Path(tempfile.mkdtemp(prefix="review-audit-"))
         try:
             plan, plan_dir, head = _plan(args, root, work)
             workspace = _workspace(root, head, plan_dir, work / "workspace")

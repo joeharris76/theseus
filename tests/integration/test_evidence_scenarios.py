@@ -66,7 +66,7 @@ def test_a_file_list_brief_names_the_required_reads_and_a_retry_marks_the_missed
         ("verdict", None),
     ]
     assert attempts[0]["absence"]["unread"] == [CELLS]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["success"]
 
 
 def test_the_next_reviewer_after_two_incomplete_attempts_gets_a_brief_without_the_retry_marks(
@@ -86,7 +86,7 @@ def test_the_next_reviewer_after_two_incomplete_attempts_gets_a_brief_without_th
         ("medium", "absent"),
         ("large", "verdict"),
     ]
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def _large_review(
@@ -103,7 +103,7 @@ def test_a_content_confirmed_font_is_exempt_from_the_required_reads(harness: Har
 
     assert run.plan["evidence_files"] == [FONT, CHECKER]
     assert [(item["outcome"], item["absence"]) for item in run.attempts()] == [("verdict", None)]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["success"]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +119,7 @@ def test_a_binary_that_is_not_a_confirmed_font_still_needs_a_read(
     assert path in run.plan["evidence_files"]
     assert [item["absence"]["kind"] for item in run.attempts()] == ["incomplete"] * 5
     assert path in run.attempts()[0]["absence"]["detail"]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["pending"]
 
 
 def test_prose_is_exempt_only_when_it_is_not_source_or_soundness(harness: Harness) -> None:
@@ -129,7 +129,7 @@ def test_prose_is_exempt_only_when_it_is_not_source_or_soundness(harness: Harnes
 
     assert run.plan["evidence_files"] == [CHECKER, GUIDE]
     assert [(item["outcome"], item["absence"]) for item in run.attempts()] == [("verdict", None)]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["success"]
 
 
 def test_soundness_prose_and_source_stay_required(harness: Harness) -> None:
@@ -139,17 +139,17 @@ def test_soundness_prose_and_source_stay_required(harness: Harness) -> None:
     assert readme in run.plan["evidence_files"]
     assert [item["absence"]["kind"] for item in run.attempts()] == ["incomplete"] * 5
     assert readme in run.attempts()[0]["absence"]["detail"]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["pending"]
 
 
 def test_a_branch_cannot_add_its_own_exemption(harness: Harness) -> None:
-    policy = yaml.safe_load((ALPHA_ROOT / ".github" / "oracle-reviewers.yml").read_text(encoding="utf-8"))
+    policy = yaml.safe_load((ALPHA_ROOT / ".github" / "review.yml").read_text(encoding="utf-8"))
     policy.setdefault("evidence", {}).setdefault("exempt_paths", []).append("assets/*.dat")
     widened = yaml.safe_dump(policy, sort_keys=False)
 
-    run = _large_review(harness, 87, {".github/oracle-reviewers.yml": widened, "assets/table.dat": "1,2,3\n"})
+    run = _large_review(harness, 87, {".github/review.yml": widened, "assets/table.dat": "1,2,3\n"})
 
     assert "assets/table.dat" in run.plan["evidence_files"]
     assert [item["absence"]["kind"] for item in run.attempts()] == ["incomplete"] * 5
     assert "assets/table.dat" in run.attempts()[0]["absence"]["detail"]
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["pending"]

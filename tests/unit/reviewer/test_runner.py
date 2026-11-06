@@ -736,7 +736,7 @@ def test_a_reviewer_cannot_supply_its_own_defect_count(
     workspace, head = _workspace(tmp_path)
     _omp_says(tmp_path, monkeypatch, decision="SHIP_WITH_FIXES", defect_count=3)
     outcome = _review(policy, tmp_path, workspace, head)
-    assert outcome.missing == absence.Absence(absence.INVALID, "defect_count is set by the oracle, not the reviewer")
+    assert outcome.missing == absence.Absence(absence.INVALID, "defect_count is set by the review, not the reviewer")
 
 
 @skip_on_windows
@@ -863,7 +863,7 @@ def test_a_prior_defect_status_is_kept_in_the_recorded_verdict(
 @pytest.mark.parametrize(
     ("body", "changed"),
     [
-        ("open(sys.argv[0].rsplit('/bin/', 1)[0] + '/workspace/.oracle-pull-request.diff', 'a').write('+x\\n')", True),
+        ("open(sys.argv[0].rsplit('/bin/', 1)[0] + '/workspace/.review-pull-request.diff', 'a').write('+x\\n')", True),
         ("", False),
     ],
     ids=["rewritten", "untouched"],
@@ -1256,7 +1256,7 @@ def test_an_incomplete_reply_without_a_reason_reports_the_default_incomplete_rea
     )
 
 
-FIXTURE_EVENTS = Path(__file__).resolve().parents[2] / "fixtures" / "oracle_reviewers" / "omp_multi_turn_review.jsonl"
+FIXTURE_EVENTS = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers" / "omp_multi_turn_review.jsonl"
 DUMMY_GATEWAY_TOKEN = "dummy-gateway-token-for-tests-0123456789ABCDEFGHIJKLMNOP"
 
 

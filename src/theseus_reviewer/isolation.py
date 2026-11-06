@@ -29,9 +29,9 @@ def main() -> int:
     try:
         require_isolation()
     except (OSError, ValueError, KeyError) as exc:
-        print(f"oracle-verdict: isolation prerequisite failed: {exc}", file=sys.stderr)
+        print(f"review-verdict: isolation prerequisite failed: {exc}", file=sys.stderr)
         return 1
-    print("oracle-verdict: Linux non-root UID, ptrace capabilities and Yama prerequisite passed")
+    print("review-verdict: Linux non-root UID, ptrace capabilities and Yama prerequisite passed")
     return 0
 
 

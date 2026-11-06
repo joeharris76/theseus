@@ -18,7 +18,7 @@ from theseus_reviewer.verdict import Verdict
 
 pytestmark = [pytest.mark.unit, pytest.mark.medium]
 
-FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "reviewers" / "pr3942_coverage.json"
+FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "replays" / "pr3942_coverage.json"
 PROMOTION_DIFF = f"{promotion.STAGED_PROMOTION_DIR}/{promotion.UPSTREAM_DIFF_NAME}"
 DEFAULT_READ_LINES = 300
 NOW = datetime(2026, 11, 5, 12, 0, tzinfo=UTC)

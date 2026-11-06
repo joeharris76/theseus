@@ -77,7 +77,7 @@ def _first_round_with_a_critical(harness: Harness, pr: int) -> None:
     harness.github.open_pull(pr, "feat/checker")
     harness.script_omp([_reply("SHIP_WITH_FIXES", _defect("Critical"))])
     run = harness.review(pr)
-    assert [item["state"] for item in harness.github.oracle_statuses(run.plan["head_sha"])] == ["failure"]
+    assert [item["state"] for item in harness.github.review_statuses(run.plan["head_sha"])] == ["failure"]
 
 
 def test_an_existing_pull_request_with_a_carried_critical_blocks_even_when_the_new_diff_is_clean(
@@ -109,7 +109,7 @@ def test_an_edited_app_review_in_the_pull_requests_history_makes_the_review_refu
     review = harness.local_review("feat/checker")
 
     assert review.code == 2, review.stdout + review.stderr
-    assert "an oracle review was edited" in review.stderr
+    assert "a review was edited" in review.stderr
     assert harness.omp_calls() == calls
 
 
@@ -184,7 +184,7 @@ def test_a_planted_copy_of_the_local_gateway_token_in_a_scanned_root_fails_the_r
     review = _local(harness)
 
     assert review.code == 2, review.stdout + review.stderr
-    assert "ORACLE_HOST_TOKEN_LOCAL" not in review.stdout
+    assert "REVIEW_HOST_TOKEN_LOCAL" not in review.stdout
     assert "a secret value is on disk" in review.stderr
     assert GATEWAY_TOKEN not in review.stdout + review.stderr
     assert harness.omp_calls() == 0
@@ -272,8 +272,8 @@ def test_the_ci_and_local_adapters_plan_judge_and_map_the_same_patch_identically
     ci_plan = ci.plan
     _, ci_loaded, ci_step, ci_errors = cli.decided_attempts(
         ci_plan,
-        ci.temp / "oracle-attempts",
-        ci.temp / "oracle-classification" / cli.CLASSIFICATION_FILE,
+        ci.temp / "review-attempts",
+        ci.temp / "review-classification" / cli.CLASSIFICATION_FILE,
         ci.temp / "workspace",
     )
     ci_final = report.finalize(
@@ -320,7 +320,7 @@ def test_no_withheld_secret_is_readable_in_any_ancestor_environment_of_the_local
     [
         (".github/soundness-paths.txt", "file\tnothing/at/all.txt\n"),
         (".github/inert-paths.txt", "prefix\tbenchbox/core/equivalence/\n"),
-        (".github/oracle-reviewers.yml", "not: a policy\n"),
+        (".github/review.yml", "not: a policy\n"),
     ],
 )
 def test_a_branch_cannot_steer_its_own_review_by_editing_the_trusted_inputs(

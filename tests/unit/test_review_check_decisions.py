@@ -11,7 +11,7 @@ import pytest
 from conftest import CONSUMER_ALPHA
 from theseus_reviewer import gate, review_check
 
-POLICY_REL = ".github/oracle-reviewers.yml"
+POLICY_REL = ".github/review.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
 BINDING = CONFIG.binding
 POLICY_ARGS = ["--policy", POLICY_REL, "--root", str(CONSUMER_ALPHA)]
@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 HEAD = "a" * 40
 RUN = "1" * 32
-ORACLE = "benchbox-oracle[bot]"
+REVIEW = "benchbox-review[bot]"
 HEAD_DATE = "2026-10-01T12:00:00Z"
 AFTER_HEAD = "2026-10-01T13:00:00Z"
 RETARGETED = "2026-10-01T14:00:00Z"
@@ -51,17 +51,17 @@ def _body(run_uuid: str = RUN) -> str:
         "summary": "",
         "run_uuid": run_uuid,
     }
-    return f"### oracle-verdict: success for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
+    return f"### review-verdict: success for `{HEAD}`\n\nDecision: **SHIP**.\n\n{protocol.encode_marker(record)}"
 
 
 def _status(state: str = "success", created_at: str = AFTER_HEAD, **over: Any) -> dict[str, Any]:
     description = f"large: {state} [run {RUN}]" if state == "success" else f"large: {state}"
     status = {
         "id": 1,
-        "context": "oracle-verdict",
+        "context": "review-verdict",
         "state": state,
         "description": description,
-        "login": ORACLE,
+        "login": REVIEW,
         "user_type": "Bot",
         "created_at": created_at,
     }
@@ -71,7 +71,7 @@ def _status(state: str = "success", created_at: str = AFTER_HEAD, **over: Any) -
 def _receipt(**over: Any) -> dict[str, Any]:
     review = {
         "id": 1,
-        "login": ORACLE,
+        "login": REVIEW,
         "user_type": "Bot",
         "commit_id": HEAD,
         "state": "COMMENTED",
@@ -87,7 +87,7 @@ def _standin(created_at: str = AFTER_HEAD) -> dict[str, Any]:
     return {
         "login": "joeharris76",
         "user_type": "User",
-        "body": f"Stand-in oracle review: APPROVE {HEAD}",
+        "body": f"Stand-in review: APPROVE {HEAD}",
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -443,7 +443,7 @@ def test_fetch_reviews_keeps_every_field_the_gate_decides_on(net: Network) -> No
                 {
                     "id": 11,
                     "node_id": "N1",
-                    "user": {"login": ORACLE, "type": "Bot"},
+                    "user": {"login": REVIEW, "type": "Bot"},
                     "commit_id": HEAD,
                     "state": "COMMENTED",
                     "submitted_at": HEAD_DATE,
@@ -456,7 +456,7 @@ def test_fetch_reviews_keeps_every_field_the_gate_decides_on(net: Network) -> No
     }
     assert review_check.fetch_reviews("tok", "o/r", 7) == [
         {
-            "login": ORACLE,
+            "login": REVIEW,
             "user_type": "Bot",
             "commit_id": HEAD,
             "state": "COMMENTED",
@@ -579,7 +579,7 @@ def test_a_reviewed_pull_request_passes_and_every_call_uses_the_token_and_target
 ) -> None:
     _wire(net, files=SOUNDNESS, statuses=[_status()], reviews=[_receipt()])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"oracle-review: pass (oracle verdict for {HEAD})\n"
+    assert capsys.readouterr().out == f"review: pass (review verdict for {HEAD})\n"
     _authorized(net)
     assert set(net.paths()) == {
         "/repos/o/r/pulls/7",
@@ -599,15 +599,15 @@ def test_a_reviewed_pull_request_passes_and_every_call_uses_the_token_and_target
 def test_only_exempt_paths_pass_without_a_verdict(net: Network, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _wire(net, files=["NOTES.md"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == "oracle-review: only exempt paths changed\n"
+    assert capsys.readouterr().out == "review: only exempt paths changed\n"
 
 
 def test_the_reviewer_policy_gate_paths_keep_an_otherwise_exempt_change_under_review(
     net: Network, monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:
-    _wire(net, files=["_project/scripts/oracle_reviewers/templates/gate.md"], statuses=[], reviews=[])
+    _wire(net, files=["_project/scripts/reviewers/templates/gate.md"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.WAITING
-    assert "waiting for the oracle's verdict" in capsys.readouterr().out
+    assert "waiting for the review's verdict" in capsys.readouterr().out
 
 
 def test_a_retarget_voids_the_earlier_verdict_and_receipt_in_the_main_flow(
@@ -616,7 +616,7 @@ def test_a_retarget_voids_the_earlier_verdict_and_receipt_in_the_main_flow(
     timeline = [{"event": "base_ref_changed", "created_at": RETARGETED}]
     _wire(net, files=SOUNDNESS, statuses=[_status()], reviews=[_receipt()], timeline=timeline)
     assert _run(monkeypatch) == review_check.WAITING
-    assert "waiting for the oracle's verdict" in capsys.readouterr().out
+    assert "waiting for the review's verdict" in capsys.readouterr().out
     assert [
         request["body"] for request in net.requests if request["body"] and "id" in request["body"].get("variables", {})
     ] == []
@@ -641,13 +641,13 @@ def test_a_standin_attestation_is_read_from_the_pull_request_comments(
 ) -> None:
     comment = {
         "user": {"login": "joeharris76", "type": "User"},
-        "body": f"Stand-in oracle review: APPROVE {HEAD}",
+        "body": f"Stand-in review: APPROVE {HEAD}",
         "created_at": AFTER_HEAD,
         "updated_at": AFTER_HEAD,
     }
     _wire(net, files=SOUNDNESS, statuses=[], reviews=[], comments=[comment])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"oracle-review: pass (stand-in review attested by joeharris76 for {HEAD})\n"
+    assert capsys.readouterr().out == f"review: pass (stand-in review attested by joeharris76 for {HEAD})\n"
     _authorized(net)
 
 
@@ -658,7 +658,7 @@ def test_a_github_failure_is_reported_on_stderr_as_an_error(
     assert _run(monkeypatch) == review_check.ERROR
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("oracle-gate: error: ")
+    assert captured.err.startswith("review-gate: error: ")
     assert "500" in captured.err
 
 
@@ -669,7 +669,7 @@ def test_the_policy_exempt_paths_are_applied_to_the_pull_request_files(
     monkeypatch.setattr(gate, "load_gate_config", lambda policy_path, root: replace(CONFIG, policy=policy))
     _wire(net, files=["zz_exempt/a.txt"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == "oracle-review: only exempt paths changed\n"
+    assert capsys.readouterr().out == "review: only exempt paths changed\n"
 
 
 def _open_findings_status(description: str = "large: SHIP WITH FIXES, 2 defect(s) to fix") -> dict[str, Any]:
@@ -691,7 +691,7 @@ def test_a_carried_ship_with_fixes_verdict_also_rejects_a_standin() -> None:
     "description",
     [
         "large: DO NOT SHIP",
-        "pending: too large for the oracle",
+        "pending: too large for the review",
         "refused after 3 DO NOT SHIP decisions: open a new one",
     ],
 )
@@ -705,7 +705,7 @@ def test_a_standin_still_covers_absence() -> None:
 
 
 def test_a_standin_still_covers_an_edit_hold_even_with_open_findings() -> None:
-    hold = _status("pending", created_at=AFTER_RETARGET, description="an oracle review was edited")
+    hold = _status("pending", created_at=AFTER_RETARGET, description="a review was edited")
     standin = _standin("2026-10-01T16:00:00Z")
     assert _decide(statuses=[_open_findings_status(), hold], comments=[standin])[0] == review_check.PASS
 
@@ -720,7 +720,7 @@ def test_an_escalated_finding_names_the_exact_owner_action() -> None:
     escalated = _open_findings_status("large: SHIP WITH FIXES, 2 defect(s) to fix; escalated D1,D3")
     code, message = _decide(statuses=[escalated], comments=[_standin(AFTER_RETARGET)])
     assert code == review_check.WAITING
-    assert "D1,D3" in message and "Oracle adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in message
+    assert "D1,D3" in message and "Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in message
 
 
 def test_a_reposted_status_does_not_invalidate_a_standin_posted_before_it() -> None:

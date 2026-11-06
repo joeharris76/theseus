@@ -10,7 +10,7 @@ from .harness import CHECKER, REPO_ROOT, Harness
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
 FIXED_CHECKER = "def checker(a, b):\n    if a is None or b is None:\n        return False\n    return a == b\n"
-ANSWERS = REPO_ROOT / "tests" / "fixtures" / "oracle_reviewers" / "jev_recovery_answers.json"
+ANSWERS = REPO_ROOT / "tests" / "fixtures" / "reviewers" / "jev_recovery_answers.json"
 RAW_REPLY = "RAW-REPLY-SENTINEL looks fine to me, nothing to report"
 INVALID_REPLY = {"kind": "text", "text": RAW_REPLY}
 SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no defects.", "files_examined": [CHECKER]}
@@ -42,8 +42,8 @@ def test_a_stop_answer_ends_the_run_pending_without_another_reviewer(harness: Ha
     assert _reviewers(run) == ["medium"]
     recorded = run.attempts()[0]["recovery"]
     assert (recorded["choice"], recorded["source"], recorded["probability"]) == ("stop", "jev", 1.0)
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
-    status = json.loads((run.temp / "oracle-final" / "status.json").read_text(encoding="utf-8"))
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]
+    status = json.loads((run.temp / "review-final" / "status.json").read_text(encoding="utf-8"))
     assert "stopped: the process is blocked (the reviewer output is not JSON" in status["description"]
     assert run.steps["resume-1"].outputs["attempts"] == "1"
 
@@ -72,7 +72,7 @@ def test_an_escalate_answer_moves_up_to_the_next_reviewer(harness: Harness) -> N
     assert harness.omp_calls() == 2
     assert len(set(_reviewers(run))) == 2 and _reviewers(run)[0] == "medium"
     assert run.attempts()[0]["recovery"]["choice"] == "escalate"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def test_a_retry_answer_runs_the_same_reviewer_again(harness: Harness) -> None:
@@ -85,7 +85,7 @@ def test_a_retry_answer_runs_the_same_reviewer_again(harness: Harness) -> None:
     assert harness.omp_calls() == 2
     assert _reviewers(run) == ["medium", "medium"]
     assert run.attempts()[0]["recovery"]["choice"] == "retry"
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["success"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
 
 
 def test_an_unavailable_jev_retries_once_then_stops_and_never_escalates(harness: Harness) -> None:
@@ -100,4 +100,4 @@ def test_an_unavailable_jev_retries_once_then_stops_and_never_escalates(harness:
     first, second = (item["recovery"] for item in run.attempts())
     assert (first["choice"], first["source"], first["reason"]) == ("retry", "fallback", "unavailable")
     assert (second["choice"], second["source"]) == ("stop", "fallback")
-    assert [item["state"] for item in harness.github.oracle_statuses(head)] == ["pending"]
+    assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]

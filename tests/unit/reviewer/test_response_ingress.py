@@ -213,7 +213,7 @@ def test_missing_do_not_ship_summary_stays_invalid() -> None:
 
 
 def test_actual_pr3237_responses_preserve_unfixed_d6() -> None:
-    path = Path(__file__).resolve().parents[2] / "fixtures/oracle_reviewers/pr3237_missing_text_fields.json"
+    path = Path(__file__).resolve().parents[2] / "fixtures/reviewers/pr3237_missing_text_fields.json"
     for record in json.loads(path.read_text(encoding="utf-8")):
         with pytest.raises(VerdictError):
             validate(record["payload"])

@@ -32,22 +32,22 @@ WITHHELD = {
     "JOB_TOKEN": JOB_TOKEN,
     "TS_OAUTH_CI_SECRET": HELD_SECRET,
 }
-HELD_BY_THE_ATTEMPT_STEP = {"OMP_GATEWAY_TOKEN": GATEWAY_TOKEN, "ORACLE_GATEWAY_URL": GATEWAY_URL}
+HELD_BY_THE_ATTEMPT_STEP = {"OMP_GATEWAY_TOKEN": GATEWAY_TOKEN, "REVIEW_GATEWAY_URL": GATEWAY_URL}
 PHASE_SECRETS = {
     "prepare": {"GH_TOKEN", "PR_NUMBER", "TYPESAFE_API_KEY"},
     "scan-before": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "harness": set(),
     "scan-after-join": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "isolation": set(),
-    "attempts": {"OMP_GATEWAY_TOKEN", "ORACLE_GATEWAY_URL"},
+    "attempts": {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"},
     "recover-1": {"TYPESAFE_API_KEY"},
-    "resume-1": {"OMP_GATEWAY_TOKEN", "ORACLE_GATEWAY_URL"},
+    "resume-1": {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"},
     "scan-after-exit": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "finalize": {
         "OMP_INSTALL_STATE",
         "OMP_GATEWAY_TOKEN",
         "TYPESAFE_API_KEY",
-        "ORACLE_GATEWAY_URL",
+        "REVIEW_GATEWAY_URL",
         "TS_OAUTH_CI_CLIENT_ID",
         "TS_OAUTH_CI_SECRET",
         "JOB_TOKEN",
@@ -99,10 +99,10 @@ def test_every_phase_step_receives_exactly_the_secrets_its_workflow_step_names(h
 
     named = {key: set(step.get("env", {})) for key, step in phase_keys().values()}
     for key, passed in run.step_env.items():
-        assert set(passed) - {"ORACLE_APP_PRIVATE_KEY"} == named[key], key
+        assert set(passed) - {"REVIEW_APP_PRIVATE_KEY"} == named[key], key
     for key, expected in PHASE_SECRETS.items():
         assert named[key] == expected, key
-        assert set(run.step_env[key]) - {"ORACLE_APP_PRIVATE_KEY"} == expected, key
+        assert set(run.step_env[key]) - {"REVIEW_APP_PRIVATE_KEY"} == expected, key
 
 
 def test_nothing_a_phase_exports_to_later_steps_carries_a_withheld_secret(harness: Harness) -> None:

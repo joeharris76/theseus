@@ -34,7 +34,7 @@ def codex_enabled_policy() -> Policy:
 collect_ignore = ["test_local_review.py"] if sys.platform == "win32" else []
 
 WINDOWS_SKIP = pytest.mark.skip(
-    reason="the oracle reviewer tooling runs on Linux Actions runners: it uses POSIX paths, process groups and shebang CLIs"
+    reason="the reviewer tooling runs on Linux Actions runners: it uses POSIX paths, process groups and shebang CLIs"
 )
 
 

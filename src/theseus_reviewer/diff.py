@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 _FULL_HUNK = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
-STAGED_DIFF_NAME = ".oracle-pull-request.diff"
+STAGED_DIFF_NAME = ".review-pull-request.diff"
 
 
 @dataclass(frozen=True)

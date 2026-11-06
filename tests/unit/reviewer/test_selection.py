@@ -26,7 +26,7 @@ from theseus_reviewer.selection import (
 
 from .conftest import POLICY_PATH
 
-OMP_CONFIG = POLICY_PATH.parent / "oracle-omp-config.yml"
+OMP_CONFIG = POLICY_PATH.parent / "review-omp-config.yml"
 
 RETRYABLE = ("invalid", "incomplete", "empty", "error")
 

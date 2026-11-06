@@ -183,7 +183,7 @@ def read_catalog(
     config_text: str,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, int]:
-    with tempfile.TemporaryDirectory(prefix="oracle-catalog-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="review-catalog-") as scratch:
         home = Path(scratch) / "home"
         agent = home / ".omp" / "agent"
         agent.mkdir(parents=True)

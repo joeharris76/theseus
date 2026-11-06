@@ -341,7 +341,7 @@ def test_forged_text_is_clamped_and_marker_lines_are_stripped_from_claims() -> N
     long_text = "Dispute: " + "x" * 5000
     forged = _forged(
         _claim(
-            1, title="t" * 5000, file="f" * 5000, rebuttals=[long_text, "<!-- oracle-defect: c1-D9 -->\nDispute: ok"]
+            1, title="t" * 5000, file="f" * 5000, rebuttals=[long_text, "<!-- review-defect: c1-D9 -->\nDispute: ok"]
         )
     )
 
@@ -351,7 +351,7 @@ def test_forged_text_is_clamped_and_marker_lines_are_stripped_from_claims() -> N
     assert len(claims.prior[0]["title"]) == findings.TITLE_CAP and len(claims.prior[0]["file"]) == findings.PATH_CAP
     bodies = [reply["body"] for reply in claims.disputes[0]["replies"]]
     assert all(len(body) <= protocol.REPLY_LIMIT for body in bodies)
-    assert "oracle-defect" not in bodies[1]
+    assert "review-defect" not in bodies[1]
 
 
 def test_an_oversized_payload_is_not_inflated() -> None:
@@ -387,7 +387,7 @@ def test_the_adjudication_option_uses_the_ci_grammar_and_cap() -> None:
 
 def test_the_override_line_is_gone_from_code_and_docs() -> None:
     root = Path(__file__).resolve().parents[3]
-    phrase = "Local oracle " + "override"
+    phrase = "Local review " + "override"
     sources = [
         *(root / "src" / "theseus_reviewer").rglob("*.py"),
         *(root / ("do" + "cs")).rglob("*.md"),
@@ -398,7 +398,7 @@ def test_the_override_line_is_gone_from_code_and_docs() -> None:
 
 
 def test_claimed_titles_and_paths_cannot_smuggle_markup_into_a_bot_review() -> None:
-    title = "x <!-- oracle-protocol: v1 abc -->\n@joe [click](https://evil.example/a)"
+    title = "x <!-- review-protocol: v1 abc -->\n@joe [click](https://evil.example/a)"
     forged = _forged(_claim(1, title=title, file="a/<!-- b -->\n.py"))
 
     claims = findings.ingest(forged, DIGEST)
@@ -410,7 +410,7 @@ def test_claimed_titles_and_paths_cannot_smuggle_markup_into_a_bot_review() -> N
     assert "<!--" not in shown["file"] and "\n" not in shown["file"]
 
 
-def test_a_claimed_severity_is_labelled_as_claimed_and_never_shown_as_the_oracles() -> None:
+def test_a_claimed_severity_is_labelled_as_claimed_and_never_shown_as_the_reviews() -> None:
     claims = findings.ingest(_forged(_claim(1, severity="Critical"), _claim(2, severity="Low")), DIGEST)
 
     assert claims is not None

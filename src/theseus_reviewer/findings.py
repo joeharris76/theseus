@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import adjudication, dedup, protocol, redaction_check, report
+from . import adjudication, dedup, legacy, protocol, redaction_check, report
 from .policy import SEVERITIES
 from .verdict import MAX_LINE, PriorDefect, sanitize
 
@@ -26,7 +26,7 @@ PATH_CAP = 300
 EVIDENCE_CAP = 300
 RECORDED_DISPOSITIONS = 3
 RECORDED_REBUTTALS = 5
-MARKER_OPEN = "<!-- oracle-local-record:"
+MARKER_OPEN = "<!-- review-local-record:"
 MARKER_LIMIT = 30000
 INFLATE_LIMIT = 1 << 20
 AUTHOR = "local-review"
@@ -39,7 +39,10 @@ STATUSES = (OPEN, WITHDRAWN, FIXED, ADJUDICATED_WITHDRAWN, ADJUDICATED_MAINTAINE
 ADJUDICATION_GRAMMAR = (
     "WITHDRAW|MAINTAIN D<n> - <the owner's instruction naming the head, the finding and the decision>"
 )
-_MARKER = re.compile(rf"{re.escape(MARKER_OPEN)} v{RECORD_VERSION} (?P<data>[A-Za-z0-9_-]+) -->")
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.LOCAL_RECORD_MARKER_OPEN)}) v{RECORD_VERSION} "
+    rf"(?P<data>[A-Za-z0-9_-]+) -->"
+)
 _ID = re.compile(r"c([0-9]+)-(D[1-9][0-9]{0,3})")
 _SHORT = re.compile(r"D[1-9][0-9]{0,3}")
 _DIGEST = re.compile(r"[0-9a-f]{32}")
@@ -360,7 +363,7 @@ def export(record: Mapping[str, Any]) -> str | None:
 
 
 def decode_body(body: str) -> dict[str, Any] | None:
-    if (body or "").count(MARKER_OPEN) != 1:
+    if (body or "").count(MARKER_OPEN) + (body or "").count(legacy.LOCAL_RECORD_MARKER_OPEN) != 1:
         return None
     match = _MARKER.search(body)
     if match is None:
