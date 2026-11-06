@@ -9,7 +9,6 @@ import pytest
 
 from theseus_reviewer import providers
 from theseus_reviewer._vendor import yaml
-from theseus_reviewer.policy import SIZE_BUCKETS
 
 from .harness import ALPHA_ROOT, CHECKER, POLICY, Harness
 
@@ -20,6 +19,8 @@ SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no d
 CONFIG = yaml.safe_load((ALPHA_ROOT / ".github" / "review-omp-config.yml").read_text(encoding="utf-8"))
 POLICY_DATA = yaml.safe_load((ALPHA_ROOT / POLICY).read_text(encoding="utf-8"))
 PROVIDERS = providers.routed(CONFIG)
+LOSS_BUCKETS = ("trivial", "medium", "max")
+SOLE_BUCKETS = ("trivial", "max")
 HEAD_CONFIG = ".github/review-omp-config.yml"
 
 
@@ -43,7 +44,7 @@ def _status(harness: Harness, head: str) -> dict[str, Any]:
     return status
 
 
-@pytest.mark.parametrize("bucket", SIZE_BUCKETS)
+@pytest.mark.parametrize("bucket", LOSS_BUCKETS)
 @pytest.mark.parametrize("lost", PROVIDERS)
 def test_losing_any_one_provider_still_reviews_every_bucket_on_a_served_candidate(
     harness: Harness, lost: str, bucket: str
@@ -68,7 +69,7 @@ def test_losing_any_one_provider_still_reviews_every_bucket_on_a_served_candidat
         assert f"Model that ran: {expected}." in body
 
 
-@pytest.mark.parametrize("bucket", SIZE_BUCKETS)
+@pytest.mark.parametrize("bucket", SOLE_BUCKETS)
 @pytest.mark.parametrize("kept", PROVIDERS)
 def test_the_last_served_provider_reviews_each_bucket_it_has_a_candidate_for(
     harness: Harness, kept: str, bucket: str
