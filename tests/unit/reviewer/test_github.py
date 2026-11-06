@@ -1186,3 +1186,43 @@ def test_a_concurrency_or_manual_cancel_is_not_a_timeout(
 ) -> None:
     _jobs_and_annotations(monkeypatch, [{"id": 2, "conclusion": "cancelled"}], {2: notes})
     assert github.run_timed_out(REPO, 40216941595) is False
+
+
+def test_a_failing_gh_status_post_raises_after_attempting_both_contexts_legacy_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _recording_run(monkeypatch, returncode=1)
+    payload = {
+        "state": "failure",
+        "context": "review-verdict",
+        "description": "large: lists defects",
+        "target_url": "u",
+    }
+    with pytest.raises(github.GitHubError, match="could not post a status"):
+        github.post_status(REPO, SHA, payload, "app-token")
+    assert calls.count == 2
+    for index, context in enumerate(("oracle-verdict", "review-verdict")):
+        argv, _ = calls[index]
+        assert f"repos/{REPO}/statuses/{SHA}" in argv
+        assert f"context={context}" in argv
+        assert "state=failure" in argv
+        assert "description=large: lists defects" in argv
+
+
+def test_the_state_download_runs_gh_run_download_with_the_run_id_name_and_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _recording_run(monkeypatch)
+    github.download_state_artifact(REPO, "12345", "review-verdict-state-7", str(tmp_path))
+    assert calls[0][0] == [
+        "gh",
+        "run",
+        "download",
+        "12345",
+        "-n",
+        "review-verdict-state-7",
+        "-D",
+        str(tmp_path),
+        "-R",
+        REPO,
+    ]

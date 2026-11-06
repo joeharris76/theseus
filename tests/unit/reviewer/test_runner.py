@@ -1289,3 +1289,17 @@ def test_capture_scrubs_an_encoded_credential_used_as_an_argument_key(
     redaction_check.sanitize(path, ())
     assert encoded not in path.read_text(encoding="utf-8")
     assert "path" in captured["events"][0]["args"]
+
+
+@skip_on_windows
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind the superuser")
+def test_staging_returns_none_when_the_exclusive_create_fails(tmp_path: Path) -> None:
+    workspace, _ = _workspace(tmp_path)
+    source = tmp_path / "diff.patch"
+    source.write_text("+x\n", encoding="utf-8")
+    workspace.chmod(0o500)
+    try:
+        assert runner.stage_pull_request_diff(source, workspace) is None
+    finally:
+        workspace.chmod(0o700)
+    assert not (workspace / runner.STAGED_DIFF_NAME).exists()
