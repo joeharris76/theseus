@@ -77,7 +77,7 @@
     "capacity": {
       "huge": 936000,
       "large": 936000,
-      "max": 936000,
+      "max": 872000,
       "medium": 936000,
       "small": 336000,
       "trivial": 336000
@@ -363,5 +363,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #51: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 936000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nreview-verdict #51 <sha0>: success: medium: SHIP\n"
+  "summary": "review-verdict plan for #51: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nreview-verdict #51 <sha0>: success: medium: SHIP\n"
 }

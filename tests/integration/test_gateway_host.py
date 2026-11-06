@@ -14,7 +14,7 @@ from .harness import PINNED_OMP, REPO_ROOT, Harness, git
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
 HOST = REPO_ROOT / "tests" / "fixtures" / "gateway_host" / "host.sh"
-PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
+PROVIDERS = ("anthropic", "openai-codex", "google-antigravity")
 
 
 def _host(harness: Harness) -> tuple[Path, dict[str, str]]:

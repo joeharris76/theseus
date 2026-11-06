@@ -25,7 +25,6 @@ ACCOUNTS = {
     "accounts": [
         {"provider": "anthropic", "identityKey": "email:a@example.com"},
         {"provider": "openai-codex", "identityKey": "email:o@example.com"},
-        {"provider": "muse-code", "identityKey": "account:m@example.com"},
         {"provider": "google-antigravity", "identityKey": "email:g@example.com"},
         {"provider": "xai", "identityKey": "email:x@example.com"},
     ]
@@ -122,14 +121,13 @@ def test_gateway_clients_pin_each_gateway_provider_to_its_logged_in_accounts(tmp
     assert client["accounts"] == {
         "anthropic": ["email:a@example.com"],
         "openai-codex": ["email:o@example.com"],
-        "muse-code": ["account:m@example.com"],
         "google-antigravity": ["email:g@example.com"],
     }
 
 
 def test_gateway_clients_refuse_a_provider_without_a_logged_in_account(tmp_path: Path) -> None:
-    partial = {"accounts": [entry for entry in ACCOUNTS["accounts"] if entry["provider"] != "muse-code"]}
-    with pytest.raises(SystemExit, match="no logged-in broker account for muse-code"):
+    partial = {"accounts": [entry for entry in ACCOUNTS["accounts"] if entry["provider"] != "google-antigravity"]}
+    with pytest.raises(SystemExit, match="no logged-in broker account for google-antigravity"):
         _gateway_clients(tmp_path, accounts=partial)
     assert not (tmp_path / "clients.json").exists()
 
@@ -193,7 +191,6 @@ def test_gateway_clients_with_only_review_ci_write_the_single_client_file(tmp_pa
             "accounts": {
                 "openai-codex": ["email:o@example.com"],
                 "anthropic": ["email:a@example.com"],
-                "muse-code": ["account:m@example.com"],
                 "google-antigravity": ["email:g@example.com"],
             },
         }
