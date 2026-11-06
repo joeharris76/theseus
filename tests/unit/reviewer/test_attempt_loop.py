@@ -452,11 +452,10 @@ def test_the_loop_fails_closed_when_the_process_list_cannot_be_read(
     assert not (loop.attempts / attempts.artifact_name(2)).exists()
 
 
-def test_the_process_list_failing_to_start_is_reported_as_a_failed_exit_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    def refuse(*args: Any, **kwargs: Any) -> Any:
-        raise FileNotFoundError("ps")
-
-    monkeypatch.setattr(processes.subprocess, "Popen", refuse)
+def test_the_process_list_failing_to_start_is_reported_as_a_failed_exit_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(processes.HarnessLeakError, match="process list"):
         processes.snapshot()
 
