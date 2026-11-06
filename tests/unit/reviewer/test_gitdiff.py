@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -70,22 +72,66 @@ def test_build_reports_a_missing_remote(tmp_path: Path) -> None:
         gitdiff.build("owner/name", "a" * 40, "b" * 40, remote=(tmp_path / "absent").as_uri(), token="")
 
 
+class Recorder:
+    def __init__(self, banner: str | None = None) -> None:
+        self.banner = banner
+        self.calls: list[tuple[list[str], Path | None, dict[str, str]]] = []
+
+    def __call__(
+        self, argv: Sequence[str], cwd: Path | None = None, env: Mapping[str, str] | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
+        self.calls.append((list(argv), cwd, dict(env or {})))
+        if self.banner is not None:
+            return subprocess.CompletedProcess(list(argv), 0, self.banner.encode(), b"")
+        return gitdiff.run_process(argv, cwd, env)
+
+
 def test_token_travels_only_in_the_environment(monkeypatch: pytest.MonkeyPatch, remote: tuple[Path, str, str]) -> None:
     repo, base, head = remote
-    seen: list[tuple[list[str], dict[str, str]]] = []
-    real = subprocess.run
-
-    def spy(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        seen.append((argv, dict(kwargs.get("env") or {})))  # type: ignore[call-overload]
-        return real(argv, **kwargs)  # type: ignore[call-overload]
-
-    monkeypatch.setattr(gitdiff.subprocess, "run", spy)
+    recorder = Recorder()
     monkeypatch.setenv("GH_TOKEN", "never-in-argv")
-    gitdiff.build("owner/name", base, head, remote=repo.as_uri())
+    gitdiff.build("owner/name", base, head, remote=repo.as_uri(), runner=recorder)
+    seen = [(argv, env) for argv, _, env in recorder.calls]
     assert seen and all("never-in-argv" not in " ".join(argv) for argv, _ in seen)
     header = [value for _, env in seen for key, value in env.items() if key.startswith("GIT_CONFIG_VALUE_")]
     assert header and all(value.startswith("AUTHORIZATION: basic ") for value in header)
     assert all("GH_TOKEN" not in env for _, env in seen)
+
+
+def test_local_diff_runs_git_through_the_injected_runner(remote: tuple[Path, str, str]) -> None:
+    repo, base, head = remote
+    recorder = Recorder()
+    text = gitdiff.local_diff(repo, base, head, runner=recorder)
+    assert text == gitdiff.local_diff(repo, base, head)
+    assert [argv for argv, _, _ in recorder.calls] == [
+        ["git", "--version"],
+        ["git", f"--attr-source={gitdiff.EMPTY_TREE}", "diff", *gitdiff.DIFF_FLAGS, base, head],
+    ]
+    assert recorder.calls[1][1] == repo
+
+
+def test_build_runs_every_git_command_through_the_injected_runner(remote: tuple[Path, str, str]) -> None:
+    repo, base, head = remote
+    recorder = Recorder()
+    built = gitdiff.build("owner/name", base, head, remote=repo.as_uri(), token="", runner=recorder)
+    commands = [argv[1] for argv, _, _ in recorder.calls[1:]]
+    assert recorder.calls[0][0] == ["git", "--version"]
+    assert commands == [
+        "init",
+        "remote",
+        "fetch",
+        f"--attr-source={gitdiff.EMPTY_TREE}",
+        f"--attr-source={gitdiff.EMPTY_TREE}",
+    ]
+    assert built.paths == {"keep.py", "moved.py", "renamed.py", "gone.py", "added.py"}
+
+
+def test_a_runner_that_cannot_start_git_is_reported() -> None:
+    def broken(argv: Sequence[str], cwd: Path | None = None, env: Mapping[str, str] | None = None) -> Any:
+        raise OSError("no git")
+
+    with pytest.raises(gitdiff.GitVersionError, match="no git"):
+        gitdiff.local_diff(Path("."), "a", "b", runner=broken)
 
 
 def test_name_status_paths_include_both_sides_of_a_rename() -> None:
@@ -149,41 +195,33 @@ def test_head_tree_attributes_never_change_the_built_diff(tmp_path: Path, attrib
         ("", False),
     ],
 )
-def test_diff_arguments_require_attr_source_support_and_never_drop_the_flag(
-    monkeypatch: pytest.MonkeyPatch, banner: str, accepted: bool
-) -> None:
-    monkeypatch.setattr(gitdiff, "_probed_version", lambda: banner)
+def test_diff_arguments_require_attr_source_support_and_never_drop_the_flag(banner: str, accepted: bool) -> None:
+    recorder = Recorder(banner)
     if accepted:
-        for arguments in (gitdiff.diff_arguments("a", "b"), gitdiff.name_status_arguments("a", "b")):
+        for arguments in (
+            gitdiff.diff_arguments("a", "b", recorder),
+            gitdiff.name_status_arguments("a", "b", recorder),
+        ):
             assert arguments[0] == f"--attr-source={gitdiff.EMPTY_TREE}"
         return
     for call in (gitdiff.diff_arguments, gitdiff.name_status_arguments):
         with pytest.raises(gitdiff.GitVersionError, match="2.40"):
-            call("a", "b")
+            call("a", "b", recorder)
 
 
-def test_an_old_git_stops_both_builders_before_any_command_runs(
-    monkeypatch: pytest.MonkeyPatch, remote: tuple[Path, str, str]
-) -> None:
+def test_an_old_git_stops_both_builders_before_any_command_runs(remote: tuple[Path, str, str]) -> None:
     repo, base, head = remote
-    monkeypatch.setattr(gitdiff, "_probed_version", lambda: "git version 2.39.3 (Apple Git-146)")
-    ran: list[list[str]] = []
-    monkeypatch.setattr(gitdiff.subprocess, "run", lambda argv, **kwargs: ran.append(argv))
+    recorder = Recorder("git version 2.39.3 (Apple Git-146)")
     with pytest.raises(gitdiff.GitVersionError):
-        gitdiff.local_diff(repo, base, head)
+        gitdiff.local_diff(repo, base, head, runner=recorder)
     with pytest.raises(gitdiff.GitVersionError):
-        gitdiff.build("owner/name", base, head, remote=repo.as_uri(), token="")
-    assert ran == []
+        gitdiff.build("owner/name", base, head, remote=repo.as_uri(), token="", runner=recorder)
+    assert {tuple(argv) for argv, _, _ in recorder.calls} == {("git", "--version")}
 
 
-def test_the_git_version_is_probed_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[int] = []
-    monkeypatch.setattr(gitdiff, "_version_text", lambda: (calls.append(1), "git version 2.54.0")[1])
-    gitdiff._probed_version.cache_clear()
-    try:
-        for _ in range(3):
-            gitdiff.diff_arguments("a", "b")
-            gitdiff.name_status_arguments("a", "b")
-        assert calls == [1]
-    finally:
-        gitdiff._probed_version.cache_clear()
+def test_the_git_version_is_probed_once_per_runner() -> None:
+    recorder = Recorder("git version 2.54.0")
+    for _ in range(3):
+        gitdiff.diff_arguments("a", "b", recorder)
+        gitdiff.name_status_arguments("a", "b", recorder)
+    assert [argv for argv, _, _ in recorder.calls] == [["git", "--version"]]

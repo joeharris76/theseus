@@ -66,15 +66,20 @@ def _sized(plan: Mapping[str, Any], capacities: Mapping[str, int]) -> Verdict:
     chain: list[Reviewer] = [Reviewer.from_json(item) for item in plan["chain"]]
     held = {**plan, capacity.CAPACITY_KEY: dict(capacities), "pool_blocked_until": {}}
     step = selection.next_step(selection.SelectionInput.from_plan(held, datetime.now(UTC)), [])
+    enabled = [reviewer for reviewer in chain if reviewer.enabled]
+    unknown = [reviewer for reviewer in enabled if load and reviewer.name not in capacities]
     if step.kind == selection.REVIEW:
         advisories = [
-            f"{reviewer.name}: {capacity.skip_text(load, limit, known)}"
-            for reviewer in chain
-            if reviewer.enabled
-            for limit, known in (capacity.effective(capacities, reviewer.name),)
-            if load > limit
+            *(f"{reviewer.name}: {capacity.unknown_text('')}" for reviewer in unknown),
+            *(
+                f"{reviewer.name}: {capacity.skip_text(load, capacities[reviewer.name])}"
+                for reviewer in enabled
+                if reviewer.name in capacities and load > capacities[reviewer.name]
+            ),
         ]
         return reviewable(*advisories)
+    if unknown:
+        return undetermined(*step.reasons)
     if step.oversize:
         return refused(f"needs about {load} tokens of reading, above every reviewer's capacity; split")
     return refused(*step.reasons)

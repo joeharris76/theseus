@@ -7,9 +7,10 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 DIFF_FLAGS = ("--no-color", "--no-ext-diff", "--no-textconv", "-M")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -36,36 +37,49 @@ class BuiltDiff:
     paths: frozenset[str]
 
 
-def _version_text() -> str:
+class Runner(Protocol):
+    def __call__(
+        self, argv: Sequence[str], cwd: Path | None = None, env: Mapping[str, str] | None = None
+    ) -> subprocess.CompletedProcess[bytes]: ...
+
+
+def run_process(
+    argv: Sequence[str], cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(list(argv), cwd=cwd, capture_output=True, check=False, env=None if env is None else dict(env))
+
+
+def _version_text(runner: Runner) -> str:
     try:
-        result = subprocess.run(["git", "--version"], capture_output=True, check=False)
+        result = runner(["git", "--version"])
     except OSError as exc:
         raise GitVersionError(f"git could not run: {exc}") from exc
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
 @functools.cache
-def _probed_version() -> str:
-    return _version_text()
+def _probed_version(runner: Runner) -> str:
+    return _version_text(runner)
 
 
-def require_attr_source() -> None:
-    match = re.match(r"git version (\d+)\.(\d+)", _probed_version())
+def require_attr_source(runner: Runner = run_process) -> None:
+    version = _probed_version(runner)
+    match = re.match(r"git version (\d+)\.(\d+)", version)
     if match is None:
         raise GitVersionError(
             f"the git version could not be determined; git {MIN_GIT_VERSION_TEXT} or newer is required"
         )
     if (int(match.group(1)), int(match.group(2))) < MIN_GIT_VERSION:
-        raise GitVersionError(f"git {MIN_GIT_VERSION_TEXT} or newer is required ({_probed_version()})")
+        raise GitVersionError(f"git {MIN_GIT_VERSION_TEXT} or newer is required ({version})")
 
 
-def diff_arguments(base: str, head: str) -> list[str]:
-    require_attr_source()
+def diff_arguments(base: str, head: str, runner: Runner = run_process) -> list[str]:
+    require_attr_source(runner)
     return [*GLOBAL_FLAGS, "diff", *DIFF_FLAGS, base, head]
 
 
-def name_status_arguments(base: str, head: str) -> list[str]:
-    require_attr_source()
+def name_status_arguments(base: str, head: str, runner: Runner = run_process) -> list[str]:
+    require_attr_source(runner)
     return [*GLOBAL_FLAGS, "diff", "--name-status", "-z", "-M", base, head]
 
 
@@ -80,11 +94,9 @@ def name_status_paths(output: str) -> frozenset[str]:
     return frozenset(paths)
 
 
-def _run(args: list[str], cwd: Path, env: Mapping[str, str] | None = None) -> bytes:
+def _run(runner: Runner, args: list[str], cwd: Path, env: Mapping[str, str] | None = None) -> bytes:
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, check=False, env=None if env is None else dict(env)
-        )
+        result = runner(["git", *args], cwd, env)
     except OSError as exc:
         raise GitDiffError(f"git could not run: {exc}") from exc
     if result.returncode != 0:
@@ -94,8 +106,8 @@ def _run(args: list[str], cwd: Path, env: Mapping[str, str] | None = None) -> by
     return result.stdout
 
 
-def local_diff(root: Path, base: str, head: str) -> str:
-    return _run(diff_arguments(base, head), root).decode("utf-8", errors="replace")
+def local_diff(root: Path, base: str, head: str, runner: Runner = run_process) -> str:
+    return _run(runner, diff_arguments(base, head, runner), root).decode("utf-8", errors="replace")
 
 
 def _git_environment(server: str, token: str) -> dict[str, str]:
@@ -110,8 +122,16 @@ def _git_environment(server: str, token: str) -> dict[str, str]:
     return env
 
 
-def build(repo: str, merge_base: str, head: str, *, remote: str | None = None, token: str | None = None) -> BuiltDiff:
-    require_attr_source()
+def build(
+    repo: str,
+    merge_base: str,
+    head: str,
+    *,
+    remote: str | None = None,
+    token: str | None = None,
+    runner: Runner = run_process,
+) -> BuiltDiff:
+    require_attr_source(runner)
     server = os.environ.get("GITHUB_SERVER_URL", DEFAULT_SERVER)
     url = remote if remote is not None else f"{server.rstrip('/')}/{repo}.git"
     secret = token if token is not None else next((os.environ[name] for name in TOKEN_ENV if os.environ.get(name)), "")
@@ -119,11 +139,13 @@ def build(repo: str, merge_base: str, head: str, *, remote: str | None = None, t
     parent = os.environ.get("RUNNER_TEMP") or None
     workdir = Path(tempfile.mkdtemp(prefix="oracle-git-diff-", dir=parent))
     try:
-        _run(["init", "--bare", "--quiet"], workdir, env)
-        _run(["remote", "add", "origin", url], workdir, env)
-        _run(["fetch", *FETCH_FLAGS, "origin", merge_base, head], workdir, env)
-        text = _run(diff_arguments(merge_base, head), workdir, env).decode("utf-8", errors="replace")
-        listing = _run(name_status_arguments(merge_base, head), workdir, env).decode("utf-8", errors="replace")
+        _run(runner, ["init", "--bare", "--quiet"], workdir, env)
+        _run(runner, ["remote", "add", "origin", url], workdir, env)
+        _run(runner, ["fetch", *FETCH_FLAGS, "origin", merge_base, head], workdir, env)
+        text = _run(runner, diff_arguments(merge_base, head, runner), workdir, env).decode("utf-8", errors="replace")
+        listing = _run(runner, name_status_arguments(merge_base, head, runner), workdir, env).decode(
+            "utf-8", errors="replace"
+        )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     return BuiltDiff(text, name_status_paths(listing))

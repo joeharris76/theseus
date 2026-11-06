@@ -465,9 +465,11 @@ def test_removed_upstream_files_stage_under_old_and_duplicate_path_map_keys_fail
         promotion.parse_lock(json.dumps(colliding))
 
 
-def _preparation_inputs(*, bootstrap: bool = False) -> dict[str, Any]:
-    old_tree = {"src/theseus_reviewer/__init__.py": b"VALUE = 1\n"}
-    new_tree = {"src/theseus_reviewer/__init__.py": b"VALUE = 2\n"}
+def _preparation_inputs(
+    *, bootstrap: bool = False, old_extra: dict[str, bytes] | None = None, new_extra: dict[str, bytes] | None = None
+) -> dict[str, Any]:
+    old_tree = {"src/theseus_reviewer/__init__.py": b"VALUE = 1\n", **(old_extra or {})}
+    new_tree = {"src/theseus_reviewer/__init__.py": b"VALUE = 2\n", **(new_extra or {})}
     wheel, wheel_sha = _build_wheel("theseus-reviewer", "0.2.0", {"theseus_reviewer/__init__.py": b"VALUE = 2\n"})
     dependency, dependency_sha = _build_wheel("pyyaml", "6.0.3", {"pyyaml/__init__.py": b"SAFE = True\n"})
     head = _lock_payload(
@@ -889,9 +891,9 @@ CONSUMER_WORKFLOWS = {
     ".github/workflows/oracle.yml": (
         "jobs:\n"
         "  review:\n"
-        f"    uses: {THESEUS}/.github/workflows/review.yml@v1\n"
+        f"    uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"
         "  gate:\n"
-        f"    uses: '{THESEUS}/.github/workflows/gate.yml@v1'\n"
+        f"    uses: '{THESEUS}/.github/workflows/gate.yml@{SHA_B}'\n"
         "  other:\n"
         "    uses: someone/else/.github/workflows/review.yml@v1\n"
         "  # uses: joeharris76/theseus/.github/workflows/commented.yml@v1\n"
@@ -931,7 +933,8 @@ def _surface(tree: dict[str, bytes], workflows: dict[str, str] | None = None, *,
         tree,
         package="theseus-reviewer",
         repository=THESEUS,
-        consumer_workflows=CONSUMER_WORKFLOWS if workflows is None else workflows,
+        consumer_workflows=(chosen := CONSUMER_WORKFLOWS if workflows is None else workflows),
+        pins=dict.fromkeys(chosen, SHA_B),
         strict=strict,
     )
 
@@ -1023,7 +1026,7 @@ def test_nested_workflow_references_inside_the_theseus_tree_are_followed() -> No
     }
     assert ".github/workflows/ci.yml" in _surface(tree)
     tree[".github/workflows/review.yml"] = (
-        f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/missing.yml@v1\n".encode()
+        f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/missing.yml@{SHA_B}\n".encode()
     )
     with pytest.raises(promotion.PromotionError, match="missing.yml"):
         _surface(tree)
@@ -1034,7 +1037,9 @@ def test_missing_referenced_workflow_holds() -> None:
     with pytest.raises(promotion.PromotionError, match="gate.yml.*missing"):
         _surface(tree)
     inputs = _preparation_inputs()
-    inputs["workflow_loader"] = lambda _ref: CONSUMER_WORKFLOWS
+    inputs["workflow_loader"] = lambda ref: {
+        name: text.replace(SHA_B, SHA_C) if ref == SHA_C else text for name, text in CONSUMER_WORKFLOWS.items()
+    }
     with pytest.raises(promotion.PromotionError, match="missing from the promoted source"):
         promotion.prepare_promotion(**inputs)
 
@@ -1070,7 +1075,7 @@ def test_removed_executed_file_is_required_and_removed_other_file_is_not() -> No
 
 
 def test_flow_style_workflow_reference_is_found() -> None:
-    workflows = {"w.yml": f"jobs: {{gate: {{uses: '{THESEUS}/.github/workflows/gate.yml@abc'}}}}\n"}
+    workflows = {"w.yml": f"jobs: {{gate: {{uses: '{THESEUS}/.github/workflows/gate.yml@{SHA_B}'}}}}\n"}
     assert ".github/workflows/gate.yml" in _surface(SURFACE_NEW, workflows)
     assert ".github/workflows/review.yml" not in _surface(SURFACE_NEW, workflows)
 
@@ -1079,7 +1084,7 @@ def test_anchored_and_aliased_workflow_reference_is_found() -> None:
     workflows = {
         "w.yml": (
             "x-shared: &shared\n"
-            f"  uses: {THESEUS}/.github/workflows/review.yml@abc\n"
+            f"  uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"
             "jobs:\n"
             "  first: *shared\n"
             "  second:\n"
@@ -1097,7 +1102,7 @@ def test_unparseable_workflow_holds() -> None:
 def test_workflow_references_from_the_base_widen_the_surface() -> None:
     inputs = _preparation_inputs()
     inputs["workflow_loader"] = lambda ref: (
-        {"w.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@abc\n"} if ref == SHA_C else {}
+        {"w.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_C}\n"} if ref == SHA_C else {}
     )
     with pytest.raises(promotion.PromotionError, match="gate.yml"):
         promotion.prepare_promotion(**inputs)
@@ -1115,3 +1120,174 @@ def test_delta_digest_unchanged_by_rename_detection() -> None:
     assert promotion.compute_upstream_delta(moved_new, moved_old)[2] == (
         "9d5e1a48d28478fcd2d531dbf47ca6bc14c873932d7973f8dd0adaa9f121abce"
     )
+
+
+def _surface_pair(
+    old: dict[str, bytes],
+    new: dict[str, bytes],
+    base_workflows: dict[str, str],
+    head_workflows: dict[str, str],
+) -> tuple[frozenset[str], frozenset[str]]:
+    return _surface(new, {**base_workflows, **head_workflows}), _surface(old, base_workflows, strict=False)
+
+
+def test_newly_referenced_workflow_is_required_whole() -> None:
+    old = {**SURFACE_OLD, ".github/workflows/gate.yml": b"a\nb\nc\nd\n"}
+    new = {**SURFACE_NEW, ".github/workflows/gate.yml": b"a\nb\nc\nD\n"}
+    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{SHA_B}\n"}
+    head = {"h.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_B}\n"}
+    surface, old_surface = _surface_pair(old, new, base, head)
+    assert ".github/workflows/gate.yml" in surface
+    assert ".github/workflows/gate.yml" not in old_surface
+    changed, _, _ = promotion.compute_upstream_delta(old, new)
+    required, whole = promotion.read_requirements(changed, old, new, surface, old_surface)
+    assert f"{STAGED_NEW}.github/workflows/gate.yml" in required
+    assert f"{STAGED_NEW}.github/workflows/gate.yml" in whole
+    assert f"{STAGED_NEW}.github/workflows/review.yml" not in whole
+
+
+def test_workflow_referenced_by_the_base_needs_only_its_hunks() -> None:
+    old = {**SURFACE_OLD, ".github/workflows/gate.yml": b"a\nb\nc\nd\n"}
+    new = {**SURFACE_NEW, ".github/workflows/gate.yml": b"a\nb\nc\nD\n"}
+    base = {"b.yml": f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/gate.yml@{SHA_B}\n"}
+    surface, old_surface = _surface_pair(old, new, base, {})
+    changed, _, _ = promotion.compute_upstream_delta(old, new)
+    required, whole = promotion.read_requirements(changed, old, new, surface, old_surface)
+    assert f"{STAGED_NEW}.github/workflows/gate.yml" in required
+    assert f"{STAGED_NEW}.github/workflows/gate.yml" not in whole
+
+
+def test_preparation_requires_a_workflow_newly_referenced_by_the_head_whole() -> None:
+    gate = ".github/workflows/gate.yml"
+    inputs = _preparation_inputs(old_extra={gate: b"a\nb\nc\nd\n"}, new_extra={gate: b"a\nb\nc\nD\n"})
+    reference = f"jobs:\n  a:\n    uses: {THESEUS}/{gate}@{SHA_B}\n"
+    base_reference = f"jobs:\n  a:\n    uses: {THESEUS}/{gate}@{SHA_C}\n"
+    inputs["workflow_loader"] = lambda ref: {"w.yml": reference} if ref == SHA_A else {}
+    bundle = promotion.prepare_promotion(**inputs)
+    assert f"{STAGED_NEW}{gate}" in bundle.required_paths
+    assert f"{STAGED_NEW}{gate}" in bundle.whole_paths
+    inputs["workflow_loader"] = lambda ref: {"w.yml": base_reference} if ref == SHA_C else {}
+    bundle = promotion.prepare_promotion(**inputs)
+    assert f"{STAGED_NEW}{gate}" in bundle.required_paths
+    assert f"{STAGED_NEW}{gate}" not in bundle.whole_paths
+
+
+def test_step_references_to_other_repositories_are_ignored() -> None:
+    workflow = (
+        "jobs:\n  a:\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - uses: someone/else/.github/actions/x@v1\n"
+        f"      - uses: {THESEUS}-extras/x@{SHA_B}\n"
+        "      - uses: docker://alpine:3\n"
+        "      - uses: ./.github/actions/consumer-local\n"
+        "      - run: echo\n"
+    )
+    assert _surface(SURFACE_NEW, {"w.yml": workflow}) == _surface(SURFACE_NEW, {})
+
+
+def test_unchanged_dormant_workflow_newly_referenced_by_the_head_is_required_whole() -> None:
+    payload = ".github/workflows/payload.yml"
+    unchanged = {payload: b"name: payload\njobs:\n  a:\n    runs-on: x\n"}
+    inputs = _preparation_inputs(old_extra=unchanged, new_extra=unchanged)
+    head_reference = f"jobs:\n  a:\n    uses: {THESEUS}/{payload}@{SHA_B}\n"
+    inputs["workflow_loader"] = lambda ref: {"w.yml": head_reference} if ref == SHA_A else {}
+    bundle = promotion.prepare_promotion(**inputs)
+    assert f"{STAGED_NEW}{payload}" in bundle.required_paths
+    assert f"{STAGED_NEW}{payload}" in bundle.whole_paths
+    assert not any(item.path.endswith("payload.yml") for item in bundle.changed_files)
+
+
+STEP_ACTION_REFERENCES = [
+    f"{THESEUS}/.github/actions/setup@{SHA_B}",
+    f"{THESEUS}/.github/actions/setup@main",
+    f"{THESEUS}/.github/actions/setup",
+    f"{THESEUS}@{SHA_B}",
+    f"{THESEUS.upper()}/x@{SHA_B}",
+    f"{THESEUS}.git/x@{SHA_B}",
+]
+
+
+@pytest.mark.parametrize("uses", STEP_ACTION_REFERENCES)
+def test_step_level_theseus_action_holds_whatever_its_kind(uses: str) -> None:
+    workflow = f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n"
+    for tree in (
+        SURFACE_NEW,
+        {**SURFACE_NEW, "x/action.yml": b"runs:\n  using: composite\n  steps: []\n"},
+        {**SURFACE_NEW, "x/action.yml": b"runs:\n  using: node20\n  main: i.js\n"},
+    ):
+        with pytest.raises(promotion.PromotionError, match="actions in the Theseus repository are not supported"):
+            _surface(tree, {"w.yml": workflow})
+
+
+def test_step_level_theseus_action_inside_a_theseus_workflow_holds() -> None:
+    tree = {
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": f"jobs:\n  a:\n    steps:\n      - uses: {THESEUS}/x@{SHA_B}\n".encode(),
+    }
+    with pytest.raises(promotion.PromotionError, match="use job-level reusable workflows"):
+        _surface(tree)
+
+
+@pytest.mark.parametrize("uses", ["./.github/actions/x", "./", "."])
+def test_step_level_local_reference_inside_a_theseus_workflow_holds(uses: str) -> None:
+    tree = {
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": f"jobs:\n  a:\n    steps:\n      - uses: {uses}\n".encode(),
+    }
+    with pytest.raises(promotion.PromotionError, match=r"resolves against \$GITHUB_WORKSPACE"):
+        _surface(tree)
+
+
+def test_job_level_local_workflow_reference_inside_a_theseus_workflow_is_supported() -> None:
+    tree = {
+        **SURFACE_NEW,
+        ".github/workflows/review.yml": b"jobs:\n  a:\n    uses: ./.github/workflows/ci.yml\n",
+    }
+    assert ".github/workflows/ci.yml" in _surface(tree)
+
+
+@pytest.mark.parametrize("ref", ["main", "v1", "refs/heads/main", "refs/tags/v1", SHA_C, SHA_B.upper(), SHA_B[:7]])
+def test_theseus_reference_not_pinned_to_the_promoted_commit_holds(ref: str) -> None:
+    workflow = f"jobs:\n  a:\n    uses: {THESEUS}/.github/workflows/review.yml@{ref}\n"
+    with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
+        _surface(SURFACE_NEW, {"w.yml": workflow})
+
+
+def test_theseus_reference_matches_owner_and_repository_case_insensitively() -> None:
+    owner, name = THESEUS.split("/")
+    spelled = f"{owner.upper()}/{name.title()}"
+    workflow = f"jobs:\n  a:\n    uses: {spelled}/.github/workflows/review.yml@{SHA_B}\n"
+    assert ".github/workflows/review.yml" in _surface(SURFACE_NEW, {"w.yml": workflow})
+
+
+def test_git_suffix_on_the_repository_name_is_the_same_repository() -> None:
+    workflow = f"jobs:\n  a:\n    uses: {THESEUS}.git/.github/workflows/review.yml@{SHA_B}\n"
+    assert ".github/workflows/review.yml" in _surface(SURFACE_NEW, {"w.yml": workflow})
+    with pytest.raises(promotion.PromotionError, match="not the promoted commit"):
+        _surface(SURFACE_NEW, {"w.yml": workflow.replace(SHA_B, "main")})
+
+
+@pytest.mark.parametrize(
+    "uses",
+    [
+        f"https://github.com/{THESEUS}/.github/workflows/review.yml@{SHA_B}",
+        f"{THESEUS}/not-a-workflow.yml@{SHA_B}",
+        f"{THESEUS}/.github/workflows/review.yml",
+        f"{THESEUS}@{SHA_B}",
+    ],
+)
+def test_job_level_theseus_reference_that_cannot_be_resolved_holds(uses: str) -> None:
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved|without a version"):
+        _surface(SURFACE_NEW, {"w.yml": f"jobs:\n  a:\n    uses: {uses}\n"})
+
+
+def test_step_level_reference_that_mentions_the_theseus_repository_but_does_not_parse_holds() -> None:
+    workflow = f"jobs:\n  a:\n    steps:\n      - uses: https://github.com/{THESEUS}/x\n"
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved"):
+        _surface(SURFACE_NEW, {"w.yml": workflow})
+
+
+def test_nested_local_job_reference_that_is_not_a_workflow_holds() -> None:
+    tree = {**SURFACE_NEW, ".github/workflows/review.yml": b"jobs:\n  a:\n    uses: ./scripts/run.yml\n"}
+    with pytest.raises(promotion.PromotionError, match="cannot be resolved"):
+        _surface(tree)

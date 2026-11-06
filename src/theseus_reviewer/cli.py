@@ -85,7 +85,6 @@ class DiffNotStagedError(Exception):
 
 WORKFLOW_FILE = "oracle-verdict.yml"
 GATEWAY_TOKEN_ENV = "OMP_GATEWAY_TOKEN"
-GATEWAY_PROVIDERS = ("anthropic", "openai-codex", "muse-code", "google-antigravity")
 GATEWAY_CLIENT = "oracle-ci"
 GATEWAY_TOKEN_MIN_LENGTH = 32
 NEW_DIFF_ACTIONS = ("opened", "synchronize")
@@ -1152,6 +1151,7 @@ def _plan_review(
     names = {reviewer.name for reviewer in chain}
     follow_up_reviewer = latest.get("reviewer") if follow_up and latest.get("reviewer") in names else None
     old_staged_prefix = f"{promotion.STAGED_PROMOTION_DIR}/old/"
+    delta_paths = {path for item in files for path in item.paths}
     evidence_files = sorted(
         {
             *(
@@ -1164,6 +1164,7 @@ def _plan_review(
                 for item in reviewed_now
                 if item.previous_path in whole_files and item.previous_path in in_scope
             ),
+            *(path for path in sorted(whole_files) if path in in_scope and path not in delta_paths and not partial),
         }
     )
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
@@ -1202,7 +1203,8 @@ def _plan_review(
             capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files),
             file_list_bytes,
         )
-    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes)
+    load_mode = "promotion" if promotion_record is not None else "inline" if brief_mode == "inline" else "file-list"
+    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes, load_mode)
     evidence_set = set(evidence_files)
     plan.update(
         {
@@ -1323,12 +1325,18 @@ def command_select(args: argparse.Namespace) -> int:
     workspace = getattr(args, "workspace", None)
     loaded = attempt_files.load(Path(args.attempts_dir), plan, os.environ["GITHUB_RUN_ID"], workspace=workspace)
     classification_path = Path(args.classification)
+    classify_only = getattr(args, "classify_only", False)
     if args.slot == 1:
         try:
             classification = _classify_plan(plan)
         except (JevError, KeyError, TypeError, ValueError) as exc:
+            if classify_only:
+                _summary(f"classification unavailable: {exc}")
+                return 0
             return _empty_selection(f"classification unavailable: {exc}", args.slot)
         _write_json(classification_path, classification.to_json())
+        if classify_only:
+            return 0
     else:
         read = _read_classification(classification_path)
         if read is None:
@@ -2129,11 +2137,7 @@ def write_reviewer_home(home: Path, gateway_url: str, config_text: str, allow_lo
     agent_dir = home / ".omp" / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "config.yml").write_text(config_text, encoding="utf-8")
-    providers = "".join(
-        f"  {provider}:\n    transport: pi-native\n    baseUrl: {json.dumps(url)}\n    apiKey: {GATEWAY_TOKEN_ENV}\n"
-        for provider in GATEWAY_PROVIDERS
-    )
-    (agent_dir / "models.yml").write_text(f"providers:\n{providers}", encoding="utf-8")
+    (agent_dir / "models.yml").write_text(credentials.gateway_models_text(url), encoding="utf-8")
 
 
 def command_reviewer_home(args: argparse.Namespace) -> int:
@@ -2374,7 +2378,7 @@ def command_gateway_clients(args: argparse.Namespace) -> int:
         digests[name] = digest
     models = gateway_models(yaml.safe_load(Path(args.omp_config).read_text(encoding="utf-8")))
     providers = list(dict.fromkeys(model.split("/", 1)[0] for model in models))
-    unknown = [provider for provider in providers if provider not in GATEWAY_PROVIDERS]
+    unknown = [provider for provider in providers if provider not in credentials.GATEWAY_PROVIDERS]
     if unknown:
         raise SystemExit(
             f"oracle-verdict: error: the reviewer config names providers the gateway does not serve: {unknown}"

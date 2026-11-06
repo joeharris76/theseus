@@ -212,7 +212,7 @@ def test_prepare_classifies_only_a_plan_that_will_be_reviewed_and_survives_a_cla
         return 0
 
     def select(args: argparse.Namespace) -> int:
-        selected.append(args.slot)
+        selected.append((args.slot, args.classify_only))
         raise RuntimeError("the classifier crashed")
 
     environment_decision = ["success"]
@@ -224,7 +224,7 @@ def test_prepare_classifies_only_a_plan_that_will_be_reviewed_and_survives_a_cla
 
     environment_decision[0] = "review"
     assert driver.prepare(environment, argparse.Namespace()) == 0
-    assert selected == [1]
+    assert selected == [(1, True)]
     assert "classification failed: RuntimeError" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 

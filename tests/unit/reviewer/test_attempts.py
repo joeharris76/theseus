@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA
-from theseus_reviewer import attempts, cli, omp_pin, protocol, report, retry, review_check, selection
+from theseus_reviewer import attempts, capacity, cli, omp_pin, protocol, report, retry, review_check, selection
 from theseus_reviewer.absence import Absence
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint, marker
@@ -1267,3 +1268,84 @@ def test_repeated_unpublished_runs_keep_the_failure_window_at_the_first_attempt(
         )
     assert state is not None and state.updated_at == start
     assert state.backoff_from == start + timedelta(hours=3)
+
+
+def _select_namespace(tmp_path: Path, **extra: Any) -> argparse.Namespace:
+    return argparse.Namespace(
+        plan=str(tmp_path / "plan" / "plan.json"),
+        attempts_dir=str(tmp_path / "attempts"),
+        slot=1,
+        classification=str(tmp_path / "plan" / "classification.json"),
+        workspace=None,
+        **extra,
+    )
+
+
+def _selection_workspace(policy: Policy, tmp_path: Path, **plan_extra: Any) -> None:
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "attempts").mkdir()
+    (tmp_path / "plan" / "plan.json").write_text(
+        json.dumps({**_plan(policy, ("small",)), **plan_extra}), encoding="utf-8"
+    )
+
+
+def test_classification_only_selection_writes_the_classification_and_no_slot_line(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _selection_workspace(policy, tmp_path, **{capacity.LOAD_KEY: 10**9, capacity.CAPACITY_KEY: {"small": 1}})
+    monkeypatch.setenv("GITHUB_RUN_ID", RUN_ID)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(cli, "_classify_plan", lambda plan: _classification("small"))
+
+    assert cli.command_select(_select_namespace(tmp_path, classify_only=True)) == 0
+
+    assert (tmp_path / "plan" / "classification.json").is_file()
+    assert not (tmp_path / "attempts" / cli.SUMMARY_FILE).exists()
+    assert "slot 1" not in capsys.readouterr().out
+
+
+def test_real_selection_after_capacity_still_reports_pending(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _selection_workspace(policy, tmp_path, **{capacity.LOAD_KEY: 10**9, capacity.CAPACITY_KEY: {"small": 1}})
+    monkeypatch.setenv("GITHUB_RUN_ID", RUN_ID)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(cli, "_classify_plan", lambda plan: _classification("small"))
+
+    assert cli.command_select(_select_namespace(tmp_path)) == 0
+
+    summary = json.loads((tmp_path / "attempts" / cli.SUMMARY_FILE).read_text(encoding="utf-8"))["summary"]
+    assert summary.startswith("slot 1: pending")
+
+
+@pytest.mark.parametrize(
+    "unknown",
+    [
+        {capacity.ERROR_KEY: "the catalog cannot be read"},
+        {capacity.CAPACITY_KEY: {"unrelated-reviewer": 10**9}},
+    ],
+    ids=["catalog-unreadable", "model-not-listed"],
+)
+def test_a_reviewer_skipped_for_unknown_capacity_is_retried_by_the_sweep(
+    policy: Policy, tmp_path: Path, unknown: dict[str, Any]
+) -> None:
+    plan = {**_plan(policy, ("small",)), capacity.LOAD_KEY: 1000, **unknown}
+    loaded, step, errors = _decide(policy, plan, tmp_path)
+    final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
+    assert loaded.attempts == [] and step.kind == selection.PENDING and not step.oversize
+    assert capacity.UNKNOWN_PREFIX in " ".join(step.reasons)
+    assert final.state == "pending" and final.pending_cause == ALL_ABSENT
+    state = retry.next_state(
+        previous=None,
+        pr=7,
+        head_sha=HEAD,
+        outcome="pending",
+        manual=False,
+        now=NOW,
+        pool_blocked_until={},
+        pending_cause=final.pending_cause,
+    )
+    assert not retry.due_for_retry(state, HEAD, NOW + timedelta(minutes=1), policy.retry)
+    assert retry.due_for_retry(state, HEAD, NOW + timedelta(hours=2), policy.retry)

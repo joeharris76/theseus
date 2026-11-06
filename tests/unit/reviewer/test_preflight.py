@@ -28,7 +28,7 @@ WINDOWS = {
     "openai-codex/gpt-6.1-sol": 372_000,
     "openai-codex/gpt-6-astra": 144_000,
 }
-SMALL_WINDOWS = {model: 100_000 for model in WINDOWS}
+SMALL_WINDOWS = {model: 50_000 for model in WINDOWS}
 
 
 @pytest.fixture
@@ -87,7 +87,7 @@ def test_advisories_name_the_reviewers_that_cannot_hold_the_change(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo = _member_repo(tmp_path / "repo")
-    code, report = _run(repo, monkeypatch, capsys, _reader({**WINDOWS, "openai-codex/gpt-6-luna": 100_000}))
+    code, report = _run(repo, monkeypatch, capsys, _reader({**WINDOWS, "openai-codex/gpt-6-luna": 50_000}))
     assert code == preflight.EXIT_REVIEWABLE
     assert any(capacity.SKIP_PREFIX in note for note in report["advisories"])
 
@@ -123,6 +123,34 @@ def test_a_change_above_every_reviewer_capacity_is_refused_with_its_token_need(
     assert reason.startswith("needs about ") and reason.endswith(
         "tokens of reading, above every reviewer's capacity; split"
     )
+
+
+def test_a_catalog_listing_none_of_the_reviewer_models_is_undetermined(
+    home: Path,  # noqa: F811
+    binary: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _member_repo(tmp_path / "repo")
+    code, report = _run(repo, monkeypatch, capsys, _reader({"apple/on-device": 8_192}))
+    assert code == preflight.EXIT_UNDETERMINED
+    assert report["reviewable"] is False
+    assert report["reasons"] and all(capacity.UNKNOWN_PREFIX in reason for reason in report["reasons"])
+
+
+def test_a_reviewer_whose_model_is_not_listed_is_an_advisory_when_another_fits(
+    home: Path,  # noqa: F811
+    binary: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _member_repo(tmp_path / "repo")
+    listed = {model: window for model, window in WINDOWS.items() if model != "openai-codex/gpt-6-luna"}
+    code, report = _run(repo, monkeypatch, capsys, _reader(listed))
+    assert code == preflight.EXIT_REVIEWABLE
+    assert any(capacity.UNKNOWN_PREFIX in note for note in report["advisories"])
 
 
 def test_a_diff_that_cannot_be_built_is_undetermined(

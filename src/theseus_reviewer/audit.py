@@ -133,9 +133,13 @@ def _workspace(root: Path, head: str, plan_dir: Path, destination: Path) -> Path
         check=True,
     )
     _git(destination, "checkout", "--quiet", "--detach", head)
-    runner.stage_pull_request_diff(plan_dir / cli.DIFF_FILE, destination)
+    diff_file = plan_dir / cli.DIFF_FILE
+    if diff_file.is_file() and diff_file.read_text(encoding="utf-8").strip():
+        if runner.stage_pull_request_diff(diff_file, destination) is None:
+            raise Undetermined("the pull request diff could not be staged into the audit workspace")
     if (plan_dir / promotion.PROMOTION_PLAN_DIR).is_dir():
-        promotion.stage_promotion_workspace(plan_dir, destination)
+        if promotion.stage_promotion_workspace(plan_dir, destination) is None:
+            raise Undetermined("the promotion tree could not be staged into the audit workspace")
     return destination
 
 

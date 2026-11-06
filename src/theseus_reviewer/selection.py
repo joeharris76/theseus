@@ -76,6 +76,7 @@ class SelectionInput:
     pool_blocked_until: Mapping[str, PoolBlock] = field(default_factory=dict)
     load_tokens: int = 0
     capacities: Mapping[str, int] = field(default_factory=dict)
+    capacity_error: str = ""
 
     @classmethod
     def from_plan(cls, plan: Mapping[str, Any], now: datetime) -> SelectionInput:
@@ -89,6 +90,7 @@ class SelectionInput:
             },
             load_tokens=int(plan.get(capacity.LOAD_KEY) or 0),
             capacities={str(name): int(value) for name, value in (plan.get(capacity.CAPACITY_KEY) or {}).items()},
+            capacity_error=str(plan.get(capacity.ERROR_KEY) or ""),
         )
 
 
@@ -160,9 +162,11 @@ def _skip_reason(
             f"{_source(block.provider)} returned a quota error at {block.recorded_at.isoformat()}"
         )
     if selection.load_tokens:
-        limit, known = capacity.effective(selection.capacities, reviewer.name)
+        limit = selection.capacities.get(reviewer.name)
+        if limit is None:
+            return capacity.unknown_text(selection.capacity_error)
         if selection.load_tokens > limit:
-            return capacity.skip_text(selection.load_tokens, limit, known)
+            return capacity.skip_text(selection.load_tokens, limit)
     if selection.brief_mode == "oversize":
         return "skipped: the brief exceeds the size cap even without the diff"
     if selection.brief_mode == "file-list" and not (reviewer.read_only == "hard" and reviewer.reads_files):

@@ -78,7 +78,7 @@
       "huge": 936000,
       "large": 936000,
       "max": 936000,
-      "medium": 368000,
+      "medium": 936000,
       "small": 336000,
       "trivial": 336000
     },
@@ -266,7 +266,7 @@
     },
     "repo": "BenchBox-dev/BenchBox",
     "restart_summary": null,
-    "review_load_tokens": 150078,
+    "review_load_tokens": 80078,
     "reviewed_files": [
       {
         "additions": 2,
@@ -384,5 +384,5 @@
       "skip": "false"
     }
   },
-  "summary": "oracle-verdict plan for #52: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 936000, \"medium\": 368000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\noracle-verdict #52 <sha0>: success: medium: SHIP\n"
+  "summary": "oracle-verdict plan for #52: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 936000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\noracle-verdict #52 <sha0>: success: medium: SHIP\n"
 }
