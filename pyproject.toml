@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "theseus-reviewer"
-version = "0.2.0"
+version = "0.2.1"
 description = "Reviews pull requests with AI models and blocks merging until a review of the exact commit has passed"
 readme = "README.md"
 license = { file = "LICENSE" }
