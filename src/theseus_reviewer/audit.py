@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from . import cli, coverage, evidence, local, promotion, runner
+from . import cli, coverage, evidence, legacy, local, promotion, runner
 from .policy import PolicyError
 
 SCHEMA = 1
@@ -68,9 +68,15 @@ def _known(workspace: Path) -> set[str]:
     return known
 
 
+_STAGED_NAMES = {
+    legacy.STAGED_DIFF_NAME: runner.STAGED_DIFF_NAME,
+    legacy.STAGED_PROMOTION_DIR: promotion.STAGED_PROMOTION_DIR,
+}
+
+
 def _resolve(path: str, known: set[str]) -> str | None:
     plain = evidence.OMP_SELECTOR.sub("", path.strip())
-    parts = [part for part in plain.split("/") if part and part != "."]
+    parts = [_STAGED_NAMES.get(part, part) for part in plain.split("/") if part and part != "."]
     for index in range(len(parts)):
         candidate = "/".join(parts[index:])
         if candidate in known:

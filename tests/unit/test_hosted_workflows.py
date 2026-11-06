@@ -647,7 +647,7 @@ def test_the_review_secrets_are_the_declared_names_and_no_callee_declares_the_re
     }
     assert "OMP_GATEWAY_TOKEN" not in review
     for path in [*WORKFLOWS.glob("*.yml"), *EXAMPLES.glob("*.yml")]:
-        text = STARTS_WITH.sub("", path.read_text(encoding="utf-8"))
+        text = CONTAINS.sub("", STARTS_WITH.sub("", path.read_text(encoding="utf-8")))
         assert legacy.WORD not in text.lower()
 
 
@@ -703,10 +703,30 @@ def test_the_comment_expressions_group_only_exact_prefix_commands() -> None:
 def test_the_gate_expressions_match_only_exact_prefix_attestations() -> None:
     for path in (WORKFLOWS / "gate.yml", EXAMPLES / "review-gate.yml"):
         text = path.read_text(encoding="utf-8")
-        assert "contains(github.event.comment.body, '" not in text.replace(
-            "contains(github.event.comment.body, 'Omp", ""
-        )
         assert _prefixes(text) == STANDIN_PREFIXES | ADJUDICATION_PREFIXES
     prefixes = STANDIN_PREFIXES | ADJUDICATION_PREFIXES
     assert _starts(prefixes, "Stand-in Oracle Review: APPROVE " + "a" * 40)
     assert not _starts(prefixes, "> Stand-in review: APPROVE " + "a" * 40)
+
+
+CONTAINS = re.compile(r"contains\(github\.event\.(comment\.body|changes\.body\.from), '([^']*)'\)")
+
+
+def test_the_gate_expressions_tolerate_leading_whitespace_when_a_comment_is_edited_or_deleted() -> None:
+    wanted = STANDIN_PREFIXES | ADJUDICATION_PREFIXES
+    for path in (WORKFLOWS / "gate.yml", EXAMPLES / "review-gate.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert "startsWith(github.event.changes.body.from" not in text
+        edited = {lit.lower() for src, lit in CONTAINS.findall(text) if src == "changes.body.from"}
+        assert edited - {"omp candidate check: "} == wanted
+        start = text.index("github.event.action == 'deleted'")
+        deleted_text = text[start : text.index("github.event.action == 'edited'", start)]
+        deleted = {lit.lower() for src, lit in CONTAINS.findall(deleted_text) if src == "comment.body"}
+        assert deleted == wanted
+        for body in (
+            "  Stand-in review: APPROVE x",
+            "\n\nReview adjudication: WITHDRAW D1 - r",
+            " Stand-in Oracle Review: APPROVE x",
+        ):
+            assert any(item in body.lower() for item in deleted)
+        assert not any(item in "> unrelated comment".lower() for item in deleted)
