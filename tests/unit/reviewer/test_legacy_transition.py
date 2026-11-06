@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -297,20 +297,21 @@ def test_a_legacy_attempt_artifact_is_read_too(monkeypatch: pytest.MonkeyPatch) 
 
 
 class _Posted:
-    def __init__(self) -> None:
+    def __init__(self, failing: str | None = None) -> None:
+        self.failing = failing
         self.contexts: list[tuple[str, str, str]] = []
 
-    def run(self, argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-        fields = dict(item.split("=", 1) for item in argv if "=" in item and not item.startswith("repos/"))
-        self.contexts.append((fields["context"], fields["state"], fields["description"]))
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    def one(self, repo: str, head_sha: str, payload: Mapping[str, Any], token: str) -> None:
+        self.contexts.append((payload["context"], payload["state"], payload["description"]))
+        if payload["context"] == self.failing:
+            raise github.GitHubError("denied")
 
 
 def test_a_verdict_status_is_posted_under_the_new_context_and_mirrored_under_the_legacy_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     posted = _Posted()
-    monkeypatch.setattr(subprocess, "run", posted.run)
+    monkeypatch.setattr(github, "_post_one_status", posted.one)
     payload = {
         "state": "failure",
         "context": "review-verdict",
@@ -326,7 +327,7 @@ def test_a_verdict_status_is_posted_under_the_new_context_and_mirrored_under_the
 
 def test_a_context_without_a_legacy_name_is_posted_once(monkeypatch: pytest.MonkeyPatch) -> None:
     posted = _Posted()
-    monkeypatch.setattr(subprocess, "run", posted.run)
+    monkeypatch.setattr(github, "_post_one_status", posted.one)
     github.post_status(
         "o/r", HEAD, {"state": "pending", "context": "other", "description": "d", "target_url": "u"}, "t"
     )
@@ -337,37 +338,34 @@ def test_a_context_without_a_legacy_name_is_posted_once(monkeypatch: pytest.Monk
 def test_each_context_is_attempted_even_when_the_other_fails_and_the_post_then_fails(
     monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
-    calls: list[str] = []
-
-    def run(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
-        context = next(item for item in argv if item.startswith("context=")).removeprefix("context=")
-        calls.append(context)
-        return subprocess.CompletedProcess(argv, 1 if context == failing else 0, "", "denied")
-
-    monkeypatch.setattr(subprocess, "run", run)
+    posted = _Posted(failing)
+    monkeypatch.setattr(github, "_post_one_status", posted.one)
     payload = {"state": "success", "context": "review-verdict", "description": "d", "target_url": "u"}
     with pytest.raises(github.GitHubError):
         github.post_status("o/r", HEAD, payload, "t")
-    assert calls == ["oracle-verdict", "review-verdict"]
+    assert [item[0] for item in posted.contexts] == ["oracle-verdict", "review-verdict"]
+
+
+class _GatePosted:
+    def __init__(self, failing: str | None = None) -> None:
+        self.failing = failing
+        self.bodies: list[dict[str, Any]] = []
+
+    def one(self, token: str, repo: str, head_sha: str, payload: dict[str, Any]) -> None:
+        self.bodies.append(payload)
+        if payload["context"] == self.failing:
+            raise review_check.CheckError("down")
 
 
 @pytest.mark.parametrize("failing", ["review-gate", "oracle-gate"])
 def test_each_gate_context_is_attempted_even_when_the_other_fails(
     monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
-    attempted: list[str] = []
-
-    def urlopen(request: Any) -> _Response:
-        context = json.loads(request.data)["context"]
-        attempted.append(context)
-        if context == failing:
-            raise gate.urllib.error.URLError("down")
-        return _Response()
-
-    monkeypatch.setattr(gate.urllib.request, "urlopen", urlopen)
+    posted = _GatePosted(failing)
+    monkeypatch.setattr(gate, "_post_one_payload", posted.one)
     with pytest.raises(review_check.CheckError):
         gate.post_status("token", "o/r", HEAD, review_check.PASS, "review: pass")
-    assert attempted == ["oracle-gate", "review-gate"]
+    assert [body["context"] for body in posted.bodies] == ["oracle-gate", "review-gate"]
 
 
 def test_each_status_file_context_is_attempted_even_when_the_other_fails(
@@ -389,30 +387,14 @@ def test_each_status_file_context_is_attempted_even_when_the_other_fails(
     assert attempted == ["oracle-verdict", "review-verdict"]
 
 
-class _Response:
-    def __enter__(self) -> _Response:
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return b"{}"
-
-
 def test_the_gate_status_is_posted_under_the_new_context_and_mirrored_under_the_legacy_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bodies: list[dict[str, Any]] = []
-
-    def urlopen(request: Any) -> _Response:
-        bodies.append(json.loads(request.data))
-        return _Response()
-
-    monkeypatch.setattr(gate.urllib.request, "urlopen", urlopen)
+    posted = _GatePosted()
+    monkeypatch.setattr(gate, "_post_one_payload", posted.one)
     gate.post_status("token", "o/r", HEAD, review_check.PASS, "review: pass")
     gate.post_pending("token", "o/r", HEAD)
-    assert [(body["context"], body["state"], body["description"]) for body in bodies] == [
+    assert [(body["context"], body["state"], body["description"]) for body in posted.bodies] == [
         ("oracle-gate", "success", "review: pass"),
         ("review-gate", "success", "review: pass"),
         ("oracle-gate", "pending", gate.PENDING_DESCRIPTION),

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -169,15 +168,13 @@ def test_latest_state_skips_untrusted_runs(monkeypatch: pytest.MonkeyPatch) -> N
             return {"status": "ahead"}
         raise AssertionError(f"unexpected request {path}")
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        downloaded.append(argv[3])
-        directory = Path(argv[argv.index("-D") + 1])
-        (directory / github.STATE_FILE).write_text(json.dumps(state.to_json()), encoding="utf-8")
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    def fake_download(repo: str, run_id: str, name: str, directory: str) -> None:
+        downloaded.append(run_id)
+        (Path(directory) / github.STATE_FILE).write_text(json.dumps(state.to_json()), encoding="utf-8")
 
     monkeypatch.setattr(github, "get_json", get_json)
     monkeypatch.setattr(github, "get_paginated", lambda path: [])
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    monkeypatch.setattr(github, "download_state_artifact", fake_download)
     assert github.latest_state(REPO, 7, BASE) == state
     assert downloaded == ["1"]
 
@@ -190,12 +187,9 @@ def test_latest_state_skips_a_pull_request_target_run_not_based_on_develop(monke
             return listing
         return _target_run("release/1.0")
 
-    def no_download(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("an untrusted run must not be downloaded")
-
     monkeypatch.setattr(github, "get_json", get_json)
     monkeypatch.setattr(github, "get_paginated", lambda path: [])
-    monkeypatch.setattr(github.subprocess, "run", no_download)
+    monkeypatch.setattr(github, "download_state_artifact", _no_download)
     assert github.latest_state(REPO, 7, BASE) is None
 
 
@@ -336,7 +330,7 @@ def _state_listing(run_id: int) -> dict[str, Any]:
     return {"artifacts": [{"created_at": "2026-10-07T23:10:00Z", "workflow_run": {"id": run_id}, "expired": False}]}
 
 
-def _no_download(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def _no_download(repo: str, run_id: str, name: str, directory: str) -> None:
     raise AssertionError("an untrusted run must not be downloaded")
 
 
@@ -353,7 +347,7 @@ def test_latest_state_skips_a_run_with_a_sibling_pull_request_into_another_base(
     _serve(monkeypatch, _full_run())
     api = _pulls_api([_api_pull(7), _api_pull(9, base="evil")], {7: [], 9: []})
     monkeypatch.setattr(github, "get_paginated", api)
-    monkeypatch.setattr(github.subprocess, "run", _no_download)
+    monkeypatch.setattr(github, "download_state_artifact", _no_download)
     assert github.latest_state(REPO, 7, BASE) is None
 
 
@@ -363,7 +357,7 @@ def test_latest_state_fails_closed_when_the_pull_requests_cannot_be_read(monkeyp
 
     _serve(monkeypatch, _full_run())
     monkeypatch.setattr(github, "get_paginated", broken)
-    monkeypatch.setattr(github.subprocess, "run", _no_download)
+    monkeypatch.setattr(github, "download_state_artifact", _no_download)
     assert github.latest_state(REPO, 7, BASE) is None
 
 
@@ -372,14 +366,12 @@ def test_latest_state_downloads_a_run_whose_head_pull_requests_all_target_develo
 ) -> None:
     state = State(7, "a" * 40, "pending", datetime(2026, 10, 5, tzinfo=UTC))
 
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        directory = Path(argv[argv.index("-D") + 1])
-        (directory / github.STATE_FILE).write_text(json.dumps(state.to_json()), encoding="utf-8")
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    def fake_download(repo: str, run_id: str, name: str, directory: str) -> None:
+        (Path(directory) / github.STATE_FILE).write_text(json.dumps(state.to_json()), encoding="utf-8")
 
     _serve(monkeypatch, _full_run())
     monkeypatch.setattr(github, "get_paginated", _pulls_api([_api_pull(7)], {7: []}))
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    monkeypatch.setattr(github, "download_state_artifact", fake_download)
     assert github.latest_state(REPO, 7, BASE) == state
 
 
@@ -674,11 +666,13 @@ def test_latest_state_ignores_artifacts_from_another_workflow(monkeypatch: pytes
     assert downloaded == []
 
 
-def test_gh_reports_decodable_stderr_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(argv, 1, b"", b"\xffailure")
-
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
+def test_gh_reports_decodable_stderr_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    shim = tmp_path / "gh"
+    shim.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stderr.buffer.write(b'\\xffailure')\nsys.exit(1)\n", encoding="utf-8"
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     with pytest.raises(github.GitHubError, match="ailure"):
         github._gh("repos/x")
 
@@ -893,17 +887,11 @@ def test_in_flight_pulls_rejects_a_listing_shorter_than_its_reported_total(monke
 
 
 def test_post_status_posts_with_the_given_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[list[str], dict[str, str]]] = []
     environment = dict(os.environ)
-
-    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append((argv, kwargs["env"]))
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    calls = _recording_run(monkeypatch)
     payload = {"state": "pending", "context": "review-verdict", "description": "d", "target_url": "u"}
     github.post_status(REPO, SHA, payload, "app-token")
-    assert len(calls) == 2
+    assert calls.count == 2
     argv, env = calls[0]
     assert argv[:4] == ["gh", "api", "--method", "POST"] and f"repos/{REPO}/statuses/{SHA}" in argv
     assert env["GH_TOKEN"] == "app-token" and environment.get("GH_TOKEN") != "app-token"
@@ -912,6 +900,10 @@ def test_post_status_posts_with_the_given_token(monkeypatch: pytest.MonkeyPatch)
 class _Calls:
     def __init__(self, log: Path) -> None:
         self.log = log
+
+    @property
+    def count(self) -> int:
+        return len(self.log.read_text(encoding="utf-8").splitlines()) if self.log.exists() else 0
 
     def __getitem__(self, index: int) -> tuple[list[str], dict[str, str]]:
         record = json.loads(self.log.read_text(encoding="utf-8").splitlines()[index])
@@ -1137,29 +1129,23 @@ def test_run_titles_carry_the_pull_request_and_the_head(title: str, expected: tu
 def test_dispatch_passes_the_pull_request_and_its_head(
     monkeypatch: pytest.MonkeyPatch, reason: str | None, reason_fields: list[str]
 ) -> None:
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        github.subprocess,
-        "run",
-        lambda argv, **kwargs: (calls.append(argv), subprocess.CompletedProcess(argv, 0, "", ""))[1],
-    )
+    calls = _recording_run(monkeypatch)
     github.dispatch(REPO, "review-verdict.yml", 7, SHA, BASE, reason)
-    assert calls == [
-        [
-            "gh",
-            "workflow",
-            "run",
-            "review-verdict.yml",
-            "--ref",
-            "develop",
-            "-f",
-            "pr=7",
-            "-f",
-            f"head={SHA}",
-            *reason_fields,
-            "-R",
-            REPO,
-        ]
+    assert calls.count == 1
+    assert calls[0][0] == [
+        "gh",
+        "workflow",
+        "run",
+        "review-verdict.yml",
+        "--ref",
+        "develop",
+        "-f",
+        "pr=7",
+        "-f",
+        f"head={SHA}",
+        *reason_fields,
+        "-R",
+        REPO,
     ]
 
 
@@ -1200,3 +1186,43 @@ def test_a_concurrency_or_manual_cancel_is_not_a_timeout(
 ) -> None:
     _jobs_and_annotations(monkeypatch, [{"id": 2, "conclusion": "cancelled"}], {2: notes})
     assert github.run_timed_out(REPO, 40216941595) is False
+
+
+def test_a_failing_gh_status_post_raises_after_attempting_both_contexts_legacy_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _recording_run(monkeypatch, returncode=1)
+    payload = {
+        "state": "failure",
+        "context": "review-verdict",
+        "description": "large: lists defects",
+        "target_url": "u",
+    }
+    with pytest.raises(github.GitHubError, match="could not post a status"):
+        github.post_status(REPO, SHA, payload, "app-token")
+    assert calls.count == 2
+    for index, context in enumerate(("oracle-verdict", "review-verdict")):
+        argv, _ = calls[index]
+        assert f"repos/{REPO}/statuses/{SHA}" in argv
+        assert f"context={context}" in argv
+        assert "state=failure" in argv
+        assert "description=large: lists defects" in argv
+
+
+def test_the_state_download_runs_gh_run_download_with_the_run_id_name_and_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = _recording_run(monkeypatch)
+    github.download_state_artifact(REPO, "12345", "review-verdict-state-7", str(tmp_path))
+    assert calls[0][0] == [
+        "gh",
+        "run",
+        "download",
+        "12345",
+        "-n",
+        "review-verdict-state-7",
+        "-D",
+        str(tmp_path),
+        "-R",
+        REPO,
+    ]

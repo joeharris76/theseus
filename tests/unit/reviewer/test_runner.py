@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import replace
@@ -651,22 +652,24 @@ def test_a_file_list_review_records_the_reviewer_unavailable_when_the_diff_canno
 
 
 @skip_on_windows
-def test_a_file_created_between_the_check_and_the_write_is_neither_followed_nor_overwritten(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_file_created_between_the_check_and_the_write_is_neither_followed_nor_overwritten(tmp_path: Path) -> None:
     workspace, _ = _workspace(tmp_path)
     outside = tmp_path / "outside.txt"
-    source = tmp_path / "diff.patch"
-    source.write_text("+x\n", encoding="utf-8")
-
-    def racing_lexists(path: object) -> bool:
-        (workspace / runner.STAGED_DIFF_NAME).symlink_to(outside)
-        return False
-
-    monkeypatch.setattr(runner.os.path, "lexists", racing_lexists)
-    assert runner.stage_pull_request_diff(source, workspace) is None
+    target = workspace / runner.STAGED_DIFF_NAME
+    target.symlink_to(outside)
+    with pytest.raises(OSError):
+        runner._create_exclusive(target, b"+x\n")
     assert not outside.exists()
-    assert (workspace / runner.STAGED_DIFF_NAME).is_symlink()
+    assert target.is_symlink()
+    existing = workspace / "existing.diff"
+    existing.write_text("kept\n", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        runner._create_exclusive(existing, b"+x\n")
+    assert existing.read_text(encoding="utf-8") == "kept\n"
+    clean = workspace / "clean.diff"
+    runner._create_exclusive(clean, b"+x\n")
+    assert clean.read_bytes() == b"+x\n"
+    assert stat.S_IMODE(clean.stat().st_mode) == 0o600
 
 
 @skip_on_windows
@@ -1286,3 +1289,17 @@ def test_capture_scrubs_an_encoded_credential_used_as_an_argument_key(
     redaction_check.sanitize(path, ())
     assert encoded not in path.read_text(encoding="utf-8")
     assert "path" in captured["events"][0]["args"]
+
+
+@skip_on_windows
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind the superuser")
+def test_staging_returns_none_when_the_exclusive_create_fails(tmp_path: Path) -> None:
+    workspace, _ = _workspace(tmp_path)
+    source = tmp_path / "diff.patch"
+    source.write_text("+x\n", encoding="utf-8")
+    workspace.chmod(0o500)
+    try:
+        assert runner.stage_pull_request_diff(source, workspace) is None
+    finally:
+        workspace.chmod(0o700)
+    assert not (workspace / runner.STAGED_DIFF_NAME).exists()
