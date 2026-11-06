@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -520,3 +521,70 @@ def test_the_dispatches_of_an_outage_do_not_use_up_the_all_absent_budget_after_r
     assert _bounded(monkeypatch, recovered, runs) == "its retry is due"
     unrecorded = retry.State(7, HEAD, retry.PENDING, NOW, (), {}, retry.ALL_ABSENT)
     assert _bounded(monkeypatch, unrecorded, runs) is None
+
+
+SMOL = [
+    "openai-codex/gpt-6-luna:xhigh",
+    "anthropic/claude-sonnet-5-5:medium",
+    "google-antigravity/gemini-3.8-flash:medium",
+]
+WINDOWS.update({"openai-codex/gpt-6-luna": 144_000, "google-antigravity/gemini-3.8-flash": 936_000})
+ALL_SERVED = tuple(providers.strip_effort(item) for item in (*OPUS, *SMOL))
+
+
+@pytest.mark.parametrize(
+    "served",
+    [
+        ALL_SERVED,
+        tuple(item for item in ALL_SERVED if not item.startswith("anthropic/")),
+        tuple(item for item in ALL_SERVED if item.startswith("google-antigravity/")),
+        tuple(item for item in ALL_SERVED if item.startswith("openai-codex/")),
+        (),
+    ],
+)
+@pytest.mark.parametrize("load", [900_000, 950_000])
+def test_a_load_above_every_nominal_window_is_oversize_whatever_is_served(served: tuple[str, ...], load: int) -> None:
+    step = next_step(_input(served=_served(*served), load_tokens=load), [])
+    assert step.kind == PENDING and step.oversize and not step.unavailable and step.reviewer is None
+
+
+def test_a_950k_load_with_the_primary_unserved_never_runs_on_the_larger_substitute() -> None:
+    served = _served("openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon")
+    step = next_step(_input(served=served, load_tokens=950_000), [])
+    assert step.kind == PENDING and step.oversize and step.resolution is None
+
+
+def test_a_load_above_the_primary_window_escalates_a_bucket_instead_of_substituting() -> None:
+    chain = [_reviewer("small", model="@smol"), _reviewer("medium", model="@default")]
+    held = _input(
+        chain=chain,
+        candidates={"small": SMOL, "medium": SONNET},
+        capacities={"small": 144_000, "medium": 872_000},
+        load_tokens=200_000,
+        served=_served(*(providers.strip_effort(item) for item in (*SONNET, *SMOL[1:]))),
+    )
+    step = next_step(held, [])
+    assert step.reviewer is not None and step.reviewer.name == "medium"
+    assert step.resolution is not None and step.resolution.target == SONNET[0] and not step.resolution.substituted
+    alone = next_step(replace(held, chain=chain[:1]), [])
+    assert alone.kind == PENDING and alone.oversize
+
+
+def test_an_unknown_primary_capacity_fails_closed_even_when_a_substitute_would_fit() -> None:
+    served = _served("openai-codex/gpt-6.1-sol")
+    step = next_step(_input(served=served, capacities={}, capacity_error="catalog unreadable"), [])
+    assert step.kind == PENDING and not step.unavailable
+    assert all("capacity cannot be determined" in reason for reason in step.reasons)
+
+
+def test_a_substitute_with_a_smaller_window_than_the_load_is_skipped_for_the_next_one() -> None:
+    served = _served("openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon")
+    step = next_step(_input(served=served, load_tokens=400_000), [])
+    assert step.resolution is not None and step.resolution.target == OPUS[2]
+
+
+def test_a_replayed_attempt_on_a_substitute_for_an_oversize_load_is_refused() -> None:
+    served = _served("openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon")
+    forged = Attempt(1, "large", ABSENT, "timeout", target=OPUS[2], nominal=OPUS[0])
+    errors = attempt_files.replay(_input(served=served, load_tokens=950_000), [forged])
+    assert errors and "policy selects pending" in errors[0]
