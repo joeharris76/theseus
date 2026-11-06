@@ -588,3 +588,27 @@ def test_a_replayed_attempt_on_a_substitute_for_an_oversize_load_is_refused() ->
     forged = Attempt(1, "large", ABSENT, "timeout", target=OPUS[2], nominal=OPUS[0])
     errors = attempt_files.replay(_input(served=served, load_tokens=950_000), [forged])
     assert errors and "policy selects pending" in errors[0]
+
+
+def _small_then_medium(**overrides: Any) -> SelectionInput:
+    chain = [_reviewer("small", model="@smol"), _reviewer("medium", model="@default")]
+    return _input(
+        chain=chain,
+        candidates={"small": SMOL, "medium": SONNET},
+        capacities={"small": 144_000, "medium": 872_000},
+        load_tokens=200_000,
+        **overrides,
+    )
+
+
+def test_an_outage_with_a_too_small_slot_and_an_unavailable_higher_tier_is_unavailable() -> None:
+    step = next_step(_small_then_medium(served=None, served_error="gateway unreachable"), [])
+    assert step.kind == PENDING and step.unavailable and not step.oversize
+    assert any("small: skipped: the change needs about 200000" in reason for reason in step.reasons)
+    assert any("medium: unavailable: gateway unreachable" in reason for reason in step.reasons)
+
+
+def test_a_partial_outage_with_a_too_small_slot_and_an_unavailable_higher_tier_is_unavailable() -> None:
+    served = _served("openai-codex/gpt-6-luna", "google-antigravity/gemini-3.8-flash")
+    step = next_step(_small_then_medium(served=served), [])
+    assert step.kind == PENDING and step.unavailable and not step.oversize

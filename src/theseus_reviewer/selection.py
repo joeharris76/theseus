@@ -263,7 +263,6 @@ def next_step(selection: SelectionInput, attempts: Sequence[Attempt]) -> Step:
             reasons.append(f"{reviewer.name}: {reason}")
             if reason.startswith(capacity.SKIP_PREFIX):
                 too_large = True
-                only_availability = False
             elif not reason.startswith("disabled"):
                 blocked_otherwise = True
                 if not reason.startswith((providers.UNAVAILABLE_PREFIX, providers.DEGRADED_CAPACITY_PREFIX)):
