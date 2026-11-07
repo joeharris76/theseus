@@ -233,7 +233,9 @@ jobs:
           HEAD_ARGS=()
           if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
           if [ "$HEAD_CHANGED" = true ]; then HEAD_ARGS+=(--pending-first); fi
-          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}"
+          STATUS=0
+          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}" || STATUS=$?
+          if [ "$STATUS" -ne 0 ] && [ "$STATUS" -ne 3 ]; then exit "$STATUS"; fi
 
   bridge:
     name: bridge

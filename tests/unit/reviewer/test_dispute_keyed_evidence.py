@@ -222,14 +222,38 @@ def test_maintain_without_verified_evidence_stays_open(policy: Policy) -> None:
     assert problem is None
 
 
-def test_a_forced_fixed_counts_as_maintained_in_the_published_line(policy: Policy, tmp_path: Path) -> None:
+def test_a_forced_fixed_on_a_dispute_is_invalid_instead_of_published_as_maintained(
+    policy: Policy, tmp_path: Path
+) -> None:
     plan = _plan_with_dispute(policy, _dispute())
     plan["protocol"]["forced"] = True
-    verdict = _verdict_dict(_disposition("fixed", evidence_text="reworked the loop"))
-    final = _final(policy, tmp_path, plan, verdict)
-    assert final.review is not None
-    assert "- D1 (maintained): reworked the loop" in final.review["body"]
-    assert "- D1 (fixed)" not in final.review["body"]
+    verdict = validate(_verdict_dict(_disposition("fixed", evidence_text="the fallback fixes it at pkg/kept.py:12")))
+    problem = protocol.contradiction(verdict, plan)
+    assert problem is not None
+    assert "D1 is marked fixed on a dispute re-review of an unchanged patch" in problem
+
+
+def test_a_forced_fixed_is_invalid_even_when_the_decision_does_not_ship(policy: Policy) -> None:
+    plan = _plan_with_dispute(policy, _dispute())
+    plan["protocol"]["forced"] = True
+    verdict = validate(_verdict_dict(_disposition("fixed", evidence_text="the fallback fixes it at pkg/kept.py:12")))
+    assert protocol.judge_planned(verdict, plan).decision == "SHIP_WITH_FIXES"
+    assert protocol.forced_fixed_problems(verdict, plan).keys() == {"D1"}
+    assert protocol.contradiction(verdict, plan) is not None
+
+
+def test_a_forced_withdrawal_and_a_maintain_are_not_forced_fixed_problems(policy: Policy) -> None:
+    plan = _plan_with_dispute(policy, _dispute())
+    plan["protocol"]["forced"] = True
+    for status, concedes in (("withdrawn", True), ("not_fixed", False)):
+        verdict = validate(_verdict_dict(_disposition(status, evidence_text="pkg/kept.py:12", concedes=concedes)))
+        assert protocol.forced_fixed_problems(verdict, plan) == {}
+
+
+def test_a_fixed_on_an_unforced_dispute_is_not_a_forced_fixed_problem(policy: Policy) -> None:
+    plan = _plan_with_dispute(policy, _dispute())
+    verdict = validate(_verdict_dict(_disposition("fixed", evidence_text="pkg/kept.py:12")))
+    assert protocol.forced_fixed_problems(verdict, plan) == {}
 
 
 def test_a_disputed_fixed_without_a_verified_citation_is_demoted(policy: Policy, tmp_path: Path) -> None:

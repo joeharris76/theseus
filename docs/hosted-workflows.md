@@ -88,6 +88,8 @@ If the gate pin cannot be resolved (no lock at the tip, a hash mismatch, a block
 
 The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip of `gated_base`, read at the time the job starts. It never checks out candidate code.
 
+In `gate.yml` the gate job treats exit 3 (posted, waiting) as success, as the sweep job does: the commit status carries the verdict, and the job fails only for exit 1 or 2.
+
 ## Failure and retry
 
 `theseus_reviewer.github.post_gate` runs the gate subprocess and raises `GitHubError` for a spawn failure, any exit other than 0 (posted) or 3 (posted, waiting), and a `THESEUS_GATE_COMMAND` that is set but empty. `drive publish` then:

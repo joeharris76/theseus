@@ -730,3 +730,29 @@ def test_the_gate_expressions_tolerate_leading_whitespace_when_a_comment_is_edit
         ):
             assert any(item in body.lower() for item in deleted)
         assert not any(item in "> unrelated comment".lower() for item in deleted)
+
+
+@pytest.mark.parametrize(("exit_code", "expected"), [(0, 0), (3, 0), (2, 2), (1, 1)])
+def test_the_gate_job_passes_for_a_posted_waiting_gate_and_fails_for_a_real_error(
+    tmp_path: Path, exit_code: int, expected: int
+) -> None:
+    gate = load(WORKFLOWS / "gate.yml")
+    script = step_named(gate, "gate", "Post the gate for the head")["run"]
+    stub = tmp_path / "theseus"
+    stub.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    stub.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "REPO": "o/r",
+            "POLICY_PATH": "p",
+            "PR_NUMBER": "7",
+            "KNOWN_HEAD": "0" * 40,
+            "HEAD_CHANGED": "false",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == expected
