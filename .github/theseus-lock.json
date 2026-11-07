@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": "theseus-reviewer",
+  "version": "0.2.4",
+  "repository": "joeharris76/theseus",
+  "source_commit": "8635dc71ec169886082c1afbc1a9080920237db2",
+  "source_sha256": "df34ce4ccb04ead9e3d1764b4e0cb5c6a290200d130b9f5dc02408b807e0aaec",
+  "delta_sha256": "7da122b08437c09d31429c7a092db19d829a1221f9c2305838061ebfbceb9c23",
+  "artifact": {
+    "sha256": "c0c4c2019f8c37ab37c2a9e4162dd83c6618561a371c21fab19e25fc3ce49e8c",
+    "urls": [
+      "https://github.com/joeharris76/theseus/releases/download/v0.2.4/theseus_reviewer-0.2.4-py3-none-any.whl",
+      "https://github.com/joeharris76/theseus/releases/download/v0.2.4/theseus_reviewer-0.2.4-py3-none-any.retained.whl"
+    ]
+  },
+  "dependencies": [],
+  "workflow_sha": "8635dc71ec169886082c1afbc1a9080920237db2"
+}
