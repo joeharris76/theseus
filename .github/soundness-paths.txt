@@ -1,0 +1,12 @@
+prefix	src/theseus_reviewer/
+
+file	pyproject.toml
+file	uv.lock
+
+prefix	.github/workflows/
+
+file	.github/review.yml
+file	.github/review-omp-config.yml
+file	.github/theseus-lock.json
+file	.github/soundness-paths.txt
+file	tests/unit/test_theseus_pin.py
