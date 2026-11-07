@@ -233,13 +233,21 @@ jobs:
           HEAD_ARGS=()
           if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
           if [ "$HEAD_CHANGED" = true ]; then HEAD_ARGS+=(--pending-first); fi
+          RESULT="$RUNNER_TEMP/gate-result"
+          rm -f "$RESULT"
           STATUS=0
-          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}" || STATUS=$?
+          REVIEW_GATE_RESULT_FILE="$RESULT" theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}" || STATUS=$?
+          REPORTED="$(cat "$RESULT" 2>/dev/null || true)"
           case "$STATUS" in
             0) ;;
             3)
+              # Waiting only counts when the gate itself reported exit 3; any other 3 is not the gate's verdict.
+              if [ "$REPORTED" != 3 ]; then
+                echo "::error::theseus gate exited 3 without reporting it (reported ${REPORTED:-none})"
+                exit 1
+              fi
               # The App already posted the required status as not-yet-passing; the job itself is not an error.
-              echo "review-gate: posted, waiting (exit 3) for #$PR_NUMBER. This green job is not a pass; the required App status stays not-success until the review passes." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              echo "review-gate: posted, waiting (exit 3) for #$PR_NUMBER. This green job is not a pass; the required App status stays not-success until the review passes." >> "$GITHUB_STEP_SUMMARY"
               ;;
             *) exit "$STATUS" ;;
           esac

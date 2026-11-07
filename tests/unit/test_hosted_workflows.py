@@ -732,14 +732,17 @@ def test_the_gate_expressions_tolerate_leading_whitespace_when_a_comment_is_edit
         assert not any(item in "> unrelated comment".lower() for item in deleted)
 
 
-def _run_gate_step(tmp_path: Path, exit_code: int) -> tuple[subprocess.CompletedProcess[str], str]:
+def _run_gate_step(
+    tmp_path: Path, exit_code: int, *, report: bool = True, summary_path: Path | None = None
+) -> tuple[subprocess.CompletedProcess[str], str]:
     step = step_named(load(WORKFLOWS / "gate.yml"), "gate", "Post the gate for the head")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "theseus"
-    fake.write_text(f"#!/bin/sh\nexit {exit_code}\n", encoding="utf-8")
+    record = f'echo {exit_code} > "$REVIEW_GATE_RESULT_FILE"; '
+    fake.write_text(f"#!/bin/sh\n{record if report else ''}exit {exit_code}\n", encoding="utf-8")
     fake.chmod(0o755)
-    summary = tmp_path / "summary.md"
+    summary = summary_path or tmp_path / "summary.md"
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "REPO": "o/r",
@@ -748,6 +751,7 @@ def _run_gate_step(tmp_path: Path, exit_code: int) -> tuple[subprocess.Completed
         "KNOWN_HEAD": "a" * 40,
         "HEAD_CHANGED": "false",
         "GITHUB_STEP_SUMMARY": str(summary),
+        "RUNNER_TEMP": str(tmp_path),
     }
     result = subprocess.run(
         ["bash", "-c", step["run"]], env=env, cwd=tmp_path, capture_output=True, text=True, check=False
@@ -766,6 +770,17 @@ def test_the_gate_step_succeeds_with_a_waiting_summary_when_the_review_is_pendin
     assert result.returncode == 0
     assert "posted, waiting" in summary
     assert "not a pass" in summary
+
+
+def test_the_gate_step_fails_on_exit_three_the_gate_did_not_report(tmp_path: Path) -> None:
+    result, summary = _run_gate_step(tmp_path, 3, report=False)
+    assert result.returncode == 1
+    assert "waiting" not in summary
+
+
+def test_a_failed_summary_write_turns_the_waiting_job_red(tmp_path: Path) -> None:
+    result, _ = _run_gate_step(tmp_path, 3, summary_path=tmp_path / "missing-dir" / "summary.md")
+    assert result.returncode != 0
 
 
 @pytest.mark.parametrize("code", [1, 2, 4, 127])

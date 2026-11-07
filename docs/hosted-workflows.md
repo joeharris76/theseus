@@ -101,6 +101,10 @@ Branch protection and rulesets MUST require the App-posted commit status context
 | 2 | Error: the gate could not decide or could not post. | Red. |
 | any other non-zero | Crash or spawn failure. | Red. |
 
+The required `review-gate` (or legacy `oracle-gate`) context MUST be restricted to the review App as its source (ruleset `integration_id` / "expected source"). Without that, any workflow holding `statuses: write` can post a same-named `success` and satisfy the requirement.
+
+The job treats exit 3 as waiting only when the gate's result file (`REVIEW_GATE_RESULT_FILE`) also records 3, exactly as the sweep does; an unreported 3, or a failed summary write, fails the job.
+
 The status the App posts does not depend on the job result: a waiting gate still posts `failure` on the required context. The hourly sweep applies the same rule (exit 0 and 3 are accepted).
 
 Concurrency stays with the caller. The example `review-gate.yml` still cancels an in-progress gate when a newer event arrives for the same pull request, because that guarantees the newest head's gate is the one that runs and posts; a cancelled run is grey, not red, and never posts a status.
