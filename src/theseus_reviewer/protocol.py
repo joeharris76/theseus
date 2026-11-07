@@ -915,6 +915,20 @@ def dispute_problems(verdict: Verdict, plan: Mapping[str, Any]) -> dict[str, str
     return problems
 
 
+def forced_fixed_problems(verdict: Verdict, plan: Mapping[str, Any]) -> dict[str, str]:
+    if verdict.status != COMPLETE or not (plan.get("protocol") or {}).get("forced"):
+        return {}
+    claims = disputed_claims(plan)
+    return {
+        item.id: (
+            f"disputed finding {item.id} is marked fixed on a dispute re-review of an unchanged patch, which cannot"
+            " fix anything; withdraw it with concedes true or keep it not_fixed, so the verdict is invalid"
+        )
+        for item in verdict.prior_defects
+        if item.id in claims and item.status == FIXED and item.demoted not in DEMOTED_STATUSES
+    }
+
+
 def dispute_problem(verdict: Verdict, plan: Mapping[str, Any]) -> str | None:
     problems = dispute_problems(verdict, plan)
     return problems[min(problems)] if problems else None
@@ -942,6 +956,9 @@ def contradiction(
     plan: Mapping[str, Any],
     workspace: Path | str | None = None,
 ) -> str | None:
+    forced_fixed = forced_fixed_problems(verdict, plan)
+    if forced_fixed:
+        return forced_fixed[min(forced_fixed)]
     if verdict.status != COMPLETE or judge_planned(verdict, plan, workspace=workspace).decision != SHIP:
         return None
     problem = dispute_problem(verdict, plan)
