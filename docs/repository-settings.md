@@ -1,6 +1,6 @@
 # Repository settings
 
-Owner actions on `joeharris76/theseus`. Repository, visibility, license and default branch are already in place; the remaining rows are not applied until the owner applies and verifies them.
+Owner actions on `joeharris76/theseus`. Repository, visibility, license and default branch are already in place; the remaining rows count as applied only once the owner applies and verifies them.
 
 | Setting | Required value |
 | --- | --- |
