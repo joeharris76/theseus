@@ -109,11 +109,10 @@ classifier:
   gate_paths:
     - src/theseus_reviewer/*
     - pyproject.toml
-    - .github/workflows/review.yml
-    - .github/workflows/gate.yml
-    - .github/workflows/review-verdict.yml
-    - .github/workflows/review-gate.yml
-    - .github/workflows/review-request.yml
+    - uv.lock
+    - .github/workflows/*
+    - tests/unit/reviewer/*
+    - tests/integration/*
     - .github/review.yml
     - .github/review-omp-config.yml
     - .github/theseus-lock.json
