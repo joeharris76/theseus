@@ -88,6 +88,23 @@ If the gate pin cannot be resolved (no lock at the tip, a hash mismatch, a block
 
 The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip of `gated_base`, read at the time the job starts. It never checks out candidate code.
 
+## What to require, and what the job exit means
+
+Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`, or `oracle-gate` for the oracle spelling), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
+
+`theseus gate` exits with:
+
+| Exit | Meaning | `gate / gate` job |
+|---|---|---|
+| 0 | Posted `success`. | Green. |
+| 3 | Posted, waiting: the status was posted as not-yet-passing (`failure`) because the review is pending or blocking. | Green; the step summary says `posted, waiting`. A green job here is not a pass. |
+| 2 | Error: the gate could not decide or could not post. | Red. |
+| any other non-zero | Crash or spawn failure. | Red. |
+
+The status the App posts does not depend on the job result: a waiting gate still posts `failure` on the required context. The hourly sweep applies the same rule (exit 0 and 3 are accepted).
+
+Concurrency stays with the caller. The example `review-gate.yml` still cancels an in-progress gate when a newer event arrives for the same pull request, because that guarantees the newest head's gate is the one that runs and posts; a cancelled run is grey, not red, and never posts a status.
+
 ## Failure and retry
 
 `theseus_reviewer.github.post_gate` runs the gate subprocess and raises `GitHubError` for a spawn failure, any exit other than 0 (posted) or 3 (posted, waiting), and a `THESEUS_GATE_COMMAND` that is set but empty. `drive publish` then:

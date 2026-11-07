@@ -233,7 +233,16 @@ jobs:
           HEAD_ARGS=()
           if [ -n "$KNOWN_HEAD" ]; then HEAD_ARGS=(--head-sha "$KNOWN_HEAD"); fi
           if [ "$HEAD_CHANGED" = true ]; then HEAD_ARGS+=(--pending-first); fi
-          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}"
+          STATUS=0
+          theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . "${HEAD_ARGS[@]}" || STATUS=$?
+          case "$STATUS" in
+            0) ;;
+            3)
+              # The App already posted the required status as not-yet-passing; the job itself is not an error.
+              echo "review-gate: posted, waiting (exit 3) for #$PR_NUMBER. This green job is not a pass; the required App status stays not-success until the review passes." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+              ;;
+            *) exit "$STATUS" ;;
+          esac
 
   bridge:
     name: bridge
