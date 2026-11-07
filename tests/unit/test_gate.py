@@ -425,6 +425,16 @@ def test_main_posts_failure_and_exits_waiting(monkeypatch: pytest.MonkeyPatch) -
     assert gate.main([*BASE_ARGS]) == gate.WAITING
 
 
+def test_waiting_still_posts_failure_on_the_required_context_while_the_process_exits_three(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted = _stub_evaluate(monkeypatch, gate.WAITING, "review: waiting")
+    assert gate.process_exit(gate.main([*BASE_ARGS])) == gate.WAITING_EXIT
+    assert posted["state"] == "failure"
+    assert posted["context"] == "review-gate"
+    assert posted["head"] == HEAD
+
+
 def test_main_no_post_skips_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setattr(gate, "evaluate", lambda repo, pr, token, config: (HEAD, gate.PASS, "ok"))
