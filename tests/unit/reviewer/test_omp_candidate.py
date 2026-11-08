@@ -21,6 +21,7 @@ from theseus_reviewer import (
     candidate_chain,
     candidate_checks,
     candidate_stub,
+    cli,
     commands,
     omp_candidate,
     omp_pin,
@@ -1057,3 +1058,35 @@ def test_a_catalog_listing_that_fails_is_red(tmp_path: Path) -> None:
     check = candidate_checks.check_model_catalog(broken, CONFIG_TEXT)
 
     assert check.failures == ("the model catalog could not be listed: exit code 1",)
+
+
+def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_services(tmp_path: Path) -> None:
+    binary = tmp_path / "omp"
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import signal, socket, sys, time\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['auth-broker', 'token']:\n"
+        "    print('stub-broker-token')\n"
+        "elif args[:2] == ['auth-broker', 'migrate']:\n"
+        "    pass\n"
+        "elif len(args) >= 4 and args[1] == 'serve' and args[2] == '--bind':\n"
+        "    host, port = args[3].rsplit(':', 1)\n"
+        "    sock = socket.socket()\n"
+        "    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        "    sock.bind((host, int(port)))\n"
+        "    sock.listen(5)\n"
+        "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+        "    while True:\n"
+        "        time.sleep(0.2)\n"
+        "else:\n"
+        "    sys.exit(2)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    workdir = tmp_path / "chain"
+    with candidate_chain.loopback_chain(binary, workdir, CONFIG_TEXT) as chain:
+        assert chain.gateway_url.startswith("http://127.0.0.1:")
+        clients = json.loads((workdir / "gateway-clients.json").read_text(encoding="utf-8"))
+        assert cli.GATEWAY_CLIENT in clients
+        assert clients[cli.GATEWAY_CLIENT]["models"]

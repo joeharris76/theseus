@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import contextlib
 import hashlib
 import json
@@ -306,14 +305,16 @@ class LoopbackChain:
         config_file = self.workdir / "omp-config.yml"
         config_file.write_text(self.config_text, encoding="utf-8")
         with contextlib.redirect_stdout(None):
-            cli.command_gateway_clients(
-                argparse.Namespace(
-                    token_file=str(token_file),
-                    accounts=None,
-                    client=[],
-                    out=str(clients),
-                    omp_config=str(config_file),
-                )
+            cli.main(
+                [
+                    "gateway-clients",
+                    "--token-file",
+                    str(token_file),
+                    "--out",
+                    str(clients),
+                    "--omp-config",
+                    str(config_file),
+                ]
             )
         gateway_process = self._spawn(
             "gateway",

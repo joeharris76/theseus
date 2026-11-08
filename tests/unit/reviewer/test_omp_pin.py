@@ -474,3 +474,35 @@ def test_the_pin_digest_binds_the_version_and_every_platform_url_and_hash() -> N
     }
     digests = {omp_pin.pin_digest(pin) for pin in changed.values()} | {omp_pin.pin_digest(base)}
     assert len(digests) == len(changed) + 1
+
+
+def test_download_retries_transient_server_failures_and_stops_on_client_errors(tmp_path: Path, served) -> None:
+    attempts = {"/omp-linux-x64": 0}
+    server = served({})
+    original = server.routes
+
+    class DynamicRoutes(dict):
+        def get(self, key: str, default: object = None) -> object:
+            if key == "/omp-linux-x64":
+                attempts[key] += 1
+                if attempts[key] < 3:
+                    return (500, {}, b"internal error")
+                return (200, {}, b"recovered-bytes")
+            if key == "/missing":
+                attempts[key] = attempts.get(key, 0) + 1
+                return (404, {}, b"not found")
+            return original.get(key, default)
+
+    server.routes = DynamicRoutes()
+    pauses: list[float] = []
+    destination = tmp_path / "omp"
+    omp_pin.download(URL, destination, pause=pauses.append)
+    assert destination.read_bytes() == b"recovered-bytes"
+    assert attempts["/omp-linux-x64"] == 3
+    assert pauses == [omp_pin.DOWNLOAD_RETRY_SECONDS, omp_pin.DOWNLOAD_RETRY_SECONDS * 2]
+
+    pauses.clear()
+    with pytest.raises(urllib.error.HTTPError):
+        omp_pin.download("https://downloads.example.invalid/missing", tmp_path / "missing", pause=pauses.append)
+    assert attempts["/missing"] == 1
+    assert pauses == []
