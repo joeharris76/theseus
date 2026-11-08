@@ -313,6 +313,7 @@ class Harness:
         event_name: str = "pull_request_target",
         action: str = "synchronize",
         inputs: dict[str, str] | None = None,
+        comment: dict[str, Any] | None = None,
         **options: Any,
     ) -> ReviewRun:
         from .runs import Options, WorkflowRunner
@@ -342,6 +343,12 @@ class Harness:
             event["pull_request"] = {"number": pr, "head": {"sha": head}}
         elif event_name == "workflow_dispatch":
             event = {"inputs": {"pr": str(pr), "head": head, **(inputs or {})}}
+        elif event_name == "issue_comment":
+            event = {
+                "action": action or "created",
+                "issue": {"number": pr, "pull_request": {}},
+                "comment": comment or {},
+            }
         (temp / "event.json").write_text(json.dumps(event), encoding="utf-8")
         env = {
             **self.base_env(temp),
