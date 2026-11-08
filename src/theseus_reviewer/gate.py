@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import legacy
+from . import bases, legacy
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
 from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
@@ -30,6 +30,7 @@ from .review_check import (
     fetch_comments,
     fetch_files,
     fetch_head_oid,
+    fetch_head_pulls,
     fetch_promotion_refusals,
     fetch_pull,
     fetch_reviews,
@@ -141,6 +142,7 @@ class GateConfig:
     policy: Policy
     policy_path: str
     matchers: Matchers
+    trusted_base: str
 
     @property
     def binding(self) -> Binding:
@@ -150,11 +152,16 @@ class GateConfig:
     def consumer(self) -> Consumer:
         return self.policy.consumer
 
+    def admits(self, base: str) -> bool:
+        return self.consumer.is_gated(base) and base == self.trusted_base
+
 
 def load_gate_config(policy_path: str, root: Path) -> GateConfig:
     try:
         policy = load_policy(root / policy_path)
-        return GateConfig(policy, policy_path, load_matchers(policy.consumer, root))
+        return GateConfig(
+            policy, policy_path, load_matchers(policy.consumer, root), bases.trusted_base(policy.consumer.primary_base)
+        )
     except Exception as exc:
         raise CheckError(f"cannot load the review policy {policy_path}: {exc}") from exc
 
@@ -180,12 +187,39 @@ def read_pull(repo: str, pr: int, token: str) -> tuple[dict[str, Any], str, str]
     raise PullReadFailed(f"cannot read #{pr} after {PULL_READ_ATTEMPTS} attempts: {last}") from last
 
 
+def _rival_bases(token: str, repo: str, pr: int, base: str, head_sha: str, consumer: Consumer) -> list[str]:
+    return sorted(
+        {
+            other["base"]["ref"]
+            for other in fetch_head_pulls(token, repo, head_sha)
+            if other.get("state") == "open"
+            and other["number"] != pr
+            and other["head"]["sha"] == head_sha
+            and other["base"]["ref"] != base
+            and consumer.is_gated(other["base"]["ref"])
+        }
+    )
+
+
 def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, int, str]:
-    gated_base = config.consumer.gated_base
     pull, base, head_sha = read_pull(repo, pr, token)
-    if base != gated_base:
-        raise UngatedBase(f"#{pr} targets {base}, not {gated_base}; {GATE_CONTEXT} is posted only for {gated_base}")
+    if not config.consumer.is_gated(base):
+        listing = ", ".join(config.consumer.gated_bases)
+        raise UngatedBase(f"#{pr} targets {base}, not {listing}; {GATE_CONTEXT} is posted only for {listing}")
+    if base != config.trusted_base:
+        raise UngatedBase(
+            f"#{pr} targets {base} but the policy was read from {config.trusted_base}; "
+            f"{GATE_CONTEXT} is posted only from the policy of the pull request's own base"
+        )
     try:
+        rivals = (
+            _rival_bases(token, repo, pr, base, head_sha, config.consumer) if config.consumer.has_several_bases else []
+        )
+        if rivals:
+            raise CheckError(
+                f"{head_sha} is also an open pull request into {', '.join(rivals)}; "
+                f"{GATE_CONTEXT} is one status per head, so a head is gated for one base at a time"
+            )
         items = fetch_files(token, repo, pr)
         files = changed_paths(items)
         classifier = config.policy.classifier
@@ -338,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
 def mark_pending(args: argparse.Namespace, token: str, config: GateConfig) -> None:
     try:
         _, base, head_sha = read_pull(args.repo, args.pr, token)
-        if base == config.consumer.gated_base:
+        if config.admits(base):
             post_pending(token, args.repo, head_sha)
     except (PullReadFailed, CheckError) as exc:
         print(f"review-gate: error: {exc}", file=sys.stderr)
