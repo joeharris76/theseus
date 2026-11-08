@@ -935,7 +935,7 @@ def dispute_problem(verdict: Verdict, plan: Mapping[str, Any]) -> str | None:
 
 
 def keep_disputes_open(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
-    problems = dispute_problems(verdict, plan)
+    problems = {**forced_fixed_problems(verdict, plan), **dispute_problems(verdict, plan)}
     if not problems:
         return verdict
     entries = {item.id: item for item in verdict.prior_defects}
@@ -957,7 +957,7 @@ def contradiction(
     workspace: Path | str | None = None,
 ) -> str | None:
     forced_fixed = forced_fixed_problems(verdict, plan)
-    if forced_fixed:
+    if forced_fixed and verdict.decision == SHIP:
         return forced_fixed[min(forced_fixed)]
     if verdict.status != COMPLETE or judge_planned(verdict, plan, workspace=workspace).decision != SHIP:
         return None
