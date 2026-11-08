@@ -497,6 +497,7 @@ def _shown(paths: list[str]) -> str:
 class Gap:
     reason: str
     files: tuple[str, ...]
+    unseen: tuple[tuple[str, str, int, int], ...] = ()
 
 
 def is_binary_candidate(path: str) -> bool:
@@ -577,7 +578,7 @@ def check(
                 )
             report = evaluate(run, targets, needed, workspace)
             if not report.complete:
-                return Gap(f"the verdict would ship but {coverage.reason(report)}", report.files)
+                return Gap(f"the verdict would ship but {coverage.reason(report)}", report.files, report.unseen)
     if brief_mode == INLINE:
         return None
     examined = {relative(path, workspace) for path in verdict.files_examined}

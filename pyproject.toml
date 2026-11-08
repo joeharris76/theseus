@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "theseus-reviewer"
-version = "0.2.4"
+version = "0.2.6"
 description = "Reviews pull requests with AI models and blocks merging until a review of the exact commit has passed"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -52,7 +52,7 @@ line-length = 120
 indent-width = 4
 target-version = "py311"
 src = ["src", "tests", "tools"]
-extend-exclude = ["src/theseus_reviewer/_vendor"]
+extend-exclude = ["src/theseus_reviewer/_vendor", "evals/cases"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

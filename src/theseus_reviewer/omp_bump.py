@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -20,6 +21,8 @@ from .omp_candidate import ChainFactory
 
 BUILD_HOST = "https://build.stencil.so"
 API_TIMEOUT_SECONDS = 30
+API_ATTEMPTS = 3
+API_RETRY_SECONDS = 2.0
 CHANNEL = "stable"
 HELP_DIFF_LINES = 120
 TARGETS = {
@@ -57,15 +60,24 @@ class Outcome:
     body: str = ""
 
 
-def get_json(url: str) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": omp_pin.USER_AGENT, "Accept": "application/json"})
-    try:
-        with omp_pin.build_opener().open(request, timeout=API_TIMEOUT_SECONDS) as response:
-            return json.loads(response.read())
-    except (OSError, ValueError, urllib.error.URLError) as exc:
-        raise BumpError(
-            f"the build host answer for {url.split('?')[0]} could not be read: {type(exc).__name__}"
-        ) from exc
+def get_json(
+    url: str,
+    *,
+    attempts: int = API_ATTEMPTS,
+    pause: Callable[[float], None] = time.sleep,
+) -> Any:
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            pause(API_RETRY_SECONDS * attempt)
+        request = urllib.request.Request(url, headers={"User-Agent": omp_pin.USER_AGENT, "Accept": "application/json"})
+        try:
+            with omp_pin.build_opener().open(request, timeout=API_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read())
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            if attempt + 1 >= attempts or not omp_pin.retryable_error(exc):
+                raise BumpError(
+                    f"the build host answer for {url.split('?')[0]} could not be read: {type(exc).__name__}"
+                ) from exc
 
 
 def _version_key(version: str) -> tuple[int, int, int]:

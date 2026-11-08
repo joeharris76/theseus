@@ -35,8 +35,9 @@ NOT_FIXED = "not_fixed"
 WITHDRAWN = "withdrawn"
 PRIOR_STATUSES = (FIXED, NOT_FIXED, WITHDRAWN)
 
-FINDING_KEYS = ("severity", "file", "line", "end_line", "title", "detail")
-OPTIONAL_FINDING_KEYS = frozenset({"end_line"})
+FINDING_KEYS = ("severity", "file", "line", "end_line", "title", "detail", "origin")
+OPTIONAL_FINDING_KEYS = frozenset({"end_line", "origin"})
+ORIGINS = ("introduced", "pre-existing")
 PRIOR_KEYS = ("id", "status", "evidence")
 PRIOR_OPTIONAL_KEYS = ("claim", "concedes", "demoted")
 DEMOTED_DISPOSITION = "disposition"
@@ -56,6 +57,7 @@ RESPONSE_PLACEHOLDERS = {
     "prior_status": "<prior_status>",
     "evidence": "<evidence>",
     "claim": "<claim>",
+    "origin": "<origin>",
 }
 FINDING_METADATA = frozenset({"line_note", "end_line_note", "detail_extra"})
 _KEY_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,39}")
@@ -98,9 +100,10 @@ class Finding:
     title: str
     detail: str
     end_line: int | None = None
+    origin: str = "introduced"
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "severity": self.severity,
             "file": self.file,
             "line": self.line,
@@ -108,6 +111,9 @@ class Finding:
             "title": self.title,
             "detail": self.detail,
         }
+        if self.origin != "introduced":
+            data["origin"] = self.origin
+        return data
 
 
 @dataclass(frozen=True)
@@ -356,6 +362,8 @@ def _finding(data: Any) -> Finding:
     )
     severity, path, line, title, detail = (data[key] for key in ("severity", "file", "line", "title", "detail"))
     end_line = data.get("end_line")
+    origin = data.get("origin") or "introduced"
+    _require(isinstance(origin, str) and origin in ORIGINS, f"origin must be one of {ORIGINS}")
     _require(isinstance(severity, str) and severity in SEVERITIES, f"severity must be one of {SEVERITIES}")
     _require(isinstance(path, str) and valid_path(path), "file must be a repository-relative path")
     _require(_is_line(line), "line must be a positive integer")
@@ -366,7 +374,7 @@ def _finding(data: Any) -> Finding:
     line = min(line, MAX_LINE)
     span_end = None if span_end is None else min(span_end, MAX_LINE)
     span_end = None if span_end == line else span_end
-    return Finding(severity, path, line, sanitize(title, MAX_TITLE), sanitize(detail, MAX_DETAIL), span_end)
+    return Finding(severity, path, line, sanitize(title, MAX_TITLE), sanitize(detail, MAX_DETAIL), span_end, origin)
 
 
 def _prior(data: Any, *, trusted: bool = False) -> PriorDefect:

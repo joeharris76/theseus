@@ -1,0 +1,41 @@
+{
+  "id": "control-private-helper-rename",
+  "incident": "Negative control, not an incident: a behaviour-preserving rename of a private helper. It anchors precision: a reviewer that flags it, or a guidance change that makes every change look risky, scores lower.",
+  "message": "Rename the private title normaliser to say what it returns",
+  "expected": {
+    "decisions": [
+      "SHIP"
+    ],
+    "findings": [],
+    "acceptable": []
+  },
+  "fake": {
+    "good": [
+      {
+        "decision": "SHIP",
+        "summary": "A behaviour-preserving rename.",
+        "files_examined": [
+          "src/theseus_reviewer/dedup.py"
+        ]
+      }
+    ],
+    "regressed": [
+      {
+        "decision": "SHIP_WITH_FIXES",
+        "summary": "One defect.",
+        "files_examined": [
+          "src/theseus_reviewer/dedup.py"
+        ],
+        "defects": [
+          {
+            "severity": "Medium",
+            "file": "src/theseus_reviewer/dedup.py",
+            "line": 9,
+            "title": "Renamed helper has no docstring",
+            "detail": "The helper _normalised_title is not documented."
+          }
+        ]
+      }
+    ]
+  }
+}

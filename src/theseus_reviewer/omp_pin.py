@@ -28,6 +28,8 @@ VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?")
 CHUNK_BYTES = 1 << 20
 DOWNLOAD_SECONDS = 600
 DOWNLOAD_READ_SECONDS = 30
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_RETRY_SECONDS = 2.0
 USER_AGENT = "theseus-reviewer/1.0"
 VERSION_SECONDS = 60
 SYSTEMS = {"darwin": "darwin", "linux": "linux"}
@@ -158,6 +160,14 @@ def _open(request: urllib.request.Request, timeout: float) -> Any:
     return build_opener().open(request, timeout=timeout)
 
 
+def retryable_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    if isinstance(exc, urllib.error.URLError) and "non-https url" in str(exc.reason):
+        return False
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, OSError))
+
+
 def _stream(
     request: urllib.request.Request,
     destination: Path,
@@ -172,14 +182,29 @@ def _stream(
                 raise TimeoutError(f"the omp download exceeded {deadline_seconds:g} seconds")
 
 
-def download(url: str, destination: Path) -> None:
+def download(
+    url: str,
+    destination: Path,
+    *,
+    attempts: int = DOWNLOAD_ATTEMPTS,
+    pause: Callable[[float], None] = time.sleep,
+) -> None:
     if not url.startswith("https://"):
         raise PinError("omp is downloaded over https only")
     origin = mirror()
     if origin is not None:
         parts = urllib.parse.urlsplit(url)
         url = origin + urllib.parse.urlunsplit(("", "", parts.path, parts.query, ""))
-    _stream(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), destination)
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            pause(DOWNLOAD_RETRY_SECONDS * attempt)
+        try:
+            _stream(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), destination)
+            return
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            destination.unlink(missing_ok=True)
+            if attempt + 1 >= attempts or not retryable_error(exc):
+                raise
 
 
 def reported_version(binary: Path) -> str:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import hashlib
 import importlib
 import json
@@ -23,6 +24,7 @@ from . import (
     base_change,
     capacity,
     commands,
+    comment_disputes,
     coverage,
     credentials,
     dedup,
@@ -32,6 +34,7 @@ from . import (
     gateway_report,
     gitdiff,
     github,
+    intent,
     legacy,
     omp_pin,
     processes,
@@ -51,16 +54,29 @@ from . import (
     attempts as attempt_files,
 )
 from ._vendor import yaml
-from .absence import ERROR, Absence, published_detail
+from .absence import ERROR, INVALID, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
 from .classify import Classification, classification_note, classify_diff, fallback_classification
-from .diff import binary_files, binary_notice_count, commentable_lines, hunk_index, select_files
+from .diff import (
+    SINCE_STAGED_NAME,
+    STAGED_DIFF_NAME,
+    binary_files,
+    binary_notice_count,
+    changed_lines,
+    commentable_lines,
+    deleting_files,
+    hunk_index,
+    select_files,
+)
 from .evidence import is_binary_candidate
 from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
 from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
 from .render import (
+    ADVISORY_RULE,
+    DELTA_RULE,
+    STEP_BACK_RULE,
     UNOPENED_PR,
     OversizeError,
     dispute_listing,
@@ -264,6 +280,15 @@ def _disputed_threads(threads: list[dict[str, Any]], bot_login: str) -> list[dic
     return disputes
 
 
+def _comment_disputes(plan: Mapping[str, Any], policy: Policy, found: protocol.History) -> list[dict[str, Any]]:
+    try:
+        comments = github.issue_comments(plan["repo"], plan["pr"])
+    except (github.GitHubError, KeyError, ValueError) as exc:
+        _summary(f"review-verdict: the pull request comments could not be read, so no comment dispute applies: {exc}")
+        return []
+    return comment_disputes.collect(comments, found, frozenset(policy.consumer.attesters))
+
+
 def _dispute_step(
     plan: dict[str, Any],
     policy: Policy,
@@ -278,45 +303,34 @@ def _dispute_step(
     base_change_unreadable: bool = False,
     local: Sequence[Mapping[str, Any]] | None = None,
     is_promotion: bool = False,
-) -> tuple[list[dict[str, Any]] | None, protocol.Round]:
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]] | None, protocol.Round]:
     if step.kind not in (protocol.SKIP, protocol.CARRY, protocol.REPOST):
-        return None, step
+        return None, None, step
+    forced = functools.partial(
+        _protocol_round,
+        plan,
+        policy,
+        found,
+        scoped,
+        states,
+        strike_count,
+        force=True,
+        base_changed_at=base_changed_at,
+        base_change_unreadable=base_change_unreadable,
+        is_promotion=is_promotion,
+    )
     if local is not None:
-        if protocol.live_disputes(local, found.latest):
-            step = _protocol_round(
-                plan,
-                policy,
-                found,
-                scoped,
-                states,
-                strike_count,
-                force=True,
-                base_changed_at=base_changed_at,
-                base_change_unreadable=base_change_unreadable,
-                is_promotion=is_promotion,
-            )
-        return None, step
+        return None, None, forced() if protocol.live_disputes(local, found.latest) else step
     if not manual and event_name != "pull_request_target":
-        return None, step
+        return None, None, step
     try:
         threads = github.review_threads(plan["repo"], plan["pr"])
     except (github.GitHubError, KeyError, ValueError) as exc:
         _summary(f"review-verdict: open review threads could not be read: {exc}")
-        return None, step
-    if threads is not None and protocol.live_disputes(_disputed_threads(threads, policy.bot_login), found.latest):
-        step = _protocol_round(
-            plan,
-            policy,
-            found,
-            scoped,
-            states,
-            strike_count,
-            force=True,
-            base_changed_at=base_changed_at,
-            base_change_unreadable=base_change_unreadable,
-            is_promotion=is_promotion,
-        )
-    return threads, step
+        return None, None, step
+    comments = _comment_disputes(plan, policy, found)
+    raised = [*(_disputed_threads(threads, policy.bot_login) if threads is not None else []), *comments]
+    return threads, comments, forced() if protocol.live_disputes(raised, found.latest) else step
 
 
 def _base_changed_at(
@@ -788,6 +802,9 @@ def command_plan(args: argparse.Namespace) -> int:
             marked=marked,
             body=pull.get("body") or "",
             promotion=promotion_bundle,
+            title=pull.get("title") or "",
+            linked=intent.linked_items(repo, pull.get("body")) if policy.brief.include_intent else (),
+            since_diff=functools.partial(_since_review_diff, repo, plan["head_sha"]),
         ),
         matchers,
     )
@@ -812,6 +829,10 @@ class RoundInputs:
     body: str = ""
     disputes: Sequence[Mapping[str, Any]] | None = None
     promotion: promotion.PromotionBundle | None = None
+    title: str = ""
+    linked: Sequence[Mapping[str, str]] = ()
+    since_diff: Callable[[str], str | None] | None = None
+    description: str | None = None
 
 
 def _git_show_text(root: Path, ref: str, path: str) -> str:
@@ -905,7 +926,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         manual=inputs.manual,
         is_promotion=is_promotion,
     )
-    threads, step = _dispute_step(
+    threads, comments, step = _dispute_step(
         plan,
         policy,
         found,
@@ -934,7 +955,9 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         try:
             threads = github.review_threads(plan["repo"], plan["pr"]) if threads is None else threads
             plan["open_findings"] = dedup.open_fingerprints(threads, policy.bot_login)
-            plan["disputes"] = _disputed_threads(threads, policy.bot_login)
+            plan["threaded"] = _threaded_findings(threads, policy.bot_login)
+            comments = _comment_disputes(plan, policy, found) if comments is None else comments
+            plan["disputes"] = [*_disputed_threads(threads, policy.bot_login), *comments]
         except (github.GitHubError, KeyError, ValueError) as exc:
             _summary(f"review-verdict: open review threads could not be read, so none are suppressed: {exc}")
     claims = (
@@ -962,6 +985,14 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         upstream_protected=upstream_in_scope,
         whole_files=set(active_promotion.whole_paths) if active_promotion is not None else set(),
     )
+    plan["added_lines"] = _added_ranges(inputs.full_diff)
+    plan["new_files"] = sorted(item.path for item in all_files if item.status in ("added", "renamed", "copied"))
+    plan["changed_paths"] = sorted({path for item in all_files for path in item.paths})
+    _stage_since_review(plan, out_dir, step, inputs)
+    if policy.brief.include_intent:
+        plan["author_statement"] = intent.statement(
+            inputs.title, inputs.body if inputs.description is None else inputs.description, inputs.linked
+        )
     plan["decision_reason"] = step.reason if reason is None else f"{step.reason}; {reason}"
     return _finish_plan(out_dir, plan)
 
@@ -1085,6 +1116,7 @@ def _protocol_round(
         base_change_unreadable=base_change_unreadable,
         manual=manual,
         is_promotion=is_promotion,
+        max_finding_rounds=policy.protocol.max_finding_rounds,
     )
     latest = step.previous or {}
     follow_up = step.kind == protocol.FOLLOW_UP
@@ -1105,10 +1137,63 @@ def _protocol_round(
         "previous": dict(latest) if step.kind == protocol.CARRY else None,
         "forced": step.forced,
         "seen": [item for item in found.ids if item is not None],
+        "pre_existing": policy.protocol.pre_existing,
+        "step_back": step.step_back,
+        "finding_rounds": len(protocol.finding_streak(found.records, latest["cycle"])) if follow_up else 0,
+        "previous_head": latest.get("head_sha") if follow_up else None,
     }
     if step.forced:
         plan["protocol"]["maintained"] = protocol.maintained_counts(found.records, digest)
     return step
+
+
+SINCE_DIFF_FILE = "since-review.patch"
+
+
+def _since_review_diff(repo: str, head: str, previous: str) -> str | None:
+    try:
+        return gitdiff.build(repo, previous, head).text
+    except gitdiff.GitDiffError as exc:
+        _summary(f"review-verdict: the diff since head {previous} could not be built: {exc}")
+        return None
+
+
+def _threaded_findings(threads: Sequence[Mapping[str, Any]], bot_login: str) -> list[str]:
+    held: set[str] = set()
+    for thread in threads:
+        if thread.get("resolved") or thread.get("edited") or thread.get("author_type") != "Bot":
+            continue
+        if (thread.get("author") or "").removesuffix("[bot]") != bot_login:
+            continue
+        marker = protocol.thread_finding(thread.get("body") or "")
+        if marker is not None:
+            held.add(f"c{marker[0]}-{marker[1]}")
+    return sorted(held)
+
+
+def _added_ranges(diff_text: str | None) -> dict[str, list[list[int]]] | None:
+    if diff_text is None:
+        return None
+    ranges = {
+        path: [[start, end] for start, end in coverage.merge(numbers)]
+        for path, numbers in changed_lines(diff_text).items()
+    }
+    for path in deleting_files(diff_text):
+        ranges[path] = [[1, 10_000_000]]
+    return ranges
+
+
+def _stage_since_review(plan: dict[str, Any], out_dir: Path, step: protocol.Round, inputs: RoundInputs) -> None:
+    if step.kind != protocol.FOLLOW_UP or step.forced or step.step_back or inputs.since_diff is None:
+        return
+    previous = (step.previous or {}).get("head_sha")
+    if not previous or previous == plan["head_sha"]:
+        return
+    text = inputs.since_diff(previous)
+    if not text or not text.strip() or len(text.encode("utf-8")) > BRIEF_MAX_BYTES:
+        return
+    write_private(out_dir / SINCE_DIFF_FILE, text)
+    plan["since_review"] = {"head": previous, "file": SINCE_DIFF_FILE}
 
 
 def _opaque_in_diff(diff_text: str, is_protected: Callable[[str], bool]) -> bool:
@@ -1386,12 +1471,56 @@ def _chain_reviewer(plan: Mapping[str, Any], name: str) -> Reviewer:
     raise SystemExit(f"review-verdict: {name!r} is not in this run's reviewer chain")
 
 
+def _retry_hints(
+    plan: Mapping[str, Any],
+    plan_dir: Path,
+    diff_file: Path,
+    evidence_files: Sequence[str],
+    marked: Sequence[str],
+    unseen: Sequence[Sequence[Any]],
+) -> dict[str, str]:
+    request_text = diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else ""
+    hints = _block_hints(evidence_files, request_text, plan_dir, plan.get("evidence_whole_files", ()))
+    upstream = plan_dir / promotion.PROMOTION_PLAN_DIR / promotion.UPSTREAM_DIFF_NAME
+    texts = {
+        STAGED_DIFF_NAME: request_text,
+        coverage.UPSTREAM_DIFF: upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else "",
+    }
+    named = coverage.unseen_hints([item for item in unseen if item[0] in set(marked)], texts)
+    return {**hints, **named}
+
+
+def _with_last_attempt(
+    plan: dict[str, Any],
+    classification: Classification,
+    attempts: Sequence[selection.Attempt],
+    reviewer: Reviewer,
+    slot: int,
+) -> dict[str, Any]:
+    if not plan["protocol"].get("forced"):
+        return plan
+    failed = selection.Attempt(
+        slot,
+        reviewer.name,
+        selection.ABSENT,
+        INVALID,
+        recovery=recovery.Recovery(recovery.RETRY, recovery.FALLBACK),
+    )
+    step = selection.next_step(_selection(plan, classification), [*attempts, failed])
+    stalled = any(
+        item.reviewer == reviewer.name and item.absence == INVALID and protocol.FORCED_FIXED_MARK in item.detail
+        for item in attempts
+    )
+    return {**plan, "last_attempt": stalled or step.kind != selection.REVIEW}
+
+
 def _assemble_prompt(
     plan: Mapping[str, Any],
     plan_dir: Path,
     classification: Classification,
     workspace: Path,
     unread: Sequence[str] = (),
+    unseen: Sequence[Sequence[Any]] = (),
 ) -> str:
     reviewed = [
         ChangedFile(
@@ -1407,16 +1536,7 @@ def _assemble_prompt(
     evidence_files = plan.get("evidence_files", [])
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
-    hints = (
-        _block_hints(
-            evidence_files,
-            diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else "",
-            plan_dir,
-            plan.get("evidence_whole_files", ()),
-        )
-        if marked
-        else {}
-    )
+    hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen) if marked else {}
     files_block = (
         f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints)}"
         if file_list
@@ -1451,6 +1571,7 @@ def _assemble_prompt(
             f" instructions:\n{plan['restart_summary']}\nReview the change whole and say in your summary whether"
             f" the rework answers it.\n{files_block}"
         )
+    files_block = intent.render_block(plan.get("author_statement")) + files_block
     prior = plan["protocol"]["prior"]
     disputes = [item for item in plan.get("disputes", []) if isinstance(item, dict)] if prior else []
     bound = {(item.get("id"), item.get("cycle")) for item in protocol.bound_disputes(plan)}
@@ -1471,6 +1592,22 @@ def _assemble_prompt(
             raise DiffNotStagedError(DIFF_NOT_STAGED_DETAIL)
         if plan.get("promotion") and promotion.stage_promotion_workspace(plan_dir, workspace) is None:
             raise DiffNotStagedError("the staged promotion tree could not be written into the workspace")
+    prior_rule = select_prior_rule(
+        prior or None,
+        plan.get("reviewed_head"),
+        int(plan["max_defects"]),
+        bool(keyed),
+        unkeyed,
+        plan["protocol"].get("claimed") or (),
+    )
+    if prior and plan["protocol"].get("step_back"):
+        prior_rule += " " + STEP_BACK_RULE.format(rounds=int(plan["protocol"].get("finding_rounds") or 0))
+    if plan["protocol"].get("pre_existing") == "advisory" and not plan.get("promotion"):
+        prior_rule += " " + ADVISORY_RULE
+    if plan.get("since_review") and (
+        runner.stage_pull_request_diff(plan_dir / SINCE_DIFF_FILE, workspace, SINCE_STAGED_NAME) is not None
+    ):
+        prior_rule += " " + DELTA_RULE.format(name=SINCE_STAGED_NAME)
     return render_review(
         template_name=classification.template,
         retry_note=retry_note(len(marked)),
@@ -1480,14 +1617,7 @@ def _assemble_prompt(
         base_sha=plan["base_sha"],
         head_sha=plan["head_sha"],
         max_defects=int(plan["max_defects"]),
-        prior_rule=select_prior_rule(
-            prior or None,
-            plan.get("reviewed_head"),
-            int(plan["max_defects"]),
-            bool(keyed),
-            unkeyed,
-            plan["protocol"].get("claimed") or (),
-        ),
+        prior_rule=prior_rule,
         prior_block=prior_block,
         prior_ids=[item["id"] for item in prior],
         files_block=files_block,
@@ -1509,10 +1639,10 @@ def command_review(args: argparse.Namespace) -> int:
         raise SystemExit(f"review-verdict: classification unreadable: {exc}") from exc
     workspace = Path(args.workspace)
     try:
-        unread = selection.retry_unread(
-            attempt_files.load(Path(args.out_dir), plan, os.environ["GITHUB_RUN_ID"]).attempts, reviewer.name, args.slot
-        )
-        prompt: str | None = _assemble_prompt(plan, plan_path.parent, classification, workspace, unread)
+        attempts = attempt_files.load(Path(args.out_dir), plan, os.environ["GITHUB_RUN_ID"]).attempts
+        unread = selection.retry_unread(attempts, reviewer.name, args.slot)
+        unseen = selection.retry_unseen(attempts, reviewer.name, args.slot)
+        prompt: str | None = _assemble_prompt(plan, plan_path.parent, classification, workspace, unread, unseen)
     except DiffNotStagedError as exc:
         prompt = None
         outcome = runner.ReviewOutcome(None, Absence(ERROR, str(exc)), str(exc))
@@ -1526,7 +1656,7 @@ def command_review(args: argparse.Namespace) -> int:
             prompt=prompt,
             scratch=Path(args.scratch),
             now=_now(),
-            plan=plan,
+            plan=_with_last_attempt(plan, classification, attempts, reviewer, args.slot),
         )
     artifact = attempt_files.build_artifact(
         run_id=os.environ["GITHUB_RUN_ID"],
@@ -1825,6 +1955,7 @@ def _dispute_awaits(
     state: retry.State | None,
     head: str,
     runs: Sequence[sweep.Run],
+    attesters: frozenset[str] = frozenset(),
 ) -> bool:
     if state is None or state.head_sha != head or state.outcome != retry.FAILURE:
         return False
@@ -1834,6 +1965,7 @@ def _dispute_awaits(
         for reply in _dispute_replies(thread, bot_login)
         if (moment := github.parse_time(reply.get("created_at"))) is not None
     ]
+    moments += comment_disputes.latest_moments(github.issue_comments(repo, number), attesters)
     return bool(moments) and not any(run.created_at > max(moments) for run in runs)
 
 
@@ -1860,7 +1992,7 @@ def _retry_reason(
         found = sweep.with_timeouts(relevant, lambda run: github.run_timed_out(repo, run))
         return found, sweep.for_head(found, head)
 
-    if full and _dispute_awaits(repo, number, bot_login, state, head, relevant):
+    if full and _dispute_awaits(repo, number, bot_login, state, head, relevant, frozenset(binding.attesters)):
         return "an open dispute awaits its re-judgement"
 
     if state is not None and state.head_sha == head:

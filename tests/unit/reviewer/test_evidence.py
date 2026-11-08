@@ -647,6 +647,7 @@ def test_swf_without_coverage_is_incomplete(tmp_path: Path) -> None:
     shallow = check(verdict, run=_spans(("pkg/a.py", (1, 3))), **arguments)
     assert shallow is not None
     assert shallow.files == ("pkg/a.py",)
+    assert shallow.unseen == (("pkg/a.py", STAGED_DIFF_NAME, *MODIFIED_BLOCK),)
     assert shallow.reason.startswith("the verdict would ship but 1 of 1 changed hunks")
     assert check(verdict, run=_spans((STAGED_DIFF_NAME, MODIFIED_BLOCK)), **arguments) is None
     assert check(verdict, clears=False, run=Trace(), **arguments) is None

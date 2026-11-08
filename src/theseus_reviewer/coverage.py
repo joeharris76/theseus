@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,10 @@ class Report:
     @property
     def complete(self) -> bool:
         return not self.uncovered and not self.untouched
+
+    @property
+    def unseen(self) -> tuple[tuple[str, str, int, int], ...]:
+        return tuple((item.path, item.source, item.start, item.end) for item in self.uncovered)
 
 
 def canonical(path: str, workspace: Path) -> str:
@@ -207,6 +211,36 @@ def block_hints(
                 parts.append(f"read with :raw as {', '.join(raw)}")
             more = f" and {len(target.hunks) - _HINT_SPANS} more" if len(target.hunks) > _HINT_SPANS else ""
             hints[path] = f"({'; '.join(parts)}{more})"
+    return hints
+
+
+def unseen_hints(unseen: Iterable[Sequence[Any]], texts: Mapping[str, str]) -> dict[str, str]:
+    """Name the hunks an earlier attempt left unseen, per file, so a retry reads exactly those."""
+    cut = {name: cut_lines(text) for name, text in texts.items()}
+    by_path: dict[str, list[tuple[str, int, int]]] = {}
+    for path, source, start, end in unseen:
+        by_path.setdefault(path, []).append((source, start, end))
+    hints: dict[str, str] = {}
+    for path, spans in by_path.items():
+        parts: list[str] = []
+        plain: dict[str, list[str]] = {}
+        raw: list[str] = []
+        for source, start, end in spans[:_HINT_SPANS]:
+            if source not in cut:
+                parts.append(
+                    "read the whole file" if source == "the file itself" else f"{source} lines {_span_text(start, end)}"
+                )
+                continue
+            marks = cut[source]
+            if marks and marks[0] <= end and marks[-1] >= start:
+                raw.append(f"{source}:raw:{start}-{end}")
+            else:
+                plain.setdefault(source, []).append(_span_text(start, end))
+        parts += [f"{source} lines {', '.join(numbers)}" for source, numbers in plain.items()]
+        if raw:
+            parts.append(f"read with :raw as {', '.join(raw)}")
+        more = f" and {len(spans) - _HINT_SPANS} more" if len(spans) > _HINT_SPANS else ""
+        hints[path] = f"(unseen: {'; '.join(parts)}{more})"
     return hints
 
 
