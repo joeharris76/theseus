@@ -529,3 +529,25 @@ def test_the_path_the_model_cited_is_checked_as_well_as_its_symlink_target(polic
     finding = {**_old("Medium", 2), "file": "alias.py"}
     verdict = validate(_v("s", [finding]))
     assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_the_target_of_a_symlink_the_change_adds_is_not_demoted_in_a_first_round(
+    policy: Policy, tmp_path: Path
+) -> None:
+    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "alias.py").symlink_to("real.py")
+    plan = _plan_with(policy, new_files=["alias.py"], added_lines={"alias.py": []}, changed_paths=["alias.py"])
+    finding = {**_old("Medium", 2), "file": "real.py"}
+    verdict = validate(_v("s", [finding]))
+    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+    retargeted = _plan_with(policy, added_lines={"alias.py": [[1, 1]]}, changed_paths=["alias.py"])
+    assert protocol.judge_planned(verdict, retargeted, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_an_unrelated_untouched_file_still_demotes_beside_a_symlink_change(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("y\n", encoding="utf-8")
+    (tmp_path / "alias.py").symlink_to("real.py")
+    plan = _plan_with(policy, new_files=["alias.py"], added_lines={"alias.py": []}, changed_paths=["alias.py"])
+    verdict = validate(_v("s", [{**_old("Medium", 2), "file": "other.py"}]))
+    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP

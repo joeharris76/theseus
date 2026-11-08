@@ -791,6 +791,7 @@ def judge(
             for item in counted
             if advisory_scope.demotes(item)
             and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
+            and not advisory_scope.aliased(_resolve_tree(item.file, workspace), workspace)
         )
         if advisory_scope is not None
         else ()
@@ -862,6 +863,16 @@ class AdvisoryScope:
             if any(start <= end and finding.line <= last for start, last in self.added.get(path, ())):
                 return False
         return True
+
+    def aliased(self, target: str, workspace: Path | str | None) -> bool:
+        """Whether a path this change adds or touches is a different spelling (a symlink) of the target."""
+        if workspace is None:
+            return False
+        goal = _clean_path(target)
+        return any(
+            _clean_path(path) != goal and _resolve_tree(path, workspace) == goal
+            for path in (*self.new_files, *self.changed, *self.added)
+        )
 
     def demotes(self, finding: Finding) -> bool:
         return self.advisory and finding.severity in ADVISORY_SEVERITIES and self.verified(finding)
