@@ -246,16 +246,21 @@ def test_a_forced_fixed_on_a_blocking_verdict_is_kept_open_and_the_verdict_still
     assert protocol.judge_planned(kept, plan).decision == "SHIP_WITH_FIXES"
 
 
-def test_a_blocking_verdict_with_a_forced_fixed_and_a_current_defect_keeps_both(policy: Policy) -> None:
+@pytest.mark.parametrize("decision", ["SHIP_WITH_FIXES", "DO_NOT_SHIP"])
+def test_a_blocking_verdict_with_a_forced_fixed_and_a_current_defect_keeps_both(policy: Policy, decision: str) -> None:
     plan = _plan_with_dispute(policy, _dispute())
     plan["protocol"]["forced"] = True
     payload = _verdict_dict(_disposition("fixed", evidence_text="the fallback fixes it at pkg/kept.py:12"))
-    payload["decision"] = "DO_NOT_SHIP"
+    payload["decision"] = decision
+    payload["defects"] = [
+        {"severity": "High", "file": CHECKER, "line": 2, "title": "New row loss", "detail": "Still drops a row"}
+    ]
     verdict = validate(payload)
     assert protocol.contradiction(verdict, plan) is None
     kept = protocol.keep_disputes_open(verdict, plan)
-    assert kept.decision == "DO_NOT_SHIP" and kept.defects == verdict.defects
-    assert protocol.judge_planned(kept, plan).decision == "DO_NOT_SHIP"
+    assert kept.decision == decision and kept.defects == verdict.defects
+    assert kept.prior_defects[0].status == "not_fixed"
+    assert protocol.judge_planned(kept, plan).decision == decision
 
 
 def test_a_forced_withdrawal_and_a_maintain_are_not_forced_fixed_problems(policy: Policy) -> None:
