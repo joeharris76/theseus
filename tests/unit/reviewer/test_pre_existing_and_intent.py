@@ -439,3 +439,38 @@ def test_a_file_with_any_deleting_hunk_never_demotes_and_other_files_still_do() 
     assert deleting_files(diff) == {"f"}
     ranges = cli._added_ranges(diff)
     assert ranges["f"] == [[1, 10_000_000]] and ranges["g"] == [[2, 2]]
+
+
+def _scope_plan(policy: Policy, diff: str, changed: list[str]) -> dict[str, Any]:
+    return {
+        **_protocol_plan(policy, pre_existing="advisory"),
+        "added_lines": cli._added_ranges(diff),
+        "new_files": [],
+        "changed_paths": changed,
+    }
+
+
+def _old_in(file: str) -> dict[str, Any]:
+    return {**_old("Medium", 2), "file": file}
+
+
+def test_a_changed_file_git_reports_as_binary_never_demotes(policy: Policy) -> None:
+    diff = f"diff --git a/{CHECKER} b/{CHECKER}\nindex 1..2 100644\nBinary files a/{CHECKER} and b/{CHECKER} differ\n"
+    plan = _scope_plan(policy, diff, [CHECKER])
+    assert CHECKER not in plan["added_lines"]
+    assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_changed_file_whose_header_git_quotes_never_demotes(policy: Policy) -> None:
+    path = "docs/naïve.py"
+    diff = 'diff --git "a/docs/na\\303\\257ve.py" "b/docs/na\\303\\257ve.py"\n--- "a/docs/na\\303\\257ve.py"\n+++ "b/docs/na\\303\\257ve.py"\n@@ -9,1 +9,2 @@\n a\n+b\n'
+    plan = _scope_plan(policy, diff, [path])
+    assert path not in plan["added_lines"]
+    assert _judged(plan, _old_in(path)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_mapped_changed_file_and_an_untouched_file_still_demote(policy: Policy) -> None:
+    diff = f"diff --git a/{CHECKER} b/{CHECKER}\n--- a/{CHECKER}\n+++ b/{CHECKER}\n@@ -9,1 +9,2 @@\n a\n+b\n"
+    plan = _scope_plan(policy, diff, [CHECKER])
+    assert _judged(plan, _old("Medium", 2)).decision == protocol.SHIP
+    assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP

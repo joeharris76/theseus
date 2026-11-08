@@ -387,6 +387,11 @@
         "timeout_minutes": 45
       }
     ],
+    "changed_paths": [
+      "benchbox/core/equivalence/cells.py",
+      "benchbox/core/equivalence/checker.py",
+      "docs/notes.md"
+    ],
     "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",

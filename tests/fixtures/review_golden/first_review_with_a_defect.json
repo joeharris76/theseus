@@ -219,6 +219,9 @@
         "timeout_minutes": 45
       }
     ],
+    "changed_paths": [
+      "benchbox/core/equivalence/checker.py"
+    ],
     "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",

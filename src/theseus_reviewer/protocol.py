@@ -832,9 +832,12 @@ class AdvisoryScope:
     added: Mapping[str, Sequence[Sequence[int]]]
     new_files: frozenset[str]
     advisory: bool
+    changed: frozenset[str] = frozenset()
 
     def verified(self, finding: Finding) -> bool:
         if finding.origin != PRE_EXISTING or finding.file in self.new_files or names_other_location(finding):
+            return False
+        if finding.file in self.changed and finding.file not in self.added:
             return False
         end = finding.end_line or finding.line
         return not any(start <= end and finding.line <= last for start, last in self.added.get(finding.file, ()))
@@ -848,7 +851,12 @@ def advisory_scope(plan: Mapping[str, Any]) -> AdvisoryScope | None:
     if not isinstance(added, Mapping):
         return None
     rules = plan.get("protocol") or {}
-    return AdvisoryScope(added, frozenset(plan.get("new_files") or ()), rules.get("pre_existing") == "advisory")
+    return AdvisoryScope(
+        added,
+        frozenset(plan.get("new_files") or ()),
+        rules.get("pre_existing") == "advisory",
+        frozenset(plan.get("changed_paths") or ()),
+    )
 
 
 def judge_planned(
