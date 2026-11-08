@@ -249,6 +249,7 @@ ADAPTER_FIELDS = {
     "decision_reason",
     "previous_state",
     "history",
+    "threaded",
 }
 PARITY_CASES = {
     "clean": ([_reply("SHIP")], False),

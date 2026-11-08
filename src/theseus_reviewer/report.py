@@ -51,6 +51,11 @@ MARKER_LIMIT_NOTE = (
     "identifiers and open no tracked threads, so they are not carried into the next review."
 )
 STATES = {selection.PASS: SUCCESS, selection.FAIL: FAILURE, selection.PENDING: PENDING}
+STEP_BACK_NOTE = (
+    "Step back: this pull request has had {rounds} review rounds with findings, so this round re-read the whole"
+    " change for the classes of defect already listed. Before pushing again, reconsider the approach rather than"
+    " patching each finding one at a time."
+)
 
 
 @dataclass(frozen=True)
@@ -76,11 +81,53 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + TRUNCATED
 
 
-def _finding_line(finding: Finding, defect_id: str | None = None, cap: int = MAX_DETAIL) -> str:
+def _origin_tag(scope: protocol.AdvisoryScope | None, finding: Finding) -> str:
+    return " (pre-existing)" if scope is not None and scope.verified(finding) else ""
+
+
+def _finding_line(finding: Finding, defect_id: str | None = None, cap: int = MAX_DETAIL, tag: str = "") -> str:
     detail = f"\n  {_cut(finding.detail, cap)}" if finding.detail else ""
     span = f"{finding.line}-{finding.end_line}" if finding.end_line else str(finding.line)
     named = f"{defect_id}: " if defect_id else ""
-    return f"- **{finding.severity}** `{display_path(finding.file)}:{span}`: {named}{finding.title}{detail}"
+    return f"- **{finding.severity}** `{display_path(finding.file)}:{span}`: {named}{finding.title}{tag}{detail}"
+
+
+def _threads_to_open(
+    plan: Mapping[str, Any],
+    judgement: protocol.Judgement | None,
+    commentable: Mapping[str, frozenset[int]],
+    delivery: str,
+    cycle: int,
+) -> tuple[list[tuple[Finding, str]], list[str]]:
+    """Open findings carried from earlier rounds that have no thread: thread the anchorable ones."""
+    if judgement is None or judgement.decision != protocol.SHIP_WITH_FIXES:
+        return [], []
+    if delivery != "review":
+        return [], [entry["id"] for entry in judgement.carried]
+    if plan.get("threaded") is None:
+        return [], []
+    threaded = frozenset(plan["threaded"])
+    known = plan.get("open_findings") or {}
+    opened: list[tuple[Finding, str]] = []
+    unanchored: list[str] = []
+    for entry in judgement.carried:
+        if f"c{cycle}-{entry['id']}" in threaded:
+            continue
+        end = entry.get("end_line")
+        finding = Finding(
+            entry["severity"],
+            entry["file"],
+            entry["line"],
+            entry["title"],
+            "",
+            end if isinstance(end, int) and end > entry["line"] else None,
+        )
+        if entry["line"] in commentable.get(entry["file"], frozenset()):
+            if dedup.fingerprint(finding.file, finding.title) not in known:
+                opened.append((finding, entry["id"]))
+        else:
+            unanchored.append(entry["id"])
+    return opened, unanchored
 
 
 def _entry_line(entry: Mapping[str, Any]) -> str:
@@ -147,6 +194,7 @@ def _record(
     disputed: Sequence[str] = (),
     promotion_record: Mapping[str, Any] | None = None,
     coverage: bool = False,
+    advisory: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     rules = plan["protocol"]
     record = {
@@ -173,6 +221,10 @@ def _record(
         record["disputed"] = list(disputed)
     if adjudicated:
         record["adjudicated"] = [dict(item) for item in adjudicated]
+    if rules.get("step_back") and kind in (protocol.FIRST, protocol.FOLLOW_UP):
+        record["step_back"] = 1
+    if advisory:
+        record["advisory"] = [dict(item) for item in advisory[: protocol.ADVISORY_RECORD_LIMIT]]
     if coverage and decision in (protocol.SHIP, protocol.SHIP_WITH_FIXES):
         record["coverage"] = int(coverage)
     if promotion_record is not None and not carried and decision == protocol.SHIP and not open_defects:
@@ -276,7 +328,7 @@ def _absences(attempts: list[Attempt], step: Step) -> list[str]:
 
 
 def _review_comment(
-    finding: Finding, commentable: Mapping[str, frozenset[int]], defect_marker: str = ""
+    finding: Finding, commentable: Mapping[str, frozenset[int]], defect_marker: str = "", tag: str = ""
 ) -> dict[str, Any]:
     span = comment_span(finding, commentable)
     anchor: dict[str, Any] = {"line": finding.line, "side": "RIGHT"}
@@ -285,7 +337,7 @@ def _review_comment(
     return {
         "path": finding.file,
         **anchor,
-        "body": f"**{finding.severity}**: {finding.title}\n\n{finding.detail}".rstrip()
+        "body": f"**{finding.severity}**: {finding.title}{tag}\n\n{finding.detail}".rstrip()
         + (f"\n\n{defect_marker}" if defect_marker else "")
         + f"\n\n{dedup.marker(finding)}",
     }
@@ -298,12 +350,14 @@ def _review_payload(
     commentable: Mapping[str, frozenset[int]],
     markers: Mapping[Finding, str] | None = None,
 ) -> dict[str, Any]:
+    scope = protocol.advisory_scope(plan)
     return {
         "commit_id": plan["head_sha"],
         "event": "COMMENT",
         "body": body,
         "comments": [
-            _review_comment(finding, commentable, (markers or {}).get(finding, "")) for finding in placement.inline
+            _review_comment(finding, commentable, (markers or {}).get(finding, ""), _origin_tag(scope, finding))
+            for finding in placement.inline
         ],
     }
 
@@ -331,6 +385,7 @@ def _marked(
     secrets: tuple[str, ...],
     escalated: Sequence[str] = (),
     disputed: Sequence[str] = (),
+    advisory: Mapping[Finding, str] | None = None,
 ) -> str | None:
     open_defects = [*judgement.carried, *(protocol.defect_entry(ids[item], item) for item in judgement.defects)]
     try:
@@ -340,7 +395,7 @@ def _marked(
             decision=judgement.decision,
             reviewer=reviewer,
             open_defects=open_defects,
-            next_id=next_id + len(judgement.defects),
+            next_id=next_id + len(judgement.defects) + len(advisory or {}),
             strikes_after=strikes,
             escalated=escalated,
             disputed=disputed,
@@ -350,6 +405,7 @@ def _marked(
             if isinstance(plan.get("promotion"), Mapping) and judgement.decision == protocol.SHIP and not open_defects
             else None,
             coverage=bool(plan.get("coverage")),
+            advisory=[protocol.defect_entry(defect_id, item) for item, defect_id in (advisory or {}).items()],
         )
     except protocol.MarkerError:
         return None
@@ -474,6 +530,14 @@ def finalize(
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
     fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
     placement = place(fresh, commentable)
+    scope = protocol.advisory_scope(plan)
+    advisory_ids = (
+        {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
+        if judgement is not None
+        else {}
+    )
+    delivery = plan.get("findings_delivery", "comment")
+    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (
         protocol.escalated_ids(rules.get("maintained") or {}, judgement.carried, disputed)
@@ -488,13 +552,14 @@ def finalize(
     ):
         strikes += 1
     marker = (
-        _marked(plan, judgement, reviewer or "", ids, next_id, strikes, secrets, escalated, disputed)
+        _marked(plan, judgement, reviewer or "", ids, next_id, strikes, secrets, escalated, disputed, advisory_ids)
         if judgement and rules
         else None
     )
     unrecorded = bool(judgement and rules and marker is None)
     if unrecorded:
-        ids, markers = {}, {}
+        ids, markers, advisory_ids = {}, {}, {}
+        opened, unanchored = [], []
         state, pending_cause = PENDING, MARKER_LIMIT
     degraded = _degraded(plan, attempts)
     gone = plan.get("served_error") or (
@@ -506,13 +571,18 @@ def finalize(
         else _description(step, judgement, reviewer, pending_cause, escalated, gone)
     )
     degraded_suffix = f" · degraded: {', '.join(degraded)}" if degraded else ""
-    delivery = plan.get("findings_delivery", "comment")
     listed = [*placement.inline, *placement.summary, *(judgement.not_counted if judgement is not None else ())]
 
     def render(cap: int | None, evidence_cap: int | None = None) -> str:
         active = MAX_DETAIL if cap is None else cap
-        findings_lines = [_finding_line(finding, ids.get(finding), active) for finding in placement.inline]
-        other_lines = [_finding_line(finding, ids.get(finding), active) for finding in placement.summary]
+        findings_lines = [
+            _finding_line(finding, ids.get(finding), active, _origin_tag(scope, finding))
+            for finding in placement.inline
+        ]
+        other_lines = [
+            _finding_line(finding, ids.get(finding), active, _origin_tag(scope, finding))
+            for finding in placement.summary
+        ]
         lines = [*_header(plan, state)]
         if unrecorded:
             lines += [MARKER_LIMIT_NOTE, ""]
@@ -526,6 +596,8 @@ def finalize(
         )
         if cap is not None:
             lines += [_size_notice(listed, cap), ""]
+        if rules.get("step_back"):
+            lines += [STEP_BACK_NOTE.format(rounds=int(rules.get("finding_rounds") or 0)), ""]
         lines += _judgement_notes(judgement)
         lines += _dispositions(plan, verdict, evidence_cap)
         if escalated:
@@ -541,6 +613,28 @@ def finalize(
         )
         if placement.summary:
             lines += ["Defects outside the diff count like the others: fix them before merge.", ""]
+        lines += _section(
+            "Review threads opened for earlier findings that had none",
+            [f"- {defect_id}" for _, defect_id in opened],
+        )
+        threadless = [
+            *(ids[finding] for finding in placement.summary if finding in ids),
+            *unanchored,
+            *(ids[finding] for finding in placement.inline if finding in ids and delivery != "review"),
+        ]
+        if threadless:
+            lines += [
+                f"No review thread exists for {', '.join(threadless)}. An attester can dispute one with a pull request"
+                f" comment: `{protocol.COMMENT_DISPUTE_GRAMMAR}`.",
+                "",
+            ]
+        lines += _section(
+            "Pre-existing, not blocking",
+            [
+                _finding_line(finding, advisory_ids.get(finding), active, _origin_tag(scope, finding))
+                for finding in (judgement.advisory if judgement is not None else ())
+            ],
+        )
         lines += _section(
             "Defects already open as review threads, not posted again",
             [
@@ -571,8 +665,24 @@ def finalize(
         return body
 
     body = _fit(render)
-    has_content = bool(defects or judgement is None or judgement.decision != protocol.SHIP or state != SUCCESS)
-    review = _review_payload(plan, body, placement, commentable, markers) if delivery == "review" else None
+    has_content = bool(
+        defects
+        or (judgement is not None and judgement.advisory)
+        or judgement is None
+        or judgement.decision != protocol.SHIP
+        or state != SUCCESS
+    )
+    review = (
+        _review_payload(
+            plan,
+            body,
+            Placement((*placement.inline, *(finding for finding, _ in opened)), placement.summary),
+            commentable,
+            {**markers, **{finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in opened}},
+        )
+        if delivery == "review"
+        else None
+    )
     cause = pending_cause if state == PENDING else None
     final_strikes = strikes if judgement is not None and not unrecorded else None
     return Final(

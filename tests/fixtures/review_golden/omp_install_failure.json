@@ -22,6 +22,14 @@
     }
   },
   "plan": {
+    "added_lines": {
+      "benchbox/core/equivalence/checker.py": [
+        [
+          2,
+          3
+        ]
+      ]
+    },
     "base_ref": "develop",
     "base_sha": "<sha1>",
     "binary_files": [],
@@ -151,6 +159,7 @@
     "max_attempts": 5,
     "max_defects": 10,
     "mode": "enforce",
+    "new_files": [],
     "omp_config": ".github/review-omp-config.yml",
     "omp_sha256": "<volatile>",
     "open_findings": {},
@@ -161,6 +170,7 @@
       "base_ref": "develop",
       "changed": null,
       "cycle": 1,
+      "finding_rounds": 0,
       "forced": false,
       "kind": "first",
       "max_do_not_ship": 3,
@@ -169,11 +179,13 @@
       "patch_map": {
         "5b21f32d": "76119d103787b015"
       },
+      "pre_existing": "block",
       "previous": null,
       "prior": [],
       "reason": "first review of this pull request",
       "round": 1,
       "seen": [],
+      "step_back": false,
       "strikes": 0,
       "struck_digests": []
     },
@@ -200,6 +212,7 @@
       "changes comparison, validation or result logic: benchbox/core/equivalence/checker.py"
     ],
     "status_context": "review-verdict",
+    "threaded": [],
     "unchanged_files": [],
     "untracked_files": []
   },

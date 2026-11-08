@@ -106,6 +106,7 @@ def response_template(prior_ids: Sequence[str] = ()) -> str:
                 "end_line": None,
                 "title": marks["title"],
                 "detail": marks["detail"],
+                "origin": marks["origin"],
             }
         ],
         "prior_defects": [
@@ -206,6 +207,18 @@ CLAIMED_RULE = (
     " Review the change in every file it touches as in a first review: list in defects every defect not already"
     " listed above, including a more severe version of a listed defect, whatever file it is in. Defects you add count"
     " toward the {max_defects} limit."
+)
+STEP_BACK_RULE = (
+    "This pull request has had {rounds} review rounds with findings, so this is the one step-back review: read the"
+    ' whole change again, not only what changed since the last review. For each class of defect under "Earlier'
+    ' defects", look for every remaining instance anywhere in the change and report all instances of a class in one'
+    " defect entry. Keep every earlier id in prior_defects; an open defect is never dropped by stepping back. If the"
+    " approach itself keeps producing these defects, say so in your summary."
+)
+DELTA_RULE = (
+    "The staged file {name} holds the changes since the last reviewed head. Read it first, then read the changed"
+    " hunks in the staged pull request diff as usual: every changed hunk must still be seen, and a defect on an old"
+    " line of a changed file still counts."
 )
 
 
@@ -359,7 +372,7 @@ def assemble_values(
         change_data = with_full_diff(change_data, diff_path)
     return {
         "template_name": template_name,
-        "template_version": 2,
+        "template_version": 3,
         "repo": repo,
         "pr": pr,
         "base": base_sha,

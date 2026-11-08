@@ -65,6 +65,7 @@ PATCH_HEX = 16
 MISSING = "missing"
 ABSENT_MODE = "000000"
 ABSENT_ID = "0" * 40
+ADVISORY_RECORD_LIMIT = 5
 RECORD_KEYS = frozenset(
     {
         "v",
@@ -85,7 +86,18 @@ RECORD_KEYS = frozenset(
     }
 )
 OPTIONAL_RECORD_KEYS = frozenset(
-    {"patch_map", "forced", "run_uuid", "escalated", "adjudicated", "disputed", "promotion", "coverage"}
+    {
+        "patch_map",
+        "forced",
+        "run_uuid",
+        "escalated",
+        "adjudicated",
+        "disputed",
+        "promotion",
+        "coverage",
+        "step_back",
+        "advisory",
+    }
 )
 DEFECT_KEYS = ("id", "severity", "file", "line", "end_line", "title")
 
@@ -104,6 +116,7 @@ class Judgement:
     not_counted: tuple[Finding, ...] = ()
     withdrawn: tuple[str, ...] = ()
     merged: int = 0
+    advisory: tuple[Finding, ...] = ()
 
     @property
     def label(self) -> str:
@@ -123,6 +136,7 @@ class Round:
     previous: Mapping[str, Any] | None = None
     changed: frozenset[str] | None = None
     forced: bool = False
+    step_back: bool = False
 
 
 @dataclass(frozen=True)
@@ -212,7 +226,11 @@ def encode_marker(record: Mapping[str, Any], patches: Mapping[str, str] | None =
     full = render({**record, "patch_map": dict(patches)}) if patches is not None else ""
     if full and len(full) <= MARKER_LIMIT:
         return full
-    for stripped in ({**record}, {**record, "summary": ""}):
+    for stripped in (
+        {**record},
+        {key: value for key, value in record.items() if key != "advisory"},
+        {key: value for key, value in record.items() if key not in ("advisory", "summary")} | {"summary": ""},
+    ):
         trimmed = render(stripped)
         if len(trimmed) <= MARKER_LIMIT:
             return trimmed
@@ -299,6 +317,15 @@ def _valid_record(record: Any) -> bool:
         and (record.get("patch_map") is None or _valid_patches(record["patch_map"]))
         and ("promotion" not in record or promotion.valid_promotion_record(record["promotion"]))
         and ("coverage" not in record or (type(record["coverage"]) is int and record["coverage"] >= 1))
+        and ("step_back" not in record or (type(record["step_back"]) is int and record["step_back"] == 1))
+        and (
+            "advisory" not in record
+            or (
+                isinstance(record["advisory"], list)
+                and len(record["advisory"]) <= ADVISORY_RECORD_LIMIT
+                and all(_valid_defect(item) for item in record["advisory"])
+            )
+        )
     )
 
 
@@ -491,6 +518,16 @@ def _legacy_clearance(record: Mapping[str, Any]) -> bool:
     return record["decision"] in (SHIP, SHIP_WITH_FIXES) and not record.get("coverage")
 
 
+def finding_streak(records: Sequence[Mapping[str, Any]], cycle: int) -> list[Mapping[str, Any]]:
+    streak: list[Mapping[str, Any]] = []
+    for record in reversed(records):
+        if record.get("cycle") != cycle or not record.get("open_defects"):
+            break
+        if record.get("kind") in (FIRST, FOLLOW_UP):
+            streak.append(record)
+    return streak
+
+
 def plan_round(
     found: History,
     *,
@@ -506,6 +543,7 @@ def plan_round(
     base_change_unreadable: bool = False,
     manual: bool = False,
     is_promotion: bool = False,
+    max_finding_rounds: int | None = None,
 ) -> Round:
     latest = found.latest
     if strike_count >= max_do_not_ship:
@@ -612,6 +650,22 @@ def plan_round(
         if latest.get("coverage")
         else frozenset(paths)
     )
+    streak = finding_streak(found.records, latest["cycle"]) if max_finding_rounds is not None else []
+    if (
+        max_finding_rounds is not None
+        and len(streak) >= max_finding_rounds
+        and not any(record.get("step_back") for record in streak)
+    ):
+        return Round(
+            FOLLOW_UP,
+            f"the patch changed after {LABELS[latest['decision']]}, and this pull request has had {len(streak)} rounds"
+            " with findings: one step-back re-review of the whole change",
+            latest["cycle"],
+            latest["round"] + 1,
+            latest,
+            frozenset(paths),
+            step_back=True,
+        )
     return Round(
         FOLLOW_UP,
         f"the patch changed after {LABELS[latest['decision']]}",
@@ -672,6 +726,7 @@ def judge(
     workspace: Path | str | None = None,
     read: Returned | None = None,
     claimed: frozenset[str] = frozenset(),
+    advisory_scope: AdvisoryScope | None = None,
 ) -> Judgement:
     if verdict.status != COMPLETE:
         raise ValueError("only a complete review can be judged")
@@ -726,6 +781,8 @@ def judge(
         outside = tuple(outside_list)[:NOT_COUNTED_LIMIT]
     counted = tuple(dict.fromkeys(in_scope))
     merged = len(in_scope) - len(counted)
+    advisory = tuple(item for item in counted if advisory_scope.demotes(item)) if advisory_scope is not None else ()
+    counted = tuple(item for item in counted if item not in advisory)
     uncounted = verdict.listed - len(verdict.defects)
     confirmed_claims = sum(1 for item in carried if item["id"] in claimed)
     total = (
@@ -741,8 +798,39 @@ def judge(
         summary = _clip(verdict.summary, DO_NOT_SHIP_SUMMARY - len(note)) + note
         return Judgement(DO_NOT_SHIP, (), summary, fixed=fixed, withdrawn=withdrawn)
     if carried or counted:
-        return Judgement(SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged)
-    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
+        return Judgement(
+            SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged, advisory
+        )
+    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn, advisory=advisory)
+
+
+PRE_EXISTING = "pre-existing"
+INTRODUCED = "introduced"
+ADVISORY_SEVERITIES = ("Medium", "Low")
+
+
+@dataclass(frozen=True)
+class AdvisoryScope:
+    added: Mapping[str, Sequence[Sequence[int]]]
+    new_files: frozenset[str]
+    advisory: bool
+
+    def verified(self, finding: Finding) -> bool:
+        if finding.origin != PRE_EXISTING or finding.file in self.new_files:
+            return False
+        end = finding.end_line or finding.line
+        return not any(start <= end and finding.line <= last for start, last in self.added.get(finding.file, ()))
+
+    def demotes(self, finding: Finding) -> bool:
+        return self.advisory and finding.severity in ADVISORY_SEVERITIES and self.verified(finding)
+
+
+def advisory_scope(plan: Mapping[str, Any]) -> AdvisoryScope | None:
+    added = plan.get("added_lines")
+    if not isinstance(added, Mapping):
+        return None
+    rules = plan.get("protocol") or {}
+    return AdvisoryScope(added, frozenset(plan.get("new_files") or ()), rules.get("pre_existing") == "advisory")
 
 
 def judge_planned(
@@ -763,6 +851,7 @@ def judge_planned(
         workspace=ws,
         read=read,
         claimed=frozenset(rules.get("claimed") or ()),
+        advisory_scope=advisory_scope(plan),
     )
 
 
@@ -779,6 +868,22 @@ DISPUTE_MARKER = "Dispute:"
 
 def is_dispute(body: str) -> bool:
     return any(line.strip().startswith(DISPUTE_MARKER) for line in body.splitlines())
+
+
+COMMENT_DISPUTE_GRAMMAR = f"{DISPUTE_MARKER} D<n> - <reason>"
+_COMMENT_DISPUTE = re.compile(r"(?P<id>D[1-9][0-9]{0,3}) - (?P<reason>\S.*)", re.DOTALL)
+
+
+def is_comment_dispute_trigger(body: str | None) -> bool:
+    return (body or "").lstrip().casefold().startswith(DISPUTE_MARKER.casefold())
+
+
+def parse_comment_dispute(body: str | None) -> tuple[str, str] | None:
+    text = (body or "").strip()
+    if not is_comment_dispute_trigger(text) or not text[len(DISPUTE_MARKER) :].startswith(" "):
+        return None
+    match = _COMMENT_DISPUTE.fullmatch(text[len(DISPUTE_MARKER) + 1 :])
+    return (match["id"], match["reason"]) if match else None
 
 
 def thread_finding(body: str) -> tuple[int, str] | None:
@@ -927,6 +1032,24 @@ def forced_fixed_problems(verdict: Verdict, plan: Mapping[str, Any]) -> dict[str
         for item in verdict.prior_defects
         if item.id in claims and item.status == FIXED and item.demoted not in DEMOTED_STATUSES
     }
+
+
+def demote_forced_fixed(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
+    if not plan.get("last_attempt"):
+        return verdict
+    problems = forced_fixed_problems(verdict, plan)
+    if not problems:
+        return verdict
+    note = "a fixed disposition cannot apply to a dispute re-review of an unchanged patch; recorded as maintained"
+    return replace(
+        verdict,
+        prior_defects=tuple(
+            replace(item, status=NOT_FIXED, evidence=f"{item.evidence} {note}".strip(), demoted=DEMOTED_DISPOSITION)
+            if item.id in problems
+            else item
+            for item in verdict.prior_defects
+        ),
+    )
 
 
 def dispute_problem(verdict: Verdict, plan: Mapping[str, Any]) -> str | None:

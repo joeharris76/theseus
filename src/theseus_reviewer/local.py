@@ -402,12 +402,26 @@ class LocalEnvironment:
                 base_changed_at=base_changed[0],
                 base_change_unreadable=base_changed[1],
                 disputes=disputes,
+                description=self._commit_messages(base) if policy.brief.include_intent else None,
+                since_diff=self._since_diff,
             ),
             matchers,
         )
         if code == 0 and local and found.latest is not None:
             self._pin_reviewer(out_dir, found.latest["reviewer"])
         return code
+
+    def _commit_messages(self, base: str) -> str:
+        try:
+            return _git(self.root, "log", "--format=%B%n", f"{base}..{self.head}")
+        except Unavailable:
+            return ""
+
+    def _since_diff(self, previous: str) -> str | None:
+        try:
+            return gitdiff.local_diff(self.root, previous, self.head)
+        except gitdiff.GitDiffError:
+            return None
 
     def _pin_reviewer(self, out_dir: Path, reviewer: str) -> None:
         plan_file = out_dir / cli.PLAN_FILE

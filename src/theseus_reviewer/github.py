@@ -170,6 +170,10 @@ def review_threads(repo: str, pr: int) -> list[dict[str, Any]]:
         after = connection["pageInfo"]["endCursor"]
 
 
+def issue_comments(repo: str, pr: int) -> list[dict[str, Any]]:
+    return [item for item in get_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100") if isinstance(item, dict)]
+
+
 def reviews(repo: str, pr: int) -> list[dict[str, Any]]:
     return [
         {

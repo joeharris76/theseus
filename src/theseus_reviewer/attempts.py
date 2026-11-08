@@ -30,6 +30,17 @@ ARTIFACT_KEYS = frozenset(
 OPTIONAL_KEYS = frozenset({"resolved"})
 VERDICT_OUTCOME = "verdict"
 ABSENT_OUTCOME = "absent"
+UNSEEN_LIMIT = 200
+
+
+def _unseen_entry(item: Any) -> bool:
+    return (
+        isinstance(item, list)
+        and len(item) == 4
+        and isinstance(item[0], str)
+        and isinstance(item[1], str)
+        and all(isinstance(number, int) and not isinstance(number, bool) for number in item[2:])
+    )
 
 
 def artifact_name(slot: int) -> str:
@@ -65,6 +76,7 @@ def build_artifact(
             "reset_at": missing.reset_at.isoformat() if missing.reset_at else None,
             "provider": missing.provider,
             "unread": list(missing.unread),
+            "unseen": [list(item) for item in missing.unseen[:UNSEEN_LIMIT]],
         },
         "verdict": dict(verdict) if missing is None and verdict is not None else None,
         "diagnostic": diagnostic,
@@ -140,7 +152,13 @@ def _judged(
         return Attempt(slot, reviewer, selection.ABSENT, absence.INVALID, "unknown absence record")
     reset_at = missing.get("reset_at")
     unread = missing.get("unread") or []
-    if not isinstance(unread, list) or not all(isinstance(item, str) for item in unread):
+    unseen = missing.get("unseen") or []
+    if (
+        not isinstance(unread, list)
+        or not all(isinstance(item, str) for item in unread)
+        or not isinstance(unseen, list)
+        or not all(_unseen_entry(item) for item in unseen)
+    ):
         return Attempt(slot, reviewer, selection.ABSENT, absence.INVALID, "unknown absence record")
     return Attempt(
         slot,
@@ -151,6 +169,7 @@ def _judged(
         datetime.fromisoformat(reset_at) if reset_at else None,
         str(missing.get("provider") or ""),
         tuple(unread),
+        unseen=tuple((item[0], item[1], item[2], item[3]) for item in unseen),
     )
 
 

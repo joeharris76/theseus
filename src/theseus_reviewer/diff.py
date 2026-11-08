@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 _FULL_HUNK = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 STAGED_DIFF_NAME = ".review-pull-request.diff"
+SINCE_STAGED_NAME = ".review-since-last-review.diff"
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,7 @@ def _target_path(line: str) -> str | None:
     return target[2:] if target.startswith("b/") else target
 
 
-def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
-    lines_by_path: dict[str, set[int]] = {}
+def _walk(diff_text: str) -> Iterator[tuple[str, int, bool]]:
     path: str | None = None
     new_line = 0
     remaining = 0
@@ -50,11 +51,23 @@ def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
         if path is None or remaining <= 0:
             continue
         if line.startswith("+") or line.startswith(" "):
-            lines_by_path.setdefault(path, set()).add(new_line)
+            yield path, new_line, line.startswith("+")
             new_line += 1
             remaining -= 1
-        elif line.startswith("\\"):
-            continue
+
+
+def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    lines_by_path: dict[str, set[int]] = {}
+    for path, number, _ in _walk(diff_text):
+        lines_by_path.setdefault(path, set()).add(number)
+    return {name: frozenset(numbers) for name, numbers in lines_by_path.items()}
+
+
+def added_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    lines_by_path: dict[str, set[int]] = {}
+    for path, number, added in _walk(diff_text):
+        if added:
+            lines_by_path.setdefault(path, set()).add(number)
     return {name: frozenset(numbers) for name, numbers in lines_by_path.items()}
 
 

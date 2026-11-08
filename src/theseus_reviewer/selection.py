@@ -35,6 +35,7 @@ class Attempt:
     recovery: Recovery | None = None
     target: str = ""
     nominal: str = ""
+    unseen: tuple[tuple[str, str, int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,15 @@ def retry_unread(attempts: Sequence[Attempt], reviewer: str, slot: int) -> tuple
     if not history or not _may_retry(history):
         return ()
     return history[-1].unread if history[-1].absence == INCOMPLETE else ()
+
+
+def retry_unseen(attempts: Sequence[Attempt], reviewer: str, slot: int) -> tuple[tuple[str, str, int, int], ...]:
+    history = sorted(
+        (item for item in attempts if item.reviewer == reviewer and item.slot < slot), key=lambda a: a.slot
+    )
+    if not history or not _may_retry(history):
+        return ()
+    return history[-1].unseen if history[-1].absence == INCOMPLETE else ()
 
 
 def _skip_reason(
