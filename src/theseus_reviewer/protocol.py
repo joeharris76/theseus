@@ -795,6 +795,7 @@ def judge(
             if advisory_scope.demotes(item)
             and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
             and not advisory_scope.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
+            and (workspace is None or _exists_exact(_resolve_tree(item.file, workspace), workspace))
         )
         if advisory_scope is not None and not uncounted
         else ()
@@ -875,6 +876,8 @@ class AdvisoryScope:
             own = _clean_path(path)
             real = _resolve_tree(path, workspace)
             for goal in goals:
+                if real in ("", ".") and own != goal:
+                    return True
                 if own != goal and (real == goal or goal.startswith(f"{real}/") or goal.startswith(f"{own}/")):
                     return True
         return False
@@ -891,7 +894,7 @@ def advisory_scope(plan: Mapping[str, Any]) -> AdvisoryScope | None:
     return AdvisoryScope(
         added,
         frozenset(plan.get("new_files") or ()),
-        rules.get("pre_existing") == "advisory",
+        rules.get("pre_existing") == "advisory" and not plan.get("promotion"),
         frozenset(plan.get("changed_paths") or ()),
     )
 

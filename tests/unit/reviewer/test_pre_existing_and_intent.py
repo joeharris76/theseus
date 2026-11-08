@@ -578,3 +578,28 @@ def test_findings_beyond_the_listing_cap_keep_demotion_off(policy: Policy) -> No
     verdict = validate(data, trusted=True)
     judgement = protocol.judge_planned(verdict, _plan_with(policy))
     assert judgement.advisory == () and judgement.decision != protocol.SHIP
+
+
+def test_a_directory_symlink_to_the_repository_root_aliases_every_path(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "foo.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "up").symlink_to(".")
+    plan = _plan_with(policy, new_files=["up"], added_lines={"up": []}, changed_paths=["up"])
+    verdict = validate(_v("s", [{**_old("Medium", 2), "file": "src/foo.py"}]))
+    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_cited_path_that_is_not_a_file_in_the_head_tree_never_demotes(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "x.py").write_text("x\n", encoding="utf-8")
+    plan = _plan_with(policy, added_lines={"src/x.py": [[1, 5]]}, changed_paths=["src/x.py"])
+    wrong = validate(_v("s", [{**_old("Medium", 2), "file": "x.py"}]))
+    assert protocol.judge_planned(wrong, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+    other = _plan_with(policy)
+    untouched = validate(_v("s", [{**_old("Medium", 2), "file": "src/x.py"}]))
+    assert protocol.judge_planned(untouched, other, workspace=tmp_path).decision == protocol.SHIP
+
+
+def test_a_promotion_review_never_demotes(policy: Policy) -> None:
+    plan = _plan_with(policy, promotion={"schema": 1})
+    assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
