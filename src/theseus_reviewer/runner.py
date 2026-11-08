@@ -57,8 +57,8 @@ def _git(workspace: Path, *args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def stage_pull_request_diff(source: Path, workspace: Path) -> Path | None:
-    target = workspace / STAGED_DIFF_NAME
+def stage_pull_request_diff(source: Path, workspace: Path, name: str = STAGED_DIFF_NAME) -> Path | None:
+    target = workspace / name
     exclude = _git(workspace, "rev-parse", "--git-path", "info/exclude")
     if not source.is_file() or not exclude or os.path.lexists(target):
         return None
@@ -69,7 +69,7 @@ def stage_pull_request_diff(source: Path, workspace: Path) -> Path | None:
     try:
         exclude_path.parent.mkdir(parents=True, exist_ok=True)
         with exclude_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"/{STAGED_DIFF_NAME}\n")
+            handle.write(f"/{name}\n")
         create_exclusive(target, data)
     except OSError:
         return None
@@ -356,6 +356,7 @@ def _judge(
     run = evidence.trace(reviewer.harness, result.stdout)
     read = evidence.returned(run, workspace)
     verdict = evidence.mark_citations(verdict, workspace, protocol.disputed_claims(plan), read)
+    verdict = protocol.demote_forced_fixed(verdict, plan)
     problem = protocol.contradiction(verdict, plan, workspace=workspace)
     if problem is not None:
         shaped = f"shape={shape_fingerprint(verdict.to_json(), _credentials())}\n{traced}"
@@ -376,5 +377,7 @@ def _judge(
         is_protected=_plan_protected(plan),
     )
     if gap is not None:
-        return ReviewOutcome(None, absence.Absence(absence.INCOMPLETE, gap.reason, unread=gap.files), traced)
+        return ReviewOutcome(
+            None, absence.Absence(absence.INCOMPLETE, gap.reason, unread=gap.files, unseen=gap.unseen), traced
+        )
     return ReviewOutcome(verdict.to_json(), None, traced)

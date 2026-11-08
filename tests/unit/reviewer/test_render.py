@@ -354,6 +354,7 @@ MODEL_FILLS = {
     "prior_status": "fixed",
     "evidence": "x.py:1 now checks the bound.",
     "claim": "The bound is checked.",
+    "origin": "introduced",
 }
 
 

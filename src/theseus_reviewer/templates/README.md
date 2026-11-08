@@ -1,4 +1,4 @@
-# Review templates: slot contract (v2)
+# Review templates: slot contract (v3)
 
 Three prompt templates (`standard.md`, `deep.md`, `gate.md`) rendered by filling
 typed slots with change data. Templates are versioned review machinery: changes
@@ -43,7 +43,7 @@ instruction prose of the template itself.
 | Slot | Type | Max bytes | Contents |
 |---|---|---|---|
 | `template_name` | identifier | 16 | `standard`, `deep`, or `gate`; must match the file |
-| `template_version` | integer | 4 | template version, currently `2` |
+| `template_version` | integer | 4 | template version, currently `3` |
 | `repo` | `owner/name` | 128 | repository under review |
 | `pr` | integer, or `unopened` for a local pre-PR review | 8 | pull request number |
 | `base` | hex sha | 40 | base commit |
@@ -55,8 +55,8 @@ instruction prose of the template itself.
 | `file_priority` | table | 8192 | `path \| score \| impact` rows, score descending, cut to fit, or `none`; fenced |
 | `max_defects` | integer | 4 | protocol defect cap from policy |
 | `prior_rule` | prose | 3072 | first / ship / follow-up prior-defect rule |
-| `retry_note` | prose | 512 | `none`, or the fixed note carrying only the count of required files an earlier attempt of the same reviewer left unread; the files themselves are marked inside the fenced `change_data` |
-| `change_data` | prose+diff | 400000 | file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
+| `retry_note` | prose | 512 | `none`, or the fixed note carrying only the count of required files an earlier attempt of the same reviewer left unread; the files and the diff lines of their unseen hunks are marked inside the fenced `change_data` |
+| `change_data` | prose+diff | 400000 | optional Author statement (pull request title, description and linked tracker text, only when the policy sets `brief.include_intent`), then file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
 | `response_template` | JSON | 16384 | JSON template to populate, rendered after `change_data`; see below |
 
 Rendered briefs must fit the fixed 400000-byte brief bound; an inline brief must fit 100000 bytes.
@@ -71,7 +71,7 @@ formatting applies to the template, never to the values.
 The output contract is the last section of every template, after the fenced
 CHANGE DATA, and ends with the `response_template` slot. It is a template to
 populate, never a filled example: the seven verdict keys, placeholder strings
-from `verdict.RESPONSE_PLACEHOLDERS`, `line` 0 and `end_line` null. In a
+from `verdict.RESPONSE_PLACEHOLDERS`, `line` 0, `end_line` null and an `origin` placeholder (`introduced` or `pre-existing`; an omitted origin means `introduced`). In a
 follow-up, `prior_defects` lists the actual prior ids from
 `plan.protocol.prior`, each revalidated against the defect id grammar
 (`protocol.DEFECT_ID`) by `render.response_template`, with unfilled `status`,

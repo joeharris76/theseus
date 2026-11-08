@@ -155,6 +155,7 @@ def fill(template: dict[str, Any], reply: dict[str, Any]) -> dict[str, Any]:
                 "file": defect["file"],
                 "title": defect["title"],
                 "detail": defect["detail"],
+                "origin": defect.get("origin", "introduced"),
             },
         )
         entry["line"] = defect["line"]

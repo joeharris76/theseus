@@ -2157,7 +2157,9 @@ def test_the_planned_brief_size_bounds_every_brief_the_review_renders(
             gate_flags=(),
             files=(),
         )
-        brief = cli.compose_brief(plan, plan_dir, classification, plan["evidence_files"], None, BRIEF_MAX_BYTES)
+        brief = cli.compose_brief(
+            plan, plan_dir, classification, plan["evidence_files"], (), None, False, BRIEF_MAX_BYTES
+        )
         assert len(brief.encode("utf-8")) <= bound
 
 
