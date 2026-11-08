@@ -167,6 +167,7 @@ An environment's branch policy is checked against the default branch for `pull_r
 | Secret | Used by |
 |---|---|
 | `TYPESAFE_API_KEY` | `prepare`, `recover`, `finalize`, the scans |
+| `OPENAI_API_KEY` (optional) | `prepare`, `finalize`, the scans; the classifier fallback only |
 | `REVIEW_GATEWAY_TOKEN`, `REVIEW_GATEWAY_URL` | the attempt steps and `finalize` only |
 | `TS_OAUTH_CI_CLIENT_ID`, `TS_OAUTH_CI_SECRET` | the tailnet join, the scans, `finalize` |
 | `REVIEW_APP_ID`, `REVIEW_APP_PRIVATE_KEY` | the token-mint steps only |

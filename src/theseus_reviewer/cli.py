@@ -57,7 +57,16 @@ from ._vendor import yaml
 from .absence import ERROR, INVALID, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
-from .classify import Classification, classification_note, classify_diff, fallback_classification
+from .classify import (
+    Classification,
+    FloorRules,
+    classification_note,
+    classify_decisions,
+    classify_diff,
+    decisions_rows,
+    fallback_classification,
+)
+from .decisions import DecisionsError, DecisionsSession
 from .diff import (
     SINCE_STAGED_NAME,
     STAGED_DIFF_NAME,
@@ -1336,6 +1345,14 @@ def _plan_review(
             "gate_path_list": list(policy.classifier.gate_paths),
             "pool_blocked_until": {pool: block.to_json() for pool, block in pool_blocks.items()},
             "classifier_unavailable_bucket": policy.classifier.unavailable_bucket,
+            "classifier_fallback": policy.classifier.fallback,
+            "classifier_fallback_min_bucket": policy.classifier.fallback_min_bucket,
+            "classifier_size_floor": None
+            if policy.classifier.size_floor_min_lines is None
+            else {
+                "min_lines": policy.classifier.size_floor_min_lines,
+                "exclude": [*policy.classifier.data_paths, *policy.classifier.size_floor_exclude],
+            },
         }
     )
     if promotion_record is not None:
@@ -1390,21 +1407,73 @@ def plan_gate_flags(plan: Mapping[str, Any]) -> list[str]:
     return matching(paths, plan.get("gate_path_list", []))
 
 
-def _classify_plan(plan: dict[str, Any]) -> Classification:
-    stats = [
+def _floor_rules(plan: Mapping[str, Any]) -> FloorRules:
+    floor = plan.get("classifier_size_floor") or {}
+    return FloorRules(
+        size_min_lines=floor.get("min_lines"),
+        size_exclude=tuple(floor.get("exclude", ())),
+        min_bucket=plan.get("classifier_fallback_min_bucket"),
+    )
+
+
+def _plan_stats(plan: Mapping[str, Any]) -> list[tuple[str, int, int, str]]:
+    return [
         (item["path"], int(item["additions"]), int(item["deletions"]), item.get("status") or "modified")
         for item in plan.get("reviewed_files", [])
     ]
+
+
+def _classify_plan(plan: dict[str, Any]) -> Classification:
+    stats = _plan_stats(plan)
     gate_flags = plan_gate_flags(plan)
-    with JevSession() as session:
-        return classify_diff(
-            session,
-            repo=plan["repo"],
-            pr=plan["pr"],
-            base_sha=plan["base_sha"],
-            head_sha=plan["head_sha"],
-            stats=stats,
-            gate_flags=gate_flags,
+    rules = _floor_rules(plan)
+    facts = {
+        "repo": plan["repo"],
+        "pr": plan["pr"],
+        "base_sha": plan["base_sha"],
+        "head_sha": plan["head_sha"],
+        "stats": stats,
+        "gate_flags": gate_flags,
+        "rules": rules,
+    }
+    try:
+        with JevSession() as session:
+            return classify_diff(session, **facts)
+    except JevError as exc:
+        if not exc.is_outage or plan.get("classifier_fallback") != "decisions":
+            raise
+        return _decisions_fallback(plan, facts, exc)
+
+
+def _decisions_fallback(plan: Mapping[str, Any], facts: dict[str, Any], jev_error: JevError) -> Classification:
+    partial = jev_error.partial
+    cause = jev_error.cause
+    try:
+        with DecisionsSession() as session:
+            if partial is None:
+                return classify_decisions(session, **facts, degraded_from=cause)
+            rows = decisions_rows(session, facts["stats"])
+            return replace(
+                partial,
+                files=rows,
+                file_backend="decisions",
+                file_model=session.model,
+                usage=dict(session.usage),
+                degraded_from=cause,
+            )
+    except DecisionsError as exc:
+        if exc.is_auth:
+            print(f"::error::the classifier fallback was refused ({exc.status}); check OPENAI_API_KEY")
+        _summary(f"classifier fallback failed: {exc}")
+        if partial is not None and not exc.missing_key:
+            return replace(partial, degraded_from=f"{cause}; {exc.message}")
+        return fallback_classification(
+            plan["classifier_unavailable_bucket"],
+            facts["gate_flags"],
+            None if partial is None else partial.size_bucket,
+            stats=facts["stats"],
+            rules=facts["rules"],
+            degraded_from=f"{cause}; {exc.message}",
         )
 
 
@@ -1436,6 +1505,8 @@ def command_select(args: argparse.Namespace) -> int:
     classification_path = Path(args.classification)
     classify_only = getattr(args, "classify_only", False)
     if args.slot == 1:
+        if plan.get("classifier_fallback") == "decisions" and not os.environ.get("OPENAI_API_KEY"):
+            _summary("warning: the classifier fallback is configured but OPENAI_API_KEY is empty")
         try:
             classification = _classify_plan(plan)
         except (JevError, KeyError, TypeError, ValueError) as exc:
@@ -1445,7 +1516,14 @@ def command_select(args: argparse.Namespace) -> int:
                     _summary(f"classification unavailable: {exc}")
                     return 0
                 return _empty_selection(f"classification unavailable: {exc}", args.slot)
-            classification = fallback_classification(bucket, plan_gate_flags(plan), exc.answered_bucket)
+            classification = fallback_classification(
+                bucket,
+                plan_gate_flags(plan),
+                None if exc.partial is None else exc.partial.size_bucket,
+                stats=_plan_stats(plan),
+                rules=_floor_rules(plan),
+                degraded_from=exc.cause,
+            )
             _summary(f"classification unavailable (TypeSafe): {exc}; {classification_note(classification)}")
         _write_json(classification_path, classification.to_json())
         if classify_only:
@@ -1810,7 +1888,7 @@ def decided_attempts(
 
 def _classification_note(args: argparse.Namespace) -> str:
     classification = _read_classification(Path(args.classification)) if args.classification else None
-    return classification_note(classification) if classification is not None and classification.fallback else ""
+    return classification_note(classification) if classification is not None and classification.degraded else ""
 
 
 def command_finalize(args: argparse.Namespace) -> int:

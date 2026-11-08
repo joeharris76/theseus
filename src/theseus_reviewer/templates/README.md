@@ -50,7 +50,7 @@ instruction prose of the template itself.
 | `head` | hex sha | 40 | reviewed head commit |
 | `size_bucket` | identifier | 8 | Jev size call: `trivial` … `max` |
 | `capability` | identifier | 8 | Jev capability call: `routine` or `deep` |
-| `confidence` | decimal | 6 | top-bucket probability, e.g. `0.89` |
+| `confidence` | decimal | 6 | the classifier's confidence in the size call, e.g. `0.89`: TypeSafe's separate `confidence` field, (p_max − 1/n)/(1 − 1/n) over the size labels, not the top bucket's probability |
 | `gate_flags` | text | 2048 | count of changed review-machinery files, or `none` |
 | `file_priority` | table | 8192 | `path \| score \| impact` rows, score descending, cut to fit, or `none`; fenced |
 | `max_defects` | integer | 4 | protocol defect cap from policy |

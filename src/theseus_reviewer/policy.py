@@ -16,6 +16,19 @@ READ_ONLY_KINDS = ("hard", "soft")
 DELIVERIES = ("comment", "review")
 BRIEF_MAX_BYTES = 400_000
 INLINE_BRIEF_MAX_BYTES = 100_000
+CLASSIFIER_FALLBACKS = ("decisions",)
+CLASSIFIER_KEYS = frozenset(
+    {
+        "gate_paths",
+        "logic_paths",
+        "data_paths",
+        "exempt_paths",
+        "unavailable_bucket",
+        "fallback",
+        "fallback_min_bucket",
+        "size_floor",
+    }
+)
 POLICY_KEYS = frozenset(
     {
         "version",
@@ -99,6 +112,10 @@ class ClassifierRules:
     data_paths: tuple[str, ...]
     exempt_paths: tuple[str, ...]
     unavailable_bucket: str | None = None
+    fallback: str | None = None
+    fallback_min_bucket: str | None = None
+    size_floor_min_lines: int | None = None
+    size_floor_exclude: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -211,6 +228,56 @@ def _str_tuple(value: Any, label: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _classifier(data: Any) -> ClassifierRules:
+    _require(isinstance(data, Mapping), "classifier must be a mapping")
+    unknown = set(data) - CLASSIFIER_KEYS
+    _require(not unknown, f"classifier has unknown keys {sorted(map(str, unknown))}")
+    unavailable = data.get("unavailable_bucket")
+    _require(
+        unavailable is None or unavailable in SIZE_BUCKETS,
+        f"classifier unavailable_bucket must be one of {SIZE_BUCKETS}",
+    )
+    fallback = data.get("fallback")
+    _require(
+        fallback is None or fallback in CLASSIFIER_FALLBACKS,
+        f"classifier fallback must be one of {CLASSIFIER_FALLBACKS}",
+    )
+    _require(
+        fallback is None or unavailable is not None,
+        "classifier fallback needs classifier unavailable_bucket for when the fallback fails too",
+    )
+    min_bucket = data.get("fallback_min_bucket")
+    _require(
+        min_bucket is None or min_bucket in SIZE_BUCKETS,
+        f"classifier fallback_min_bucket must be one of {SIZE_BUCKETS}",
+    )
+    _require(min_bucket is None or fallback is not None, "classifier fallback_min_bucket needs classifier fallback")
+    size_floor = data.get("size_floor")
+    min_lines: int | None = None
+    exclude: tuple[str, ...] = ()
+    if size_floor is not None:
+        _require(isinstance(size_floor, Mapping), "classifier size_floor must be a mapping")
+        unknown_floor = set(size_floor) - {"min_lines", "exclude"}
+        _require(not unknown_floor, f"classifier size_floor has unknown keys {sorted(map(str, unknown_floor))}")
+        min_lines = size_floor.get("min_lines")
+        _require(
+            isinstance(min_lines, int) and not isinstance(min_lines, bool) and min_lines >= 1,
+            "classifier size_floor min_lines must be an integer of at least 1",
+        )
+        exclude = _str_tuple(size_floor.get("exclude") or [], "classifier size_floor exclude")
+    return ClassifierRules(
+        gate_paths=_str_tuple(data.get("gate_paths"), "classifier gate_paths"),
+        logic_paths=_str_tuple(data.get("logic_paths"), "classifier logic_paths"),
+        data_paths=_str_tuple(data.get("data_paths"), "classifier data_paths"),
+        exempt_paths=_str_tuple(data.get("exempt_paths") or [], "classifier exempt_paths"),
+        unavailable_bucket=unavailable,
+        fallback=fallback,
+        fallback_min_bucket=min_bucket,
+        size_floor_min_lines=min_lines,
+        size_floor_exclude=exclude,
+    )
+
+
 def _reviewer(name: str, data: Mapping[str, Any], pools: tuple[str, ...]) -> Reviewer:
     _require(isinstance(data, Mapping), f"reviewer {name} must be a mapping")
     reviewer = Reviewer(
@@ -319,7 +386,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
     )
     for bucket in SIZE_BUCKETS:
         _require(buckets_data[bucket] in reviewers, f"bucket {bucket} names unknown reviewer {buckets_data[bucket]}")
-    classifier = data.get("classifier") or {}
+    classifier = _classifier(data.get("classifier") or {})
     consumer = _consumer(data.get("consumer"))
     retry = data.get("retry") or {}
     protocol = data.get("protocol") or {}
@@ -418,13 +485,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         reviewers=reviewers,
         buckets=dict(buckets_data),
         consumer=consumer,
-        classifier=ClassifierRules(
-            gate_paths=_str_tuple(classifier.get("gate_paths"), "classifier gate_paths"),
-            logic_paths=_str_tuple(classifier.get("logic_paths"), "classifier logic_paths"),
-            data_paths=_str_tuple(classifier.get("data_paths"), "classifier data_paths"),
-            exempt_paths=_str_tuple(classifier.get("exempt_paths") or [], "classifier exempt_paths"),
-            unavailable_bucket=classifier.get("unavailable_bucket"),
-        ),
+        classifier=classifier,
         omp_sha256=omp_sha256,
         evidence=EvidenceRules(
             exempt_paths=_str_tuple(evidence.get("exempt_paths") or [], "evidence exempt_paths"),
@@ -439,10 +500,6 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
             dependencies=dependencies,
         ),
         brief=_brief_rules(data.get("brief")),
-    )
-    _require(
-        policy.classifier.unavailable_bucket is None or policy.classifier.unavailable_bucket in SIZE_BUCKETS,
-        f"classifier unavailable_bucket must be one of {SIZE_BUCKETS}",
     )
     _require(policy.mode in ("shadow", "enforce"), "mode must be shadow or enforce")
     _require(bool(policy.status_context), "status_context is required")
