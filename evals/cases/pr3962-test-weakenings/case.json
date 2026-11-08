@@ -1,0 +1,108 @@
+{
+  "id": "pr3962-test-weakenings",
+  "incident": "BenchBox #3962 (Theseus v0.2.1 cutover), review findings c1-D2 and c1-D4: a test rewrite kept the old test names but weakened what they assert: secret mappings checked by key only, and the edited-comment cases a gate-concurrency test is named for were removed.",
+  "message": "Rewrite the workflow caller tests for the renamed review vocabulary",
+  "expected": {
+    "decisions": [
+      "SHIP_WITH_FIXES",
+      "DO_NOT_SHIP"
+    ],
+    "findings": [
+      {
+        "id": "secret-mapping-checked-by-key-only",
+        "path": "tests/unit/workflows/test_verdict_workflow.py",
+        "terms": [
+          [
+            "secret",
+            "mapping",
+            "map"
+          ],
+          [
+            "key",
+            "keys",
+            "value",
+            "values",
+            "three",
+            "no longer",
+            "only",
+            "weaken"
+          ]
+        ]
+      },
+      {
+        "id": "edited-comment-cases-dropped",
+        "path": "tests/unit/workflows/test_gate_workflow.py",
+        "terms": [
+          [
+            "edited",
+            "edit"
+          ],
+          [
+            "case",
+            "cases",
+            "removed",
+            "dropped",
+            "no longer",
+            "coverage",
+            "deleted"
+          ]
+        ]
+      }
+    ],
+    "acceptable": [
+      {
+        "path": "tests/unit/workflows/test_gate_workflow.py",
+        "terms": [
+          [
+            "reimplement",
+            "re-implement",
+            "tautolog",
+            "mirror",
+            "duplicat",
+            "never evaluates",
+            "does not evaluate",
+            "not evaluate"
+          ]
+        ]
+      }
+    ]
+  },
+  "fake": {
+    "good": [
+      {
+        "decision": "SHIP_WITH_FIXES",
+        "summary": "Two test weakenings.",
+        "files_examined": [
+          "tests/unit/workflows/test_verdict_workflow.py",
+          "tests/unit/workflows/test_gate_workflow.py"
+        ],
+        "defects": [
+          {
+            "severity": "Medium",
+            "file": "tests/unit/workflows/test_verdict_workflow.py",
+            "line": 28,
+            "title": "Caller secret-mapping test no longer checks the values of three secrets",
+            "detail": "The old assertion required every caller secret to map to its source secret. The new one checks the key set and only four values, so TS_OAUTH_CI_CLIENT_ID, TS_OAUTH_CI_SECRET and TYPESAFE_API_KEY can map anywhere."
+          },
+          {
+            "severity": "Medium",
+            "file": "tests/unit/workflows/test_gate_workflow.py",
+            "line": 13,
+            "title": "Gate concurrency test dropped the edited-comment cases it is named for",
+            "detail": "The edited stand-in cases were removed, so no case exercises the edited branch of the gate condition, yet the test name still claims marker edits."
+          }
+        ]
+      }
+    ],
+    "regressed": [
+      {
+        "decision": "SHIP",
+        "summary": "No defects.",
+        "files_examined": [
+          "tests/unit/workflows/test_verdict_workflow.py",
+          "tests/unit/workflows/test_gate_workflow.py"
+        ]
+      }
+    ]
+  }
+}

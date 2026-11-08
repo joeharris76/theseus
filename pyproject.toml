@@ -52,7 +52,7 @@ line-length = 120
 indent-width = 4
 target-version = "py311"
 src = ["src", "tests", "tools"]
-extend-exclude = ["src/theseus_reviewer/_vendor"]
+extend-exclude = ["src/theseus_reviewer/_vendor", "evals/cases"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
