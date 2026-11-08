@@ -8,7 +8,7 @@ Theseus ships two reusable workflows, `.github/workflows/review.yml` and `.githu
 | `review-gate.yml` | `review-gate` | `gate.yml` | `review-gate` status from the App |
 | `review-request.yml` | `review-request` | none (a no-op job) | its completion is the bridge trigger |
 
-The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. Since 0.2.5 only these contexts are posted; the 0.1.x contexts are never written again, so a ruleset that still requires one must be changed first (see "Migrating from 0.1.x").
+The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. This source tree posts only these contexts; the compatibility contexts used through 0.2.6 are never written again, so a ruleset that still requires one must be changed before installing this tree (see "Migrating from 0.1.x").
 
 ## Caller context
 
@@ -191,9 +191,9 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 
 ## Migrating from 0.1.x
 
-0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. 0.2.0 through 0.2.4 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. 0.2.5 deletes both. Theseus writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
+0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus now writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
 
-| 0.1.x | 0.2.5 |
+| 0.1.x | After compatibility removal |
 |---|---|
 | status context `oracle-verdict` | `review-verdict` (`oracle-verdict` is no longer posted) |
 | policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; a policy left at `oracle-verdict` posts under that name, and the gate, which reads only `review-verdict`, never sees it |
