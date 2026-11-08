@@ -4,6 +4,7 @@ import http.client
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -163,7 +164,10 @@ def _validated(
     if not isinstance(content, Mapping):
         raise DecisionsError(None, "Decisions answered without a JSON object")
     model = content.get("model")
-    if not isinstance(model, str) or not (model == requested_model or model.startswith(f"{requested_model}-")):
+    if (
+        not isinstance(model, str)
+        or re.fullmatch(rf"{re.escape(requested_model)}(-\d{{4}}-\d{{2}}-\d{{2}})?", model) is None
+    ):
         raise DecisionsError(None, "Decisions answered with an unexpected model")
     answers = content.get("answers")
     if not isinstance(answers, list) or len(answers) != len(names):

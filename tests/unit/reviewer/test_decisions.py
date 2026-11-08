@@ -107,6 +107,21 @@ def test_a_dated_model_snapshot_of_the_requested_model_is_accepted(fake: FakeDec
         assert session.model == "gpt-6-luna-2026-11-01"
 
 
+@pytest.mark.parametrize(
+    "model", ["gpt-6-luna-mini", "gpt-6-luna-nano", "gpt-6-luna-2026-11", "gpt-6-luna-2026-11-01-x", "gpt-6"]
+)
+def test_other_models_are_rejected(fake: FakeDecisions, model: str) -> None:
+    fake.model = model
+    with _session(fake) as session, pytest.raises(DecisionsError, match="unexpected model"):
+        session.ask(STATE, {"size": SIZE_QUESTION})
+
+
+def test_the_exact_model_is_accepted(fake: FakeDecisions) -> None:
+    with _session(fake) as session:
+        session.ask(STATE, {"size": SIZE_QUESTION})
+        assert session.model == "gpt-6-luna"
+
+
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
 def test_http_errors_carry_the_status_and_are_not_retried(fake: FakeDecisions, status: int) -> None:
     fake.script = [f"status:{status}"]
