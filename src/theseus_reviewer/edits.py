@@ -5,8 +5,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from . import legacy
-
 BATCH_SIZE = 100
 REVIEW_EDITS_QUERY = """
 query($ids: [ID!]!) {
@@ -90,7 +88,7 @@ def app_verdict_statuses(
             status
             for status in statuses
             if isinstance(status, Mapping)
-            and status.get("context") in legacy.context_aliases(context)
+            and status.get("context") == context
             and status.get("state") in DECISIVE
             and status.get("created_at")
             and _is_app(status.get("creator"), bot_login)

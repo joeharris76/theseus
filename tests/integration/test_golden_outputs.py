@@ -6,8 +6,6 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import legacy
-
 from .fake_github import ACCOUNTS, OWNER_TOKEN
 from .golden import assert_golden, logical_steps, posted, run_capture
 from .harness import CHECKER, REPO_ROOT, Harness, ReviewRun
@@ -123,7 +121,7 @@ def test_golden_edited_prior_review_holds(harness: Harness) -> None:
 def test_golden_carry_that_disagrees_with_the_app_status_holds(harness: Harness) -> None:
     first = _reviewed(harness, 75, "feat/disagree")
     for status in harness.github.statuses[first]:
-        if status["context"] in legacy.context_aliases("review-verdict"):
+        if status["context"] == "review-verdict":
             status["state"] = "failure"
     harness.write({"README.md": "seed\nunrelated\n"}, "touch readme")
     _rebase(harness, "feat/disagree")

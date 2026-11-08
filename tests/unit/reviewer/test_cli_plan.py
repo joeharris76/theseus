@@ -12,10 +12,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from theseus_reviewer import cli, coverage, gitdiff, github, protocol, sweep
+from theseus_reviewer import cli, coverage, gitdiff, github, protocol, render, sweep
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint
+from theseus_reviewer.policy import BRIEF_MAX_BYTES, INLINE_BRIEF_MAX_BYTES
 from theseus_reviewer.render import dispute_listing
 from theseus_reviewer.retry import State
 from theseus_reviewer.selection import PoolBlock
@@ -2099,6 +2100,77 @@ def test_plan_stages_git_diff_when_github_returns_406(
     assert plan["brief_mode"] == "inline" and plan["diff_inline"] is not None
     assert (tmp_path / "plan" / "diff.patch").read_text(encoding="utf-8") == DIFF
     assert fake.built == [(REPO, MERGE_BASE, HEAD)]
+
+
+def _added_lines_diff(total_bytes: int) -> str:
+    row = "+" + "x" * 78 + "\n"
+    count = total_bytes // len(row)
+    return (
+        f"diff --git a/{CHECKER} b/{CHECKER}\n--- a/{CHECKER}\n+++ b/{CHECKER}\n@@ -1,1 +1,{count + 1} @@\n a\n"
+        + row * count
+    )
+
+
+def test_a_brief_that_renders_between_the_inline_and_the_overall_limit_is_planned_as_a_file_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(250_000)
+    assert INLINE_BRIEF_MAX_BYTES < len(diff.encode("utf-8")) < BRIEF_MAX_BYTES
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
+
+
+def test_a_brief_that_renders_within_the_inline_limit_is_planned_inline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(INLINE_BRIEF_MAX_BYTES - 40_000)
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert plan["brief_mode"] == "inline" and plan["diff_inline"] == diff
+
+
+def test_a_diff_that_fits_only_without_the_template_is_planned_as_a_file_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(BRIEF_MAX_BYTES - 5_000)
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert len(diff.encode("utf-8")) < BRIEF_MAX_BYTES
+    assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
+
+
+@pytest.mark.parametrize("file_list", [False, True])
+def test_the_planned_brief_size_bounds_every_brief_the_review_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, file_list: bool
+) -> None:
+    _, _, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS))
+    plan_dir = tmp_path / "plan"
+    plan["author_statement"] = {
+        "title": "Title" * 40,
+        "body": "body" * 500,
+        "linked": [{"ref": "#1", "title": "title" * 40, "text": "text" * 250}] * 3,
+    }
+    plan["since_review"] = {"head": "b" * 40, "file": cli.SINCE_DIFF_FILE}
+    if file_list:
+        plan.update(brief_mode="file-list", diff_inline=None)
+    unseen = [(path, cli.STAGED_DIFF_NAME, 1, 7) for path in plan["evidence_files"]]
+    bound = cli._rendered_brief_bytes(plan, plan_dir, marked=True)
+    assert bound is not None
+    bound += render.SLOT_MAX_BYTES["file_priority"]
+    for template in render.TEMPLATES:
+        classification = Classification(
+            size_bucket="small",
+            capability="routine",
+            template=template,
+            confidence=0.5,
+            gate_flags=(),
+            files=(),
+        )
+        brief = cli.compose_brief(
+            plan, plan_dir, classification, plan["evidence_files"], unseen, None, True, BRIEF_MAX_BYTES
+        )
+        assert len(brief.encode("utf-8")) <= bound
 
 
 def test_a_review_plan_carries_the_coverage_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

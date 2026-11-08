@@ -2,23 +2,33 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 SYS_PTRACE = 1 << 19
 REQUEST_TOKEN_ENV = "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
 
 
-def require_isolation(proc: Path = Path("/proc")) -> None:
-    if REQUEST_TOKEN_ENV in os.environ:
+def require_isolation(
+    proc: Path = Path("/proc"),
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
+    uid: int | None = None,
+) -> None:
+    environ = os.environ if environ is None else environ
+    platform = sys.platform if platform is None else platform
+    uid = os.getuid() if uid is None else uid
+    if REQUEST_TOKEN_ENV in environ:
         raise ValueError(f"{REQUEST_TOKEN_ENV} must not be present: the job must not hold id-token: write")
-    if not sys.platform.startswith("linux"):
+    if not platform.startswith("linux"):
         raise ValueError("reviewer isolation requires Linux")
     if int((proc / "sys/kernel/yama/ptrace_scope").read_text(encoding="utf-8").strip()) not in (1, 2, 3):
         raise ValueError("Yama must restrict tracing of unrelated processes")
     status_text = (proc / "self/status").read_text(encoding="utf-8")
     status = dict(line.split(":", 1) for line in status_text.splitlines() if ":" in line)
     uids = [int(value) for value in status["Uid"].split()]
-    if len(uids) != 4 or len(set(uids)) != 1 or uids[0] == 0 or uids[0] != os.getuid():
+    if len(uids) != 4 or len(set(uids)) != 1 or uids[0] == 0 or uids[0] != uid:
         raise ValueError("reviewer must run with one non-root UID")
     for name in ("CapEff", "CapPrm", "CapInh", "CapAmb"):
         if int(status[name], 16) & SYS_PTRACE:

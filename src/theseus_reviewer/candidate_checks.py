@@ -20,6 +20,9 @@ from .candidate_chain import (
     CR_SOURCE,
     LONG_SOURCE,
     NATIVE_TOKEN,
+    TRANSPORT_HEAD,
+    TRANSPORT_PROMPT,
+    TRANSPORT_TAIL,
     WIDE_LINE,
     WIDE_SOURCE,
     ClientRun,
@@ -38,6 +41,7 @@ QUOTA_PRIMARY = f"anthropic/{UPSTREAM_MODEL}"
 QUOTA_PROVIDER = QUOTA_PRIMARY.partition("/")[0]
 QUOTA_CHAIN_TARGET = "openai-codex/gpt-6.1-sol"
 REVIEW_REQUESTS = 5
+ARGV_PROMPT_LIMIT = 128 * 1024
 ELISION_FOOTER = "elided; re-read needed ranges"
 FIXTURE_PREFIX = "fixture-"
 _ENUM_LINE = re.compile(r"^\s+(?P<key>\S+) = .* \((?P<options>[^()|]+(?:\|[^()|]+)+)\)\s*$", re.MULTILINE)
@@ -59,6 +63,7 @@ CONTRACT_ROWS = {
     11: "version output format",
     12: "auth-gateway serve protocol and client tokens",
     13: "model catalog listing under a placeholder credential",
+    14: "prompt transport on standard input",
 }
 RECORDED_REASONS = {
     8: "provider reset-time wording is originated by each provider and is never observable offline; reset parsing stays covered by the calibrated absence tests",
@@ -124,7 +129,7 @@ def derived_flags() -> tuple[str, ...]:
             prompt="probe",
             binary=Path("omp"),
         )
-    return tuple(dict.fromkeys(token for token in invocation.argv[1:-1] if token.startswith("--")))
+    return tuple(dict.fromkeys(token for token in invocation.argv[1:] if token.startswith("--")))
 
 
 def check_version(binary: Path, home: Path, version: str) -> Check:
@@ -500,6 +505,21 @@ def read_line_checks(run: ClientRun) -> list[Check]:
     return [_check("live-read-lines", (7,), _run_failures(run, succeeds=True) + read_line_failures(run.stdout))]
 
 
+def transport_checks(run: ClientRun) -> list[Check]:
+    failures = _run_failures(run, succeeds=True)
+    prompt = _prompt_text(run.upstream)
+    for token in (TRANSPORT_HEAD, TRANSPORT_TAIL):
+        if token not in prompt:
+            failures.append(f"a token sent only on standard input did not reach the model request ({token})")
+    if TRANSPORT_PROMPT not in prompt:
+        failures.append("the prompt sent on standard input did not reach the model request whole and unchanged")
+    if any(TRANSPORT_HEAD in item or TRANSPORT_TAIL in item for item in run.argv):
+        failures.append("the command line carries the prompt")
+    if len(TRANSPORT_PROMPT.encode("utf-8")) <= ARGV_PROMPT_LIMIT:
+        failures.append("the transport probe no longer exceeds the command-line limit")
+    return [_check("live-prompt-transport", (14,), failures)]
+
+
 def control_checks(run: ClientRun) -> list[Check]:
     traced = evidence.trace("omp", run.stdout)
     blind = []
@@ -614,6 +634,7 @@ def live_checks(runs: Mapping[str, ClientRun]) -> list[Check]:
         *review_checks(runs["review"]),
         *read_line_checks(runs["read-lines"]),
         *control_checks(runs["control"]),
+        *transport_checks(runs["prompt-transport"]),
         *provider_checks(runs),
         *breach_checks(runs["roster-breach"]),
         *quota_checks(runs["quota-walk"], runs["quota-terminal"]),

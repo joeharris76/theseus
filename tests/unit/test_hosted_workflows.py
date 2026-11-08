@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import legacy
 from theseus_reviewer._vendor import yaml
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -699,7 +698,7 @@ def test_the_review_secrets_are_the_declared_names_and_no_callee_declares_the_re
     assert "OMP_GATEWAY_TOKEN" not in review
     for path in [*WORKFLOWS.glob("*.yml"), *EXAMPLES.glob("*.yml")]:
         text = CONTAINS.sub("", STARTS_WITH.sub("", path.read_text(encoding="utf-8")))
-        assert legacy.WORD not in text.lower()
+        assert "oracle" not in text.lower()
 
 
 def test_the_tailscale_tag_is_a_required_input_without_a_default_and_keeps_its_validation() -> None:
@@ -719,9 +718,9 @@ def test_the_default_consumer_files_and_caller_names_use_the_review_vocabulary()
     assert load(EXAMPLES / "review-request.yml")["name"] == "review-request"
 
 
-COMMAND_PREFIXES = {"/review", "/oracle-review", "review adjudication:", "oracle adjudication:"}
-STANDIN_PREFIXES = {"stand-in review: approve", "stand-in oracle review: approve"}
-ADJUDICATION_PREFIXES = {"review adjudication: ", "oracle adjudication: "}
+COMMAND_PREFIXES = {"/review", "review adjudication:"}
+STANDIN_PREFIXES = {"stand-in review: approve"}
+ADJUDICATION_PREFIXES = {"review adjudication: "}
 STARTS_WITH = re.compile(r"startsWith\(github\.event\.(?:comment\.body|changes\.body\.from), '([^']*)'\)")
 
 
@@ -742,12 +741,18 @@ def test_the_comment_expressions_group_only_exact_prefix_commands() -> None:
     for body in (
         "/review",
         "/Review",
-        "/oracle-review",
-        "/Oracle-Review again",
         "Review adjudication: WITHDRAW D1 - x",
     ):
         assert _starts(prefixes, body)
-    for body in ("/cc please re-review", "> /review", "Owner instruction: see Review adjudication:", "see /review", ""):
+    for body in (
+        "/cc please re-review",
+        "> /review",
+        "Owner instruction: see Review adjudication:",
+        "see /review",
+        "/oracle-review",
+        "oracle adjudication: WITHDRAW D1 - x",
+        "",
+    ):
         assert not _starts(prefixes, body)
 
 
@@ -756,7 +761,8 @@ def test_the_gate_expressions_match_only_exact_prefix_attestations() -> None:
         text = path.read_text(encoding="utf-8")
         assert _prefixes(text) == STANDIN_PREFIXES | ADJUDICATION_PREFIXES
     prefixes = STANDIN_PREFIXES | ADJUDICATION_PREFIXES
-    assert _starts(prefixes, "Stand-in Oracle Review: APPROVE " + "a" * 40)
+    assert _starts(prefixes, "Stand-In Review: APPROVE " + "a" * 40)
+    assert not _starts(prefixes, "Stand-in oracle review: APPROVE " + "a" * 40)
     assert not _starts(prefixes, "> Stand-in review: APPROVE " + "a" * 40)
 
 
@@ -777,7 +783,6 @@ def test_the_gate_expressions_tolerate_leading_whitespace_when_a_comment_is_edit
         for body in (
             "  Stand-in review: APPROVE x",
             "\n\nReview adjudication: WITHDRAW D1 - r",
-            " Stand-in Oracle Review: APPROVE x",
         ):
             assert any(item in body.lower() for item in deleted)
         assert not any(item in "> unrelated comment".lower() for item in deleted)

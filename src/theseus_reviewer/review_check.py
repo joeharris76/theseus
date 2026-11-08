@@ -13,22 +13,19 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from . import legacy
 from .matchers import Matchers
 from .policy import Binding, PromotionRules
 
 REVIEW_CONTEXT = "review-verdict"
 _REVIEW_VERDICT = re.compile(
-    rf"### (?:{re.escape(REVIEW_CONTEXT)}|{re.escape(legacy.VERDICT_HEADING_CONTEXT)}): "
+    rf"### {re.escape(REVIEW_CONTEXT)}: "
     rf"(?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`"
 )
 _RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
 REFUSED_DESCRIPTION_PREFIX = "refused after"
 STANDIN_APPROVAL = "Stand-in review: APPROVE"
-_STANDIN_MARKER = re.compile(
-    rf"(?:{re.escape(STANDIN_APPROVAL)}|{re.escape(legacy.STANDIN_APPROVAL)}) ([0-9a-f]{{40}})"
-)
+_STANDIN_MARKER = re.compile(rf"{re.escape(STANDIN_APPROVAL)} ([0-9a-f]{{40}})")
 OPEN_FINDINGS_LABEL = "SHIP WITH FIXES"
 REPOSTED_MARK = " (reposted)"
 _ESCALATED = re.compile(r"escalated (?P<ids>D[0-9]+(?:,D[0-9]+)*)")
@@ -182,7 +179,7 @@ def _verdict_statuses(
         (
             status
             for status in statuses
-            if status.get("context") in legacy.context_aliases(REVIEW_CONTEXT)
+            if status.get("context") == REVIEW_CONTEXT
             and _is_review(status.get("login"), status.get("user_type"), bot_login)
             and status.get("created_at")
             and _survives_base_change(_parse_time(status["created_at"]), base_time)

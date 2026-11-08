@@ -415,7 +415,6 @@ def test_the_github_sink_posts_each_payload_with_the_app_token(tmp_path: Path, m
 
     assert posted == [
         (f"repos/{REPO}/statuses/{HEAD}", "app-token"),
-        (f"repos/{REPO}/statuses/{HEAD}", "app-token"),
         (f"repos/{REPO}/issues/7/comments", "app-token"),
         (f"repos/{REPO}/pulls/7/reviews", "app-token"),
     ]

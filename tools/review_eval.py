@@ -63,7 +63,6 @@ ENGINE_EXCLUDED = {
     "gateway_report.py": "gateway health report",
     "preflight.py": "gateway preflight",
     "reset.py": "retry backoff reset",
-    "legacy.py": "0.1.x name compatibility",
     "main.py": "entry point",
     "audit.py": "audit trail",
     "edits.py": "detection of edited bot comments",

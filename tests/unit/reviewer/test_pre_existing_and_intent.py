@@ -283,8 +283,17 @@ def test_the_plan_carries_the_statement_only_when_the_policy_asks_for_it(
 ) -> None:
     monkeypatch.setattr(test_cli_plan, "POLICY_PATH", _intent_policy(tmp_path, include))
     fake = _IssueFake(_pull(title="Retry the fetch", body="Details.\n\nFixes #12"), test_cli_plan.SOUNDNESS, diff=DIFF)
+    choose = cli._choose_brief_mode
+    measured: list[bool] = []
+
+    def measure(held: dict[str, Any], *args: Any, **kwargs: Any) -> tuple[str, int]:
+        measured.append(bool(held.get("author_statement")))
+        return choose(held, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "_choose_brief_mode", measure)
     _, values, plan = _cli_plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review"
+    assert measured == [include]
     if not include:
         assert "author_statement" not in plan
         return
@@ -306,6 +315,17 @@ def test_unseen_hints_name_only_the_hunks_that_were_not_seen() -> None:
         "a.py": f"(unseen: {STAGED_DIFF_NAME} lines 30-35, 50)",
         "b.py": "(unseen: read the whole file)",
     }
+
+
+@pytest.mark.parametrize("path", ["a.py", ".review-promotion/old/a.py"])
+def test_worst_case_retry_hint_bounds_include_whole_file_reads(path: str) -> None:
+    diff = "diff --git a/a.py b/a.py\nBinary files a/a.py and b/a.py differ\n"
+    whole = [path] if path.startswith(".review-promotion/") else []
+    bounds = coverage.retry_hint_bounds([path], diff, "", whole)
+    hints = coverage.unseen_hints(
+        [(path, "the file itself", 1, 99)], {STAGED_DIFF_NAME: diff, coverage.UPSTREAM_DIFF: ""}
+    )
+    assert bounds[path] >= len(hints[path].encode("utf-8"))
 
 
 def test_unseen_hints_mark_a_hunk_with_a_long_line_raw_and_bound_the_list() -> None:

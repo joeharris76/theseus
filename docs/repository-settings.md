@@ -15,4 +15,4 @@ Owner actions on `joeharris76/theseus`. Repository, visibility, license and defa
 | Security | Private vulnerability reporting, Dependabot alerts and security updates enabled |
 | Tags | Tag protection or ruleset restricting release tags to the owner |
 
-The review gate's required check is added only by the later first-live-gate work, after a separately authenticated Theseus gate exists. When added, the `review-gate` (or legacy `oracle-gate`) status context MUST be restricted to the review App as its expected source (ruleset `integration_id`); see [hosted-workflows.md](hosted-workflows.md#what-to-require-and-what-the-job-exit-means).
+The review gate's required check is added only by the later first-live-gate work, after a separately authenticated Theseus gate exists. When added, the `review-gate` status context MUST be restricted to the review App as its expected source (ruleset `integration_id`); see [hosted-workflows.md](hosted-workflows.md#what-to-require-and-what-the-job-exit-means).

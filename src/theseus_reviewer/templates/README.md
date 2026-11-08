@@ -56,10 +56,10 @@ instruction prose of the template itself.
 | `max_defects` | integer | 4 | protocol defect cap from policy |
 | `prior_rule` | prose | 3072 | first / ship / follow-up prior-defect rule |
 | `retry_note` | prose | 512 | `none`, or the fixed note carrying only the count of required files an earlier attempt of the same reviewer left unread; the files and the diff lines of their unseen hunks are marked inside the fenced `change_data` |
-| `change_data` | prose+diff | 100000 | optional Author statement (pull request title, description and linked tracker text, only when the policy sets `brief.include_intent`), then file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
+| `change_data` | prose+diff | 400000 | optional Author statement (pull request title, description and linked tracker text, only when the policy sets `brief.include_intent`), then file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
 | `response_template` | JSON | 16384 | JSON template to populate, rendered after `change_data`; see below |
 
-Rendered briefs must fit the fixed 100000-byte brief bound.
+Rendered briefs must fit the fixed 400000-byte brief bound; an inline brief must fit 100000 bytes.
 `change_data` dominates the budget; when the inline diff does not fit, the
 renderer falls back to file-list mode and the reviewer reads from the working
 directory. Placeholders use Python `str.format` braces; literal braces in

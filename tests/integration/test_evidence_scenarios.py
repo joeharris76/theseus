@@ -17,7 +17,7 @@ FAKE_FONT = "assets/fonts/fake.woff2"
 LOGO = "assets/logo.png"
 FEEDBACK = "Earlier attempt feedback: "
 FEEDBACK_NONE = f"{FEEDBACK}none"
-FILLER = "".join(f"CELL_{number:05d} = {number}\n" for number in range(5000))
+FILLER = "".join(f"CELL_{number:05d} = {number}\n" for number in range(25000))
 LARGE_CHECKER = "def checker(a, b):\n    return a == b\n" + FILLER
 BINARY = b"\x00\x01\x02 glyph table\x00" * 8
 SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no defects.", "files_examined": [CHECKER]}

@@ -38,7 +38,7 @@ brief:
   include_intent: true      # boolean, default false; see Author statement
 ```
 
-Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 100000 bytes inside the package, and a policy that still sets it is refused.
+Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 400000 bytes inside the package (an inline brief is further limited to 100000 bytes), and a policy that still sets it is refused. The brief reaches omp on standard input, so no operating-system argument limit applies; the review capacity below, not the bound, decides which reviewers can hold it.
 
 All `consumer` paths are repository-relative and are read relative to the trusted checkout root (`--root` for the gate, the working directory for `plan`, the trusted root for local review). Absolute paths, `..`, empty or backslash segments are refused.
 
@@ -96,9 +96,15 @@ Every review-verdict status and body reports degradation: the status description
 
 The reusable `review.yml` has a `health` job that runs only on the caller's `schedule` event, with `contents: read`. It joins the tailnet and runs `theseus drive health`, which exits 1 when the gateway is unreachable, rejects the client token, or does not serve every provider the trusted config names, so the scheduled run goes red and its summary names the providers.
 
+## Brief mode
+
+The brief mode is chosen at plan time from the rendered brief, not from byte counts of its parts. The plan renders the inline candidate and the file-list candidate with every template (the largest result counts), the worst-case retry note that marks every required file, the prior defects and the disputes, and adds the largest the per-file priority slot can be. The mode is `inline` when the diff is complete and has no opaque file and that rendering fits 100000 bytes, else `file-list` when that fits the 400000-byte bound, else `oversize` (pending with a split instruction, no attempt spent). Because the classification is not known at plan time, the measured size is an upper bound on the brief the review job renders. The recorded load counts the brief of the chosen mode without the retry marks.
+
+omp receives the brief on standard input from a private file in the scratch directory that is removed when the run ends; the command line carries no prompt. The omp candidate check (contract row 14) proves, against the candidate build, that a token placed only on standard input reaches the model request, that the command line does not carry it, and that a prompt as large as the brief bound (400000 bytes), which no single argument could hold, arrives as one unchanged request body.
+
 ## Review capacity
 
-A review is planned with an estimated load: a fixed overhead that depends on the brief mode, plus the tokens of the staged diff blocks of the required files (a whole removed promotion file counts in full), plus the tokens of the brief; bytes convert at 2.27 per token. In inline mode the diff is part of the brief, so it is counted once and there are no separate required bytes. The overhead is 80000 tokens for an inline brief, 170000 for a file-list brief and 170000 for a promotion (`capacity.OVERHEAD_TOKENS`). The load is recorded in the plan as `review_load_tokens`.
+A review is planned with an estimated load: a fixed overhead that depends on the brief mode, plus the tokens of the staged diff blocks of the required files (a whole removed promotion file counts in full), plus the tokens of the brief; bytes convert at 2.27 per token. In inline mode the diff is part of the brief, so it is counted once and there are no separate required bytes. The overhead is 80000 tokens for an inline brief, 165000 for a file-list brief and 165000 for a promotion (`capacity.OVERHEAD_TOKENS`). The load is recorded in the plan as `review_load_tokens`.
 
 A reviewer's capacity is `contextWindow - maxTokens` of its primary model, read from the pinned omp's catalog (`omp models --json`, run in the harness phase for a hosted and a local review alike) and written to the plan as `capacity`. When the reviewer config's `retry.fallbackOn` is anything other than `usage-limit`, the capacity is the smallest such value over the primary and the models its fallback chain can move to. With `fallbackOn: usage-limit` the fallbacks are left out: a fallback only takes over when the primary reports a usage limit, which is rare, and if a fallback's window is smaller than the context already built up the attempt ends as a context overflow, which is a non-retried absence that moves the chain on and never clears a change. Counting every fallback would instead cap every reviewer at the smallest fallback window and make a change between that and the primary's window unreviewable. The listing runs in an isolated temporary home that holds only the trusted reviewer config and a provider sheet naming the gateway's providers with a placeholder credential, so the catalog lists those providers' models whatever the caller's `~/.omp` holds, and no real gateway token reaches the listing. Theseus keeps no model table, and no policy key sets a capacity.
 
@@ -106,26 +112,26 @@ Capacity is never assumed. A reviewer whose primary model the catalog does not l
 
 ### Overhead calibration
 
-The overhead is calibrated from the archived review captures (1142 attempts with usage data, from the hosted runs and the local reviews). For each attempt the peak context is the largest `input + cacheRead + cacheWrite + output` over its assistant turns. The brief is the first user message; its mode is inline when it carries the `Unified diff of these files from base to head` block, promotion when it names `.review-promotion`, and file-list otherwise. The observed overhead of an attempt is the peak minus the brief's tokens minus the required reading. For inline briefs the required reading is zero, because the load does not count it either, so everything the reviewer reads or writes beyond the brief is overhead. For file-list briefs it is estimated from the changed-line counts in the brief's file listing at 38.5 bytes per changed line plus 1074 bytes per file (a least-squares fit of the inline attempts' diff sizes against their listings), and for promotions it is the tool output of the reads under `.review-promotion` and of the staged diff. Tool output and the brief are converted at the same 2.27 bytes per token the load uses, so the figures are consistent with the plan.
+The overhead is calibrated from the archived review captures (881 attempts with usage data, from the hosted runs still inside the artifact retention window and the local reviews). For each attempt the peak context is the largest `input + cacheRead + cacheWrite + output` over its assistant turns. The brief is the first user message; its mode is inline when it carries the `Unified diff of these files from base to head` block, promotion when it names `.review-promotion`, and file-list otherwise. The observed overhead of an attempt is the peak minus the brief's tokens minus the required reading. For inline briefs the required reading is zero, because the load does not count it either, so everything the reviewer reads or writes beyond the brief is overhead. For file-list briefs it is estimated from the changed-line counts in the brief's file listing at 38.5 bytes per changed line plus 1074 bytes per file (a least-squares fit of the inline attempts' diff sizes against their listings), and for promotions it is the tool output of the reads under `.review-promotion` and of the staged diff. The returned read spans that newer captures record are not used for file-list briefs: they total every read of the staged diff, re-reads included, while the load counts the required diff blocks once, so subtracting them would understate the overhead (the file-list p95 would fall to about 130000). Tool output and the brief are converted at the same 2.27 bytes per token the load uses, so the figures are consistent with the plan.
 
 | mode | n | p50 | p90 | p95 | margin | overhead |
 | --- | --- | --- | --- | --- | --- | --- |
-| inline | 893 | 26680 | 55792 | 70892 | 10% of p95, rounded up to 5000 | 80000 |
-| file-list | 226 | 63920 | 136488 | 152760 | same | 170000 |
-| promotion | 23 | -76735 | 49677 | 53017 | same, and not below the file-list overhead because the sample is small | 170000 |
+| inline | 641 | 29152 | 57871 | 71358 | 10% of p95, rounded up to 5000 | 80000 |
+| file-list | 234 | 69128 | 131529 | 146228 | same | 165000 |
+| promotion | 6 | -30907 | 10378 | 12981 | same, and not below the file-list overhead because the sample is small | 165000 |
 
-The overhead is the p95 plus the margin. A promotion's p95 alone would be 60000, but 23 attempts is too few to rely on, so it takes the file-list value. A negative p50 means the reads were over-counted by the byte-to-token ratio, which only makes the load more cautious.
+The overhead is the p95 plus the margin. A promotion's p95 alone would be 15000, but 6 attempts is too few to rely on, so it takes the file-list value. A negative p50 means the reads were over-counted by the byte-to-token ratio, which only makes the load more cautious.
 
-With the pinned omp's catalog (`@smol` 144000, `@default`, `@review`, `@plan` and `@slow` 872000) BenchBox's policy can select these reviewers. A typical inline pull request (median brief 8078 tokens) loads about 88000 tokens, and a typical file-list pull request (median brief 5511 and about 43000 tokens of required diff) about 219000.
+With the pinned omp's catalog (`@smol` 144000, `@default`, `@review`, `@plan` and `@slow` 872000) BenchBox's policy can select these reviewers. A typical inline pull request (median brief 9605 tokens) loads about 90000 tokens, and a typical file-list pull request (median brief 5648 and about 43000 tokens of required diff) about 214000.
 
-| reviewer | model | capacity | typical inline (about 88000) | typical file-list (about 219000) | largest inline brief | largest file-list required reading plus brief |
+| reviewer | model | capacity | typical inline (about 90000) | typical file-list (about 214000) | largest inline brief | largest file-list required reading plus brief |
 | --- | --- | --- | --- | --- | --- | --- |
 | trivial | `@smol` | 144000 | selectable | not selectable | 64000 | none |
 | small | `@smol` | 144000 | selectable | not selectable | 64000 | none |
-| medium | `@default` | 872000 | selectable | selectable | 792000 | 702000 |
-| large | `@review` | 872000 | selectable | selectable | 792000 | 702000 |
-| huge | `@plan` | 872000 | selectable | selectable | 792000 | 702000 |
-| max | `@slow` | 872000 | selectable | selectable | 792000 | 702000 |
+| medium | `@default` | 872000 | selectable | selectable | 792000 | 707000 |
+| large | `@review` | 872000 | selectable | selectable | 792000 | 707000 |
+| huge | `@plan` | 872000 | selectable | selectable | 792000 | 707000 |
+| max | `@slow` | 872000 | selectable | selectable | 792000 | 707000 |
 
 A reviewer whose capacity is below the load is skipped (`skipped: the change needs about N tokens of reading; this reviewer's capacity is M`). When no enabled reviewer fits, the result is pending with a split instruction, no attempt is spent, and the head is not retried until a new push. A reviewer that fails with a context overflow is not retried; the chain moves on.
 

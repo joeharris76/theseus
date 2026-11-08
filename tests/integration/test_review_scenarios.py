@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from theseus_reviewer import legacy
-
 from .fake_github import ACCOUNTS, APP_TOKEN, JOB_TOKEN
 from .harness import CHECKER, GATEWAY_TOKEN, RECORDED_STREAM, Harness
 
@@ -58,14 +56,8 @@ def test_every_status_is_also_posted_under_its_legacy_context_with_the_same_stat
     harness.review(41)
     harness.gate(41, head)
 
-    for context, old in legacy.STATUS_CONTEXT_PAIRS.items():
-        posted = [item for item in harness.github.statuses[head] if item["context"] == context]
-        mirrored = [item for item in harness.github.statuses[head] if item["context"] == old]
-        assert posted and [(item["state"], item["description"]) for item in mirrored] == [
-            (item["state"], item["description"]) for item in posted
-        ]
     contexts = {item["context"] for item in harness.github.statuses[head]}
-    assert contexts == set(legacy.STATUS_CONTEXT_PAIRS) | set(legacy.STATUS_CONTEXT_PAIRS.values())
+    assert contexts == {"review-verdict", "review-gate"}
 
 
 def test_the_verdict_run_posts_a_failing_gate_for_a_held_head(harness: Harness) -> None:
@@ -124,9 +116,7 @@ def test_a_head_change_marks_the_gate_pending_before_it_is_evaluated(harness: Ha
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["success"]
     if held:
         harness.github.statuses[head] = [
-            item
-            for item in harness.github.statuses[head]
-            if item["context"] not in legacy.context_aliases("review-verdict")
+            item for item in harness.github.statuses[head] if item["context"] != "review-verdict"
         ]
 
     gate = harness.gate(44, head, pending_first=True)
