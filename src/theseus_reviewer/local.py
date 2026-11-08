@@ -1334,7 +1334,7 @@ def _default_base_ref(args: argparse.Namespace, root: Path) -> None:
         from ._vendor import yaml
 
         text = _git(root, "show", f"{args.trusted_ref}:{args.policy}")
-        gated_base = parse_policy(yaml.safe_load(text)).consumer.gated_base
+        gated_base = parse_policy(yaml.safe_load(text)).consumer.primary_base
     except (PolicyError, OSError, ValueError, yaml.YAMLError) as exc:
         raise Refused(f"the gated base cannot be read from {args.policy} at {args.trusted_ref}: {exc}") from exc
     args.base_ref = f"origin/{gated_base}"

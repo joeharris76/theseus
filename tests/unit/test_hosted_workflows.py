@@ -105,7 +105,7 @@ def test_the_guard_job_has_no_permissions_environment_or_secrets(callee: tuple[s
     assert all(body.get("needs") == "guard" for job, body in document["jobs"].items() if job != "guard")
     command = step_named(document, "guard", guard["steps"][0]["name"])["run"]
     assert "[0-9a-f]{40}" in command
-    assert "refs/heads/$GATED_BASE" in command
+    assert "GATED_BASE" in guard["steps"][0]["env"]
     assert "$REPOSITORY/.github/workflows/$CALLER_WORKFLOW@" in command
     assert "github.workflow_ref" in guard["steps"][0]["env"]["WORKFLOW_REF"]
 
@@ -115,7 +115,7 @@ LOCK_CHECKOUT = "Check out the trusted copy of the consumer lock"
 LOCK_FILE = ".github/theseus-lock.json"
 PIN_A = "a" * 40
 PIN_B = "b" * 40
-TRUSTED_LOCK_REF = {"review.yml": "${{ github.sha }}", "gate.yml": "${{ inputs.gated_base }}"}
+TRUSTED_LOCK_REF = {"review.yml": "${{ github.sha }}", "gate.yml": "${{ steps.base.outputs.base }}"}
 
 
 def _git(root: Path, *args: str) -> str:
@@ -245,7 +245,7 @@ def test_the_lock_comes_from_the_trusted_ref_and_precedes_nothing_secret_bearing
     assert checkout["with"]["persist-credentials"] is False
     names = [step["name"] for step in steps_of(document, "guard")]
     assert names.index(LOCK_CHECKOUT) < names.index(LOCK_STEP)
-    assert names[0] == "Refuse a malformed pin, a foreign caller or a dispatch from another branch"
+    assert names[0] == "Refuse a malformed pin or a foreign caller"
     assert step_named(document, "guard", LOCK_STEP)["env"] == {"THESEUS_REF": "${{ inputs.theseus_ref }}"}
     assert "inputs.theseus_ref" in yaml.safe_dump(step_named(document, "guard", LOCK_STEP))
     for job, body in document["jobs"].items():
@@ -267,22 +267,21 @@ def test_the_lock_never_travels_through_the_environment() -> None:
         assert set(step["env"]) == {"THESEUS_REF"}
 
 
-def test_both_guards_skip_pull_requests_for_other_bases() -> None:
-    expected = "github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base"
-    for name in CALLEES:
-        assert load(WORKFLOWS / name)["jobs"]["guard"]["if"] == expected
-
-
 def test_the_guard_exports_the_resolved_trusted_commit_and_the_gate_jobs_check_out_exactly_it() -> None:
+    outputs = {
+        "trusted_commit": "${{ steps.lock.outputs.trusted_commit }}",
+        "gated": "${{ steps.base.outputs.gated }}",
+        "base": "${{ steps.base.outputs.base }}",
+    }
     gate = load(WORKFLOWS / "gate.yml")
-    assert gate["jobs"]["guard"]["outputs"] == {"trusted_commit": "${{ steps.lock.outputs.trusted_commit }}"}
+    assert gate["jobs"]["guard"]["outputs"] == outputs
     assert step_named(gate, "guard", LOCK_STEP)["id"] == "lock"
     for job in ("gate", "sweep"):
         checkout = step_named(gate, job, "Check out the trusted gated-branch copy")
         assert checkout["with"]["ref"] == "${{ needs.guard.outputs.trusted_commit }}"
         assert "gated_base" not in checkout["with"]["ref"]
     review = load(WORKFLOWS / "review.yml")
-    assert review["jobs"]["guard"]["outputs"] == {"trusted_commit": "${{ steps.lock.outputs.trusted_commit }}"}
+    assert review["jobs"]["guard"]["outputs"] == outputs
 
 
 def test_secrets_are_read_only_in_jobs_bound_to_the_caller_environment(callee: tuple[str, dict[str, Any]]) -> None:
@@ -301,7 +300,7 @@ def test_job_level_env_holds_only_derived_booleans_and_the_policy_path(callee: t
     name, document = callee
     for job in SECRET_JOBS[name]:
         for key, value in document["jobs"][job]["env"].items():
-            assert key in {"HAS_APP", "HAS_TAILNET", "REPO", "POLICY_PATH"}, key
+            assert key in {"HAS_APP", "HAS_TAILNET", "REPO", "POLICY_PATH", "REVIEW_TRUSTED_BASE"}, key
             if "secrets." in value:
                 assert value.endswith(" != '' }}") or " != '' && " in value, (key, value)
 
@@ -347,7 +346,7 @@ def test_the_gate_pin_resolves_the_current_gated_tip_into_a_separate_install_and
     pin = step_named(review, "review", "Install the gate pin from the current gated-branch lock")
     publish = step_named(review, "review", "Post the result")
     reviewer = step_named(review, "review", "Install the reviewer pin from the trusted base lock")
-    assert checkout["with"]["ref"] == "${{ inputs.gated_base }}"
+    assert checkout["with"]["ref"] == "${{ needs.guard.outputs.base }}"
     assert checkout["with"]["path"] == "gate"
     assert "git -C gate rev-parse HEAD" in pin["run"]
     assert '--repo gate --commit "$GATE_SHA"' in pin["run"]
@@ -416,15 +415,67 @@ def test_the_bridge_matches_the_review_workflow_name_not_its_file_name() -> None
     assert "path" not in condition
     assert "secrets." not in yaml.safe_dump(gate["jobs"]["bridge"])
     assert "environment" not in gate["jobs"]["bridge"]
-    assert not any("checkout" in str(step.get("uses", "")) for step in steps_of(gate, "bridge"))
+    steps = steps_of(gate, "bridge")
+    assert [step["uses"].partition("@")[0] for step in steps if "uses" in step] == ["actions/checkout"]
+    assert steps[0]["with"]["ref"] == "${{ inputs.theseus_ref }}"
+    assert steps[0]["with"]["sparse-checkout"] == "src/theseus_reviewer/bases.py"
 
 
-def test_the_review_and_gate_jobs_skip_pull_requests_for_other_bases_and_other_refs() -> None:
+def test_the_review_and_gate_jobs_run_only_for_a_gated_ref_resolved_by_the_guard() -> None:
     review = load(WORKFLOWS / "review.yml")
     gate = load(WORKFLOWS / "gate.yml")
-    assert "github.ref == format('refs/heads/{0}', inputs.gated_base)" in review["jobs"]["review"]["if"]
-    assert "github.ref == format('refs/heads/{0}', inputs.gated_base)" in gate["jobs"]["gate"]["if"]
-    assert "github.event.pull_request.base.ref == inputs.gated_base" in review["jobs"]["guard"]["if"]
+    for document, job in ((review, "review"), (review, "sweep"), (review, "health"), (gate, "gate"), (gate, "sweep")):
+        assert "needs.guard.outputs.gated == 'true'" in document["jobs"][job]["if"], job
+        assert "inputs.gated_base" not in document["jobs"][job]["if"], job
+    for document in (review, gate):
+        assert "if" not in document["jobs"]["guard"]
+
+
+def test_the_guard_resolves_gated_bases_with_the_pinned_matcher_before_any_trusted_checkout() -> None:
+    for name in CALLEES:
+        document = load(WORKFLOWS / name)
+        names = [step["name"] for step in steps_of(document, "guard")]
+        matcher = step_named(document, "guard", "Check out the pinned Theseus base matcher")
+        resolve = step_named(document, "guard", "Resolve whether this ref is a gated base")
+        assert matcher["with"]["ref"] == "${{ inputs.theseus_ref }}"
+        assert matcher["with"]["sparse-checkout"] == "src/theseus_reviewer/bases.py"
+        assert resolve["id"] == "base"
+        assert resolve["env"] == {
+            "GATED_BASES": "${{ inputs.gated_base }}",
+            "EVENT_NAME": "${{ github.event_name }}",
+            "CURRENT_REF": "${{ github.ref }}",
+        }
+        assert resolve["run"] == "python3 -I -S theseus-bootstrap/src/theseus_reviewer/bases.py resolve"
+        assert names.index(matcher["name"]) < names.index(resolve["name"]) < names.index(LOCK_CHECKOUT)
+        assert step_named(document, "guard", LOCK_CHECKOUT)["if"] == "steps.base.outputs.gated == 'true'"
+        assert step_named(document, "guard", LOCK_STEP)["if"] == "steps.base.outputs.gated == 'true'"
+
+
+def test_a_gate_comment_on_another_gated_bases_pull_request_is_handed_to_that_bases_workflow() -> None:
+    gate = load(WORKFLOWS / "gate.yml")
+    handoff = step_named(gate, "gate", "Hand a comment on another gated base's pull request to that base's workflow")
+    assert handoff["if"] == "github.event_name == 'issue_comment' && steps.resolve.outputs.pr != ''"
+    assert handoff["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert handoff["env"]["REVIEW_TRUSTED_BASE"] == "${{ needs.guard.outputs.base }}"
+    assert 'check "$GATED_BASES" "$PR_BASE"' in handoff["run"]
+    assert 'gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE"' in handoff["run"]
+    assert gate["jobs"]["gate"]["permissions"]["actions"] == "write"
+    bootstrap = step_named(gate, "gate", "Check out the pinned Theseus bootstrap")
+    assert "src/theseus_reviewer/bases.py" in bootstrap["with"]["sparse-checkout"]
+    names = [step["name"] for step in steps_of(gate, "gate")]
+    assert names.index("Resolve the pull request") < names.index(handoff["name"]) < names.index("Mint the App token")
+
+
+def test_every_python_phase_of_a_gated_job_knows_the_base_its_policy_was_read_from() -> None:
+    review = load(WORKFLOWS / "review.yml")
+    for job in ("sweep", "health", "review"):
+        assert review["jobs"][job]["env"]["REVIEW_TRUSTED_BASE"] == "${{ needs.guard.outputs.base }}"
+    gate = load(WORKFLOWS / "gate.yml")
+    assert step_named(gate, "gate", "Post the gate for the head")["env"]["REVIEW_TRUSTED_BASE"] == (
+        "${{ needs.guard.outputs.base }}"
+    )
+    sweep = step_named(gate, "sweep", "Gate every open pull request targeting a gated branch")
+    assert sweep["env"]["REVIEW_TRUSTED_BASE"] == "${{ needs.guard.outputs.base }}"
 
 
 def callee_needs(callee_name: str) -> dict[str, str]:
@@ -502,7 +553,7 @@ def test_the_callee_caller_workflow_defaults_match_the_example_file_names() -> N
     assert gate_inputs["caller_workflow"]["default"] == "review-gate.yml" and (EXAMPLES / "review-gate.yml").is_file()
 
 
-GUARD_STEP = "Refuse a malformed pin, a foreign caller or a dispatch from another branch"
+GUARD_STEP = "Refuse a malformed pin or a foreign caller"
 
 
 def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:

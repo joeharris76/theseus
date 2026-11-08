@@ -59,7 +59,7 @@ def test_each_consumer_loads_its_own_identity():
     assert (alpha.binding.bot_login, beta.binding.bot_login) == ("benchbox-review", "beta-review")
     assert alpha.binding.attesters == {"joeharris76"}
     assert beta.binding.attesters == {"beta-owner", "beta-deputy"}
-    assert (alpha.consumer.gated_base, beta.consumer.gated_base) == ("develop", "main")
+    assert (alpha.consumer.gated_bases, beta.consumer.gated_bases) == (("develop",), ("main",))
     assert alpha.matchers.is_soundness_path("benchbox/core/equivalence/x.py")
     assert not beta.matchers.is_soundness_path("benchbox/core/equivalence/x.py")
     assert beta.matchers.is_soundness_path("src/engine/x.py")
@@ -321,5 +321,5 @@ def test_wheel_sources_name_no_consumer_identity():
 
 def test_policy_round_trips_through_json_for_the_plan():
     policy = load_policy(BETA_POLICY)
-    plan = json.dumps({"consumer": policy.consumer.gated_base, "bot": policy.bot_login})
-    assert json.loads(plan) == {"consumer": "main", "bot": "beta-review"}
+    plan = json.dumps({"consumer": list(policy.consumer.gated_bases), "bot": policy.bot_login})
+    assert json.loads(plan) == {"consumer": ["main"], "bot": "beta-review"}
