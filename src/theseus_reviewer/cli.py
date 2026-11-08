@@ -74,6 +74,7 @@ from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
 from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
 from .render import (
+    ADVISORY_RULE,
     DELTA_RULE,
     STEP_BACK_RULE,
     UNOPENED_PR,
@@ -1601,6 +1602,8 @@ def _assemble_prompt(
     )
     if prior and plan["protocol"].get("step_back"):
         prior_rule += " " + STEP_BACK_RULE.format(rounds=int(plan["protocol"].get("finding_rounds") or 0))
+    if plan["protocol"].get("pre_existing") == "advisory" and not plan.get("promotion"):
+        prior_rule += " " + ADVISORY_RULE
     if plan.get("since_review") and (
         runner.stage_pull_request_diff(plan_dir / SINCE_DIFF_FILE, workspace, SINCE_STAGED_NAME) is not None
     ):

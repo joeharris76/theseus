@@ -220,6 +220,11 @@ DELTA_RULE = (
     " hunks in the staged pull request diff as usual: every changed hunk must still be seen, and a defect on an old"
     " line of a changed file still counts."
 )
+ADVISORY_RULE = (
+    "Exception to the rating rule for this repository: a Medium or Low defect with origin pre-existing, which the"
+    " review verifies against the diff, is recorded as advisory and does not block the merge. Rate a pre-existing"
+    " defect that must be fixed before merge High or Critical, and never choose a rating to order the list."
+)
 
 
 class OversizeError(ValueError):

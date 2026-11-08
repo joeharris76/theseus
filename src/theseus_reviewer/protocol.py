@@ -795,7 +795,7 @@ def judge(
             if advisory_scope.demotes(item)
             and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
             and not advisory_scope.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
-            and (workspace is None or _exists_exact(_resolve_tree(item.file, workspace), workspace))
+            and (workspace is None or _is_file(_resolve_tree(item.file, workspace), workspace))
         )
         if advisory_scope is not None and not uncounted
         else ()
@@ -1186,3 +1186,7 @@ def defect_entry(defect_id: str, finding: Finding) -> dict[str, Any]:
         "end_line": finding.end_line,
         "title": finding.title,
     }
+
+
+def _is_file(path: str, workspace: Path | str) -> bool:
+    return _exists_exact(path, workspace) and os.path.isfile(os.path.join(os.path.realpath(str(workspace)), path))

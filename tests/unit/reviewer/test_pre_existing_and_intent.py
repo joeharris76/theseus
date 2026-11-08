@@ -603,3 +603,30 @@ def test_a_cited_path_that_is_not_a_file_in_the_head_tree_never_demotes(policy: 
 def test_a_promotion_review_never_demotes(policy: Policy) -> None:
     plan = _plan_with(policy, promotion={"schema": 1})
     assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_cited_directory_never_demotes(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "x.py").write_text("x\n", encoding="utf-8")
+    verdict = validate(_v("s", [{**_old("Medium", 2), "file": "src"}]))
+    assert protocol.judge_planned(verdict, _plan_with(policy), workspace=tmp_path).decision == (
+        protocol.SHIP_WITH_FIXES
+    )
+
+
+def test_the_advisory_exception_is_in_the_brief_only_when_the_policy_opts_in(policy: Policy, tmp_path: Path) -> None:
+    from theseus_reviewer.render import ADVISORY_RULE
+
+    plan = {
+        **_file_list_plan(_plan(policy, ("large", "huge"))),
+        "brief_mode": "inline",
+        "diff_inline": "diff --git a/x b/x\n+x\n",
+        "protocol": {"prior": [], "forced": False, "claimed": [], "next_id": 1, "pre_existing": "advisory"},
+    }
+    for name, mode, expected in (("on", "advisory", True), ("off", "block", False)):
+        plan_dir, workspace = tmp_path / name / "p", tmp_path / name / "w"
+        plan_dir.mkdir(parents=True)
+        workspace.mkdir()
+        _git(workspace, "init", "--quiet")
+        held = {**plan, "protocol": {**plan["protocol"], "pre_existing": mode}}
+        assert (ADVISORY_RULE in cli._assemble_prompt(held, plan_dir, _classification("large"), workspace)) is expected
