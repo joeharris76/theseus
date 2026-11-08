@@ -719,6 +719,17 @@ def test_an_inline_review_embeds_the_diff_and_stages_nothing(
 
 
 @skip_on_windows
+def test_review_time_render_enforces_the_inline_ceiling(policy: Policy, tmp_path: Path) -> None:
+    workspace, head = _workspace(tmp_path)
+    diff = "+" + "x" * 110_000
+    plan_path = _plan_dir(policy, tmp_path, head, "full", "inline", diff, diff)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    classification = cli.Classification("small", "routine", "standard", 1.0, (), ())
+    with pytest.raises(cli.OversizeError):
+        cli._assemble_prompt(plan, plan_path.parent, classification, workspace)
+
+
+@skip_on_windows
 def test_a_reviewer_that_reports_incomplete_is_absent_with_its_reason(
     policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

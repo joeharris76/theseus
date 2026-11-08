@@ -2140,11 +2140,21 @@ def test_a_diff_that_fits_only_without_the_template_is_planned_as_a_file_list(
     assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
 
 
+@pytest.mark.parametrize("file_list", [False, True])
 def test_the_planned_brief_size_bounds_every_brief_the_review_renders(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, file_list: bool
 ) -> None:
     _, _, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS))
     plan_dir = tmp_path / "plan"
+    plan["author_statement"] = {
+        "title": "Title" * 40,
+        "body": "body" * 500,
+        "linked": [{"ref": "#1", "title": "title" * 40, "text": "text" * 250}] * 3,
+    }
+    plan["since_review"] = {"head": "b" * 40, "file": cli.SINCE_DIFF_FILE}
+    if file_list:
+        plan.update(brief_mode="file-list", diff_inline=None)
+    unseen = [(path, cli.STAGED_DIFF_NAME, 1, 7) for path in plan["evidence_files"]]
     bound = cli._rendered_brief_bytes(plan, plan_dir, marked=True)
     assert bound is not None
     bound += render.SLOT_MAX_BYTES["file_priority"]
@@ -2158,7 +2168,7 @@ def test_the_planned_brief_size_bounds_every_brief_the_review_renders(
             files=(),
         )
         brief = cli.compose_brief(
-            plan, plan_dir, classification, plan["evidence_files"], (), None, False, BRIEF_MAX_BYTES
+            plan, plan_dir, classification, plan["evidence_files"], unseen, None, True, BRIEF_MAX_BYTES
         )
         assert len(brief.encode("utf-8")) <= bound
 

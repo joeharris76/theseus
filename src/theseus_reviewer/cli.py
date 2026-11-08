@@ -981,6 +981,11 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         plan["disputes"] = [*claims.disputes, *plan["disputes"]]
     if active_promotion is not None:
         promotion.write_materialized_bundle(active_promotion, out_dir)
+    _stage_since_review(plan, out_dir, step, inputs)
+    if policy.brief.include_intent:
+        plan["author_statement"] = intent.statement(
+            inputs.title, inputs.body if inputs.description is None else inputs.description, inputs.linked
+        )
     _plan_review(
         plan,
         out_dir,
@@ -999,11 +1004,6 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     plan["added_lines"] = _added_ranges(inputs.full_diff)
     plan["new_files"] = sorted(item.path for item in all_files if item.status in ("added", "renamed", "copied"))
     plan["changed_paths"] = sorted({path for item in all_files for path in item.paths})
-    _stage_since_review(plan, out_dir, step, inputs)
-    if policy.brief.include_intent:
-        plan["author_statement"] = intent.statement(
-            inputs.title, inputs.body if inputs.description is None else inputs.description, inputs.linked
-        )
     plan["decision_reason"] = step.reason if reason is None else f"{step.reason}; {reason}"
     return _finish_plan(out_dir, plan)
 
@@ -1470,6 +1470,7 @@ def _retry_hints(
     evidence_files: Sequence[str],
     marked: Sequence[str],
     unseen: Sequence[Sequence[Any]],
+    worst_case: bool = False,
 ) -> dict[str, str]:
     request_text = diff_file.read_bytes().decode("utf-8") if diff_file.is_file() else ""
     hints = _block_hints(evidence_files, request_text, plan_dir, plan.get("evidence_whole_files", ()))
@@ -1478,6 +1479,11 @@ def _retry_hints(
         STAGED_DIFF_NAME: request_text,
         coverage.UPSTREAM_DIFF: upstream.read_bytes().decode("utf-8", "replace") if upstream.is_file() else "",
     }
+    if worst_case:
+        bounds = coverage.retry_hint_bounds(
+            evidence_files, request_text, texts[coverage.UPSTREAM_DIFF], plan.get("evidence_whole_files", ())
+        )
+        return {path: "x" * max(bounds.get(path, 0), len(hints.get(path, "").encode("utf-8"))) for path in marked}
     named = coverage.unseen_hints([item for item in unseen if item[0] in set(marked)], texts)
     return {**hints, **named}
 
@@ -1515,6 +1521,7 @@ def compose_brief(
     diff_path: Path | None,
     since_staged: bool,
     max_bytes: int,
+    worst_case_retry: bool = False,
 ) -> str:
     reviewed = [
         ChangedFile(
@@ -1530,7 +1537,7 @@ def compose_brief(
     evidence_files = plan.get("evidence_files", [])
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
-    hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen) if marked else {}
+    hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen, worst_case_retry) if marked else {}
     files_block = (
         f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints)}"
         if file_list
@@ -1629,7 +1636,8 @@ def _assemble_prompt(
         plan.get("since_review")
         and runner.stage_pull_request_diff(plan_dir / SINCE_DIFF_FILE, workspace, SINCE_STAGED_NAME) is not None
     )
-    return compose_brief(plan, plan_dir, classification, unread, unseen, staged, since_staged, BRIEF_MAX_BYTES)
+    cap = INLINE_BRIEF_MAX_BYTES if plan["brief_mode"] == "inline" else BRIEF_MAX_BYTES
+    return compose_brief(plan, plan_dir, classification, unread, unseen, staged, since_staged, cap)
 
 
 def _rendered_brief_bytes(plan: Mapping[str, Any], plan_dir: Path, *, marked: bool) -> int | None:
@@ -1655,6 +1663,7 @@ def _rendered_brief_bytes(plan: Mapping[str, Any], plan_dir: Path, *, marked: bo
                 WORST_CASE_DIFF_PATH,
                 bool(plan.get("since_review")),
                 BRIEF_MAX_BYTES,
+                worst_case_retry=marked,
             )
         except OversizeError:
             return None

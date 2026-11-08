@@ -283,8 +283,17 @@ def test_the_plan_carries_the_statement_only_when_the_policy_asks_for_it(
 ) -> None:
     monkeypatch.setattr(test_cli_plan, "POLICY_PATH", _intent_policy(tmp_path, include))
     fake = _IssueFake(_pull(title="Retry the fetch", body="Details.\n\nFixes #12"), test_cli_plan.SOUNDNESS, diff=DIFF)
+    choose = cli._choose_brief_mode
+    measured: list[bool] = []
+
+    def measure(held: dict[str, Any], *args: Any, **kwargs: Any) -> tuple[str, int]:
+        measured.append(bool(held.get("author_statement")))
+        return choose(held, *args, **kwargs)
+
+    monkeypatch.setattr(cli, "_choose_brief_mode", measure)
     _, values, plan = _cli_plan(monkeypatch, tmp_path, fake)
     assert values["decision"] == "review"
+    assert measured == [include]
     if not include:
         assert "author_statement" not in plan
         return

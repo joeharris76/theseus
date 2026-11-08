@@ -244,6 +244,26 @@ def unseen_hints(unseen: Iterable[Sequence[Any]], texts: Mapping[str, str]) -> d
     return hints
 
 
+def retry_hint_bounds(
+    evidence_files: Iterable[str], request_text: str, upstream_text: str, whole: Collection[str] = ()
+) -> dict[str, int]:
+    targets = build_targets(evidence_files, request_text, STAGED_DIFF_NAME, upstream_text, whole)
+    bounds = {}
+    for path, target in targets.items():
+        if not target.hunks or target.diff is None:
+            continue
+        widths = sorted(
+            (len(f"{target.diff}:raw:{hunk.block_start}-{hunk.block_end}".encode()) for hunk in target.hunks),
+            reverse=True,
+        )[:_HINT_SPANS]
+        bounds[path] = (
+            len("(unseen: )")
+            + sum(width + len("read with :raw as ; ") for width in widths)
+            + len(f" and {len(target.hunks)} more")
+        )
+    return bounds
+
+
 def _span_text(start: int, end: int) -> str:
     return str(start) if start == end else f"{start}-{end}"
 
