@@ -10,7 +10,6 @@ import pytest
 
 from theseus_reviewer._vendor import yaml
 
-RETIRED = "ora" + "cle"
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -648,7 +647,7 @@ def test_the_review_secrets_are_the_declared_names_and_no_callee_declares_the_re
     assert "OMP_GATEWAY_TOKEN" not in review
     for path in [*WORKFLOWS.glob("*.yml"), *EXAMPLES.glob("*.yml")]:
         text = CONTAINS.sub("", STARTS_WITH.sub("", path.read_text(encoding="utf-8")))
-        assert RETIRED not in text.lower()
+        assert "oracle" not in text.lower()
 
 
 def test_the_tailscale_tag_is_a_required_input_without_a_default_and_keeps_its_validation() -> None:
@@ -699,8 +698,8 @@ def test_the_comment_expressions_group_only_exact_prefix_commands() -> None:
         "> /review",
         "Owner instruction: see Review adjudication:",
         "see /review",
-        f"/{RETIRED}-review",
-        f"{RETIRED} adjudication: WITHDRAW D1 - x",
+        "/oracle-review",
+        "oracle adjudication: WITHDRAW D1 - x",
         "",
     ):
         assert not _starts(prefixes, body)
@@ -712,7 +711,7 @@ def test_the_gate_expressions_match_only_exact_prefix_attestations() -> None:
         assert _prefixes(text) == STANDIN_PREFIXES | ADJUDICATION_PREFIXES
     prefixes = STANDIN_PREFIXES | ADJUDICATION_PREFIXES
     assert _starts(prefixes, "Stand-In Review: APPROVE " + "a" * 40)
-    assert not _starts(prefixes, f"Stand-in {RETIRED} review: APPROVE " + "a" * 40)
+    assert not _starts(prefixes, "Stand-in oracle review: APPROVE " + "a" * 40)
     assert not _starts(prefixes, "> Stand-in review: APPROVE " + "a" * 40)
 
 

@@ -33,7 +33,6 @@ from theseus_reviewer.retry import State
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
-RETIRED = "ora" + "cle"
 HEAD = "a" * 40
 LATER = "2026-10-01T13:00:00Z"
 BOT = "benchbox-review[bot]"
@@ -88,7 +87,7 @@ def _standin(text: str) -> dict[str, Any]:
 def test_the_protocol_marker_uses_the_review_name_and_the_retired_name_is_not_read() -> None:
     marker = protocol.encode_marker(_record())
     assert marker.startswith("<!-- review-protocol: v1 ")
-    retired = marker.replace("review-protocol", f"{RETIRED}-protocol")
+    retired = marker.replace("review-protocol", "oracle-protocol")
     assert protocol.decode_marker(f"### verdict\n\n{marker}") is not None
     assert protocol.decode_marker(f"### verdict\n\n{retired}") is None
     assert protocol.marker_payload(retired) is None
@@ -102,10 +101,10 @@ def test_a_coverage_record_keeps_its_coverage() -> None:
 
 def test_defect_thread_markers_use_the_review_name_only() -> None:
     assert protocol.thread_finding("<!-- review-defect: c2-D3 -->") == (2, "D3")
-    assert protocol.thread_finding(f"body\n<!-- {RETIRED}-defect: c4-D12 -->") is None
-    assert protocol.thread_finding_id(f"<!--{RETIRED}-defect:c1-D1-->") is None
-    text = f"**High**: x\n<!-- {RETIRED}-defect: c1-D1 -->\n<!-- review-defect: c1-D1 -->\nkept"
-    assert protocol.strip_marker_lines(text) == f"**High**: x\n<!-- {RETIRED}-defect: c1-D1 -->\nkept"
+    assert protocol.thread_finding("body\n<!-- oracle-defect: c4-D12 -->") is None
+    assert protocol.thread_finding_id("<!--oracle-defect:c1-D1-->") is None
+    text = "**High**: x\n<!-- oracle-defect: c1-D1 -->\n<!-- review-defect: c1-D1 -->\nkept"
+    assert protocol.strip_marker_lines(text) == "**High**: x\n<!-- oracle-defect: c1-D1 -->\nkept"
 
 
 def test_the_finding_fingerprint_marker_uses_the_review_name_only() -> None:
@@ -113,7 +112,7 @@ def test_the_finding_fingerprint_marker_uses_the_review_name_only() -> None:
 
     written = dedup.marker(Finding("High", "src/a.py", 3, "Title", "detail"))
     assert written.startswith("<!-- review-finding: ")
-    retired = written.replace("review-finding", f"{RETIRED}-finding")
+    retired = written.replace("review-finding", "oracle-finding")
     fingerprint = written.split(": ", 1)[1].split(" ", 1)[0]
     assert dedup.thread_fingerprint(None, written) == fingerprint
     assert dedup.thread_fingerprint(None, retired) is None
@@ -122,7 +121,7 @@ def test_the_finding_fingerprint_marker_uses_the_review_name_only() -> None:
 def test_the_local_record_marker_uses_the_review_name_only() -> None:
     encoded = findings._encode({"v": findings.RECORD_VERSION, "findings": []})
     assert encoded.startswith("<!-- review-local-record: ")
-    retired = encoded.replace("review-local-record", f"{RETIRED}-local-record")
+    retired = encoded.replace("review-local-record", "oracle-local-record")
     assert findings.decode_body(encoded) is not None
     assert findings.decode_body(retired) is None
 
@@ -134,7 +133,7 @@ def test_adjudication_comments_use_the_review_prefix_only() -> None:
     assert cli._is_adjudication(
         "issue_comment", {"comment": {"body": f"{adjudication.PREFIX}MAINTAIN D1 - still true"}}
     )
-    retired = f"{RETIRED.capitalize()} adjudication: MAINTAIN D1 - still true"
+    retired = "Oracle adjudication: MAINTAIN D1 - still true"
     assert adjudication.parse(retired) is None
     assert not cli._is_adjudication("issue_comment", {"comment": {"body": retired}})
 
@@ -156,14 +155,14 @@ def test_backoff_resets_use_the_review_prefix_only() -> None:
     assert reset.reset_moment(_reset_comments(reset.RESET_PREFIX), HEAD, attesters) == datetime(
         2026, 10, 1, 11, tzinfo=UTC
     )
-    assert reset.reset_moment(_reset_comments(f"{RETIRED.capitalize()} backoff reset: "), HEAD, attesters) is None
+    assert reset.reset_moment(_reset_comments("Oracle backoff reset: "), HEAD, attesters) is None
 
 
 def test_the_gate_reads_only_the_review_verdict_status_context() -> None:
     standin = [_standin(f"{review_check.STANDIN_APPROVAL} {HEAD}")]
     assert _decide([], standin, []) == 0
-    assert _decide([_status(f"{RETIRED}-verdict")], standin, []) == 0
-    assert _decide([_status(f"{RETIRED}-verdict", "failure")], standin, []) == 0
+    assert _decide([_status("oracle-verdict")], standin, []) == 0
+    assert _decide([_status("oracle-verdict", "failure")], standin, []) == 0
     assert _decide([_status("review-verdict")], standin, []) != 0
 
 
@@ -172,12 +171,12 @@ def test_a_standin_attestation_passes_the_gate_only_in_the_review_spelling() -> 
     failing = [_status("review-verdict", "failure", "2026-10-01T11:00:00Z")]
     assert _decide(failing, [_standin(f"{phrase} {HEAD}")], []) == 0
     assert _decide(failing, [_standin(f"{phrase} {'b' * 40}")], []) != 0
-    retired = phrase.replace("review", f"{RETIRED} review")
+    retired = phrase.replace("review", "oracle review")
     assert _decide(failing, [_standin(f"{retired} {HEAD}")], []) != 0
 
 
 def test_the_verdict_heading_is_read_only_in_the_review_form() -> None:
-    for context, expected in (("review-verdict", "success"), (f"{RETIRED}-verdict", None)):
+    for context, expected in (("review-verdict", "success"), ("oracle-verdict", None)):
         body = f"### {context}: success for `{HEAD}`\n\nDetails."
         assert review_check.verdict_state(body, HEAD, review_check._REVIEW_VERDICT) == expected
 
@@ -194,12 +193,12 @@ def test_app_statuses_count_only_under_their_own_context() -> None:
         ]
 
     assert len(edits.app_verdict_statuses(statuses("review-verdict"), "review-verdict", "benchbox-review")) == 1
-    assert edits.app_verdict_statuses(statuses(f"{RETIRED}-verdict"), "review-verdict", "benchbox-review") == []
+    assert edits.app_verdict_statuses(statuses("oracle-verdict"), "review-verdict", "benchbox-review") == []
     assert edits.app_verdict_statuses(statuses("review-verdict"), "review-gate", "benchbox-review") == []
 
 
 def test_a_surfaced_sweep_failure_is_recognised_under_its_current_prefix_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    for prefix, expected in ((github.SWEEP_FAILURE_SURFACE_PREFIX, True), (f"{RETIRED}-verdict failed: ", False)):
+    for prefix, expected in ((github.SWEEP_FAILURE_SURFACE_PREFIX, True), ("oracle-verdict failed: ", False)):
         pending = [{"state": "pending", "description": f"{prefix}Run the attempt loop."}]
         monkeypatch.setattr(cli, "_own_statuses", lambda *args, _p=pending: _p)
         assert cli._already_surfaced("o/r", HEAD, "review-verdict", "bot", 7, None) is expected
@@ -256,11 +255,11 @@ def test_state_is_read_from_the_review_artifacts(monkeypatch: pytest.MonkeyPatch
     assert downloaded == [name]
 
 
-@pytest.mark.parametrize("name", [f"{RETIRED}-verdict-state-7", f"{RETIRED}-verdict-state-attempt-7"])
+@pytest.mark.parametrize("name", ["oracle-verdict-state-7", "oracle-verdict-state-attempt-7"])
 def test_state_published_under_the_retired_artifact_names_is_ignored(
     monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    downloaded = _state_sources(monkeypatch, {name: 1}, f".github/workflows/{RETIRED}-verdict.yml")
+    downloaded = _state_sources(monkeypatch, {name: 1}, ".github/workflows/oracle-verdict.yml")
     assert github.latest_state("o/r", 7, "main") is None
     assert downloaded == []
 
@@ -312,7 +311,7 @@ def test_a_status_file_is_posted_once_as_written(monkeypatch: pytest.MonkeyPatch
 
 def test_local_configuration_reads_only_the_review_environment_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("REVIEW_OMP_BINARY", raising=False)
-    monkeypatch.setenv(f"{RETIRED.upper()}_OMP_BINARY", "/opt/omp")
+    monkeypatch.setenv("ORACLE_OMP_BINARY", "/opt/omp")
     assert omp_pin.configured_binary() is None
     monkeypatch.setenv("REVIEW_OMP_BINARY", "/opt/new-omp")
     assert omp_pin.configured_binary() == Path("/opt/new-omp").resolve()
@@ -345,4 +344,4 @@ def test_every_environment_name_theseus_reads_uses_the_review_prefix() -> None:
         *credentials.RUNNER_ENV,
     ]
     assert [name for name in names if name.startswith("REVIEW_")]
-    assert not [name for name in names if RETIRED.upper() in name.upper()]
+    assert not [name for name in names if "ORACLE" in name.upper()]

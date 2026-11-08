@@ -18,7 +18,6 @@ from tests.conftest import FIXTURES
 from theseus_reviewer import absence, omp_pin, omp_watch
 from theseus_reviewer.omp_watch import PinChange, PolicyCommit, Record
 
-RETIRED = "ora" + "cle"
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 CAPTURED = json.loads((FIXTURES / "reviewers" / "omp_watch" / "attempts.json").read_text(encoding="utf-8"))
@@ -293,7 +292,7 @@ def test_a_history_without_a_version_change_or_a_prior_pin_is_not_watched() -> N
     ("author", "subject", "expected"),
     [
         (omp_watch.BOT_AUTHOR_EMAIL, "revert(review): restore omp 18.12.1", True),
-        (omp_watch.BOT_AUTHOR_EMAIL, f"revert({RETIRED}): restore omp 18.12.1", False),
+        (omp_watch.BOT_AUTHOR_EMAIL, "revert(oracle): restore omp 18.12.1", False),
         (omp_watch.BOT_AUTHOR_EMAIL, "chore(review): pin omp 18.13.4", False),
         ("joeharris76@gmail.com", "revert(review): restore omp 18.12.1", False),
         ("joeharris76@gmail.com", 'Revert "chore(review): pin omp 18.13.3" (#3679) (#3707)', False),

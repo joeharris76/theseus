@@ -7,7 +7,6 @@ import pytest
 from .test_cli_plan import _acked_thread, _plan
 from .test_same_head_rerun import _decided, _fake
 
-RETIRED = "ora" + "cle"
 pytestmark = [pytest.mark.unit, pytest.mark.fast, pytest.mark.usefixtures("consumer_cwd")]
 
 
@@ -28,15 +27,15 @@ def _decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str) -> str
         "/reviewers",
         "/review-me",
         "/Reviewers",
-        f"/{RETIRED.capitalize()}-Reviewer",
+        "/Oracle-Reviewer",
         "please /review this",
         "> /review",
         "Owner instruction: the earlier comment said\nReview adjudication: WITHDRAW D1 - nope",
         "> Review adjudication: WITHDRAW D1 - quoted",
-        f"> {RETIRED.capitalize()} adjudication: WITHDRAW D1 - quoted",
-        f"see /{RETIRED}-review",
-        f"/{RETIRED}-review",
-        f"/{RETIRED.upper()}-REVIEW now",
+        "> Oracle adjudication: WITHDRAW D1 - quoted",
+        "see /oracle-review",
+        "/oracle-review",
+        "/ORACLE-REVIEW now",
         "",
     ],
 )
