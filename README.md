@@ -55,6 +55,7 @@ uv build
 - [docs/local-review.md](docs/local-review.md): pinned pre-submission review from the installed artifact
 - [docs/gateway-host.md](docs/gateway-host.md): installed `install-omp` and `gateway-clients` for the gateway host
 - [docs/hosted-workflows.md](docs/hosted-workflows.md): reusable review and gate workflows, pinned ref, environment secrets
+- [docs/review-evals.md](docs/review-evals.md): incident corpus, reviewer scoring, the no-lower-score rule and the weekly live run
 - [examples/consumer/.github/workflows/](examples/consumer/.github/workflows/): consumer caller workflows
 
 ## Maintaining the extraction

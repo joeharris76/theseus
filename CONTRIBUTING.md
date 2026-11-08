@@ -27,6 +27,7 @@ uv build
 - Tests are offline and fixture-driven; no test may need a live App, gateway or network secret.
 - Pin GitHub Actions to full commit SHAs with the tag in a trailing comment.
 - Commit messages describe the durable reason for the change.
+- A change to the review templates, `render.py`, `classify.py`, the policy, the omp config or the consumer guidance must attach a live eval run that does not score lower than the recorded baseline; see [docs/review-evals.md](docs/review-evals.md).
 
 ## Reporting vulnerabilities
 

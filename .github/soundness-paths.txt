@@ -10,3 +10,6 @@ file	.github/review-omp-config.yml
 file	.github/theseus-lock.json
 file	.github/soundness-paths.txt
 file	tests/unit/test_theseus_pin.py
+
+prefix	evals/
+file	tools/review_eval.py

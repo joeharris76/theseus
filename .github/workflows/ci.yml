@@ -77,3 +77,26 @@ jobs:
           uv pip install --python smoke-venv/bin/python dist/theseus_reviewer-*.whl
           smoke-venv/bin/theseus --help
           smoke-venv/bin/python -I -c "import theseus_reviewer; print(theseus_reviewer.__file__)"
+
+  review-eval:
+    name: review eval corpus and score rule
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Validate the eval corpus
+        run: python3 tools/review_eval.py validate
+      - name: Refuse a template, policy or guidance change that lowers the eval score
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          base="$(git rev-parse 'HEAD^1')"
+          tool=tools/review_eval.py
+          if git cat-file -e "$base:$tool" 2>/dev/null; then
+            git show "$base:$tool" > "$RUNNER_TEMP/review_eval_base.py"
+            tool="$RUNNER_TEMP/review_eval_base.py"
+          fi
+          python3 "$tool" --root "$GITHUB_WORKSPACE" check-change --base "$base" --head HEAD
