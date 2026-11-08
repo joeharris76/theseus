@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 FULL_DIFF_PLACEHOLDER = "<<full-pull-request-diff-path>>"
@@ -28,8 +29,8 @@ def _open_private(path: str, flags: int) -> int:
     return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
 
 
-def create_exclusive(path: Path, data: bytes) -> None:
-    with open(path, "xb", opener=_open_private) as handle:
+def create_exclusive(path: Path, data: bytes, opener: Callable[[str, int], int] = _open_private) -> None:
+    with open(path, "xb", opener=opener) as handle:
         handle.write(data)
 
 

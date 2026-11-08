@@ -9,11 +9,10 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from theseus_reviewer import absence, brief, cli, omp_pin, redaction_check, runner
+from theseus_reviewer import absence, cli, omp_pin, redaction_check, runner
 from theseus_reviewer.brief import create_exclusive
 from theseus_reviewer.commands import Invocation
 from theseus_reviewer.policy import Policy
@@ -675,22 +674,21 @@ def test_a_file_created_between_the_check_and_the_write_is_neither_followed_nor_
 
 
 @skip_on_windows
-def test_a_file_wrapper_that_fails_after_the_descriptor_is_opened_leaks_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import builtins
-    import warnings
+def test_a_file_wrapper_that_fails_after_the_descriptor_is_opened_leaks_nothing(tmp_path: Path) -> None:
+    opened: list[int] = []
 
-    def failing_wrapper(path: Path, mode: str, opener: Any) -> Any:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            return builtins.open(path, mode, buffering=1, opener=opener)
+    def directory_descriptor(path: str, flags: int) -> int:
+        descriptor = os.open(tmp_path, os.O_RDONLY)
+        opened.append(descriptor)
+        return descriptor
 
-    monkeypatch.setattr(brief, "open", failing_wrapper, raising=False)
     descriptors = Path("/dev/fd")
     before = len(list(descriptors.iterdir()))
-    with pytest.raises(RuntimeWarning):
-        create_exclusive(tmp_path / "bad.diff", b"+x\n")
+    with pytest.raises(IsADirectoryError):
+        create_exclusive(tmp_path / "bad.diff", b"+x\n", opener=directory_descriptor)
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
     assert len(list(descriptors.iterdir())) == before
 
 
