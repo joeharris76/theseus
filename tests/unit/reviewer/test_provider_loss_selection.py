@@ -316,10 +316,30 @@ def test_a_policy_without_the_key_keeps_the_pending_behaviour(monkeypatch: pytes
     assert _select(monkeypatch, tmp_path, _minimal_plan(None), JevError(503, "down")) == {}
 
 
-def test_a_malformed_classifier_answer_is_not_a_loss_and_does_not_fall_back(
+def test_a_malformed_classifier_answer_is_an_outage_and_falls_back_to_the_policy_bucket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert _select(monkeypatch, tmp_path, _minimal_plan("max"), KeyError("size")) == {}
+    class Malformed(_AnswersSizeThenFails):
+        def ask(self, state: object, questions: dict[str, Any]) -> dict[str, Any]:
+            return {"size": {"choice": "colossal", "probabilities": {"colossal": 1.0}, "confidence": 1.0}}
+
+    monkeypatch.setattr(cli, "JevSession", lambda: Malformed("large"))
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out.txt"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    (tmp_path / "plan.json").write_text(json.dumps(_minimal_plan("max")), encoding="utf-8")
+    args = argparse.Namespace(
+        plan=str(tmp_path / "plan.json"),
+        attempts_dir=str(tmp_path / "attempts"),
+        slot=1,
+        classification=str(tmp_path / "classification.json"),
+        workspace=None,
+        classify_only=True,
+    )
+    assert cli.command_select(args) == 0
+    held = json.loads((tmp_path / "classification.json").read_text(encoding="utf-8"))
+    assert (held["backend"], held["size_bucket"]) == ("unavailable", "max")
+    assert held["degraded_from"] == "TypeSafe answered unusable content"
 
 
 def test_the_fallback_classification_round_trips_with_its_backend() -> None:
