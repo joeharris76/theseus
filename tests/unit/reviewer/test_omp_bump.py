@@ -372,3 +372,29 @@ def test_help_diff_makes_a_hash_verified_download_executable(tmp_path: Path) -> 
     candidate.chmod(0o644)
     omp_bump.help_diff(binary, candidate, tmp_path, omp_pin.sha256_of(candidate))
     assert candidate.stat().st_mode & 0o111
+
+
+def test_get_json_retries_transient_build_host_failures_before_succeeding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    pauses: list[float] = []
+
+    class FakeOpener:
+        def open(self, request: urllib.request.Request, timeout: float) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", hdrs=None, fp=None)
+            return contextlib.nullcontext(io.BytesIO(json.dumps(ANSWER).encode("utf-8")))
+
+    import contextlib
+    import io
+    import urllib.error
+
+    monkeypatch.setattr(omp_pin, "build_opener", FakeOpener)
+    assert (
+        omp_bump.get_json("https://build.stencil.so/api/products/omp/latest/macos-arm64", pause=pauses.append) == ANSWER
+    )
+    assert calls == 3
+    assert pauses == [omp_bump.API_RETRY_SECONDS, omp_bump.API_RETRY_SECONDS * 2]
