@@ -500,7 +500,7 @@ def command_evaluate(args: argparse.Namespace) -> int:
     now = datetime.now(UTC)
     try:
         policy = load_policy(Path(args.policy))
-        branch = policy.consumer.gated_base
+        branch = policy.consumer.primary_base
         change = latest_pin_change(policy_history(_policy_git_path(args.policy)))
         if change is None or change.is_revert:
             _publish({"state": IDLE, "version": ""})

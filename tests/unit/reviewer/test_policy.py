@@ -299,18 +299,14 @@ def test_the_brief_size_bound_is_a_fixed_constant() -> None:
 
 
 def test_the_live_policy_carries_its_consumer_binding(policy: Policy) -> None:
-    assert policy.consumer.gated_base == "develop"
+    assert policy.consumer.gated_bases == ("develop",)
     assert policy.consumer.attesters == ("joeharris76",)
     assert policy.consumer.soundness_manifest == ".github/soundness-paths.txt"
     assert policy.consumer.inert_manifest == ".github/inert-paths.txt"
     assert policy.consumer.omp_config == ".github/review-omp-config.yml"
     assert policy.consumer.omp_fixture_prefix == "tests/fixtures/reviewers/omp_candidate/"
     binding = policy.binding()
-    assert (binding.bot_login, binding.attesters, binding.gated_base) == (
-        "benchbox-review",
-        frozenset({"joeharris76"}),
-        "develop",
-    )
+    assert (binding.bot_login, binding.attesters) == ("benchbox-review", frozenset({"joeharris76"}))
 
 
 def test_a_beta_consumer_policy_binds_its_own_identities() -> None:
@@ -318,7 +314,7 @@ def test_a_beta_consumer_policy_binds_its_own_identities() -> None:
     binding = policy.binding()
     assert binding.bot_login == "beta-review"
     assert binding.attesters == frozenset({"beta-owner", "beta-deputy"})
-    assert binding.gated_base == "main"
+    assert policy.consumer.gated_bases == ("main",)
 
 
 def test_optional_consumer_keys_default_to_none() -> None:

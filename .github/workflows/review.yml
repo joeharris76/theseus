@@ -17,7 +17,7 @@ on:
         type: string
         default: joeharris76/theseus
       gated_base:
-        description: Branch the review applies to; its tip supplies the trusted policy and lock
+        description: Branches the review applies to, as a newline or comma separated list of branch names and prefix patterns such as release/*; the base tip the workflow runs from supplies the trusted policy and lock
         required: true
         type: string
       policy_path:
@@ -69,13 +69,14 @@ jobs:
     name: guard
     outputs:
       trusted_commit: ${{ steps.lock.outputs.trusted_commit }}
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base
+      gated: ${{ steps.base.outputs.gated }}
+      base: ${{ steps.base.outputs.base }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: read
     steps:
-      - name: Refuse a malformed pin, a foreign caller or a dispatch from another branch
+      - name: Refuse a malformed pin or a foreign caller
         env:
           THESEUS_REF: ${{ inputs.theseus_ref }}
           GATED_BASE: ${{ inputs.gated_base }}
@@ -83,8 +84,6 @@ jobs:
           TAILSCALE_TAG: ${{ inputs.tailscale_tag }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           REPOSITORY: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          CURRENT_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$THESEUS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -106,12 +105,27 @@ jobs:
               exit 2
               ;;
           esac
-          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$CURRENT_REF" != "refs/heads/$GATED_BASE" ]; then
-            echo "theseus-review: error: dispatch runs only from $GATED_BASE" >&2
-            exit 2
-          fi
+
+      - name: Check out the pinned Theseus base matcher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bases.py
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve whether this ref is a gated base
+        id: base
+        env:
+          GATED_BASES: ${{ inputs.gated_base }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+        run: python3 -I -S theseus-bootstrap/src/theseus_reviewer/bases.py resolve
 
       - name: Check out the trusted copy of the consumer lock
+        if: steps.base.outputs.gated == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -121,6 +135,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Refuse a pin that differs from the trusted consumer lock
+        if: steps.base.outputs.gated == 'true'
         id: lock
         env:
           THESEUS_REF: ${{ inputs.theseus_ref }}
@@ -155,7 +170,7 @@ jobs:
     name: sweep
     needs: guard
     if: >-
-      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      needs.guard.outputs.gated == 'true' &&
       (github.event_name == 'schedule' || github.event_name == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -167,6 +182,7 @@ jobs:
     env:
       HAS_APP: ${{ secrets.REVIEW_APP_ID != '' }}
       POLICY_PATH: ${{ inputs.policy_path }}
+      REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
     steps:
       - name: Refuse a caller that did not pass the App secrets
         if: env.HAS_APP != 'true'
@@ -224,7 +240,7 @@ jobs:
   health:
     name: health
     needs: guard
-    if: github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', inputs.gated_base)
+    if: github.event_name == 'schedule' && needs.guard.outputs.gated == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: ${{ inputs.environment }}
@@ -233,6 +249,7 @@ jobs:
     env:
       HAS_TAILNET: ${{ secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != '' }}
       POLICY_PATH: ${{ inputs.policy_path }}
+      REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
     steps:
       - name: Check out the trusted gated-branch copy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,7 +301,7 @@ jobs:
     name: review
     needs: guard
     if: >-
-      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      needs.guard.outputs.gated == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base)) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, 'Review adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
@@ -299,6 +316,7 @@ jobs:
       HAS_TAILNET: ${{ secrets.TS_OAUTH_CI_CLIENT_ID != '' && secrets.TS_OAUTH_CI_SECRET != '' }}
       HAS_APP: ${{ secrets.REVIEW_APP_ID != '' }}
       POLICY_PATH: ${{ inputs.policy_path }}
+      REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
     steps:
       - name: Refuse a caller that did not pass the App secrets
         if: env.HAS_APP != 'true'
@@ -516,7 +534,7 @@ jobs:
         if: steps.prepare.outputs.post == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.gated_base }}
+          ref: ${{ needs.guard.outputs.base }}
           path: gate
           persist-credentials: false
           sparse-checkout: ${{ inputs.trusted_paths }}

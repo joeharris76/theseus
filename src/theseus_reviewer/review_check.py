@@ -346,6 +346,10 @@ def fetch_pull(token: str, repo: str, pr: int) -> dict[str, Any]:
     return _request(token, f"{API_ROOT}/repos/{repo}/pulls/{pr}")
 
 
+def fetch_head_pulls(token: str, repo: str, head_sha: str) -> list[dict[str, Any]]:
+    return _paginate(token, f"/repos/{repo}/commits/{head_sha}/pulls")
+
+
 def changed_paths(items: Iterable[dict[str, Any]]) -> list[str]:
     paths: list[str] = []
     for item in items:

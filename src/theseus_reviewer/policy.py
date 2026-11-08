@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import omp_pin
+from . import bases, omp_pin
 
 SIZE_BUCKETS = ("trivial", "small", "medium", "large", "huge", "max")
 SEVERITIES = ("Critical", "High", "Medium", "Low")
@@ -123,12 +123,23 @@ class RetryRules:
 
 @dataclass(frozen=True)
 class Consumer:
-    gated_base: str
+    gated_bases: tuple[str, ...]
     attesters: tuple[str, ...]
     soundness_manifest: str
     omp_config: str
     inert_manifest: str | None = None
     omp_fixture_prefix: str | None = None
+
+    @property
+    def primary_base(self) -> str:
+        return self.gated_bases[0]
+
+    @property
+    def has_several_bases(self) -> bool:
+        return len(self.gated_bases) > 1
+
+    def is_gated(self, branch: str) -> bool:
+        return bases.matches(self.gated_bases, branch)
 
 
 @dataclass(frozen=True)
@@ -159,7 +170,6 @@ class PromotionRules:
 class Binding:
     bot_login: str
     attesters: frozenset[str]
-    gated_base: str
 
 
 @dataclass(frozen=True)
@@ -182,7 +192,7 @@ class Policy:
     brief: BriefRules = BriefRules()
 
     def binding(self) -> Binding:
-        return Binding(self.bot_login, frozenset(self.consumer.attesters), self.consumer.gated_base)
+        return Binding(self.bot_login, frozenset(self.consumer.attesters))
 
     def chain(self, bucket: str) -> list[Reviewer]:
         return [self.reviewers[self.buckets[bucket]]]
@@ -262,11 +272,16 @@ def _consumer(data: Any) -> Consumer:
         "omp_fixture_prefix",
     }
     _require(not unknown, f"consumer has unknown keys {sorted(unknown)}")
-    gated_base = data.get("gated_base")
+    raw_bases = data.get("gated_base")
+    gated_bases = (raw_bases,) if isinstance(raw_bases, str) else raw_bases
     _require(
-        isinstance(gated_base, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", gated_base) is not None,
-        "consumer gated_base must be a branch name",
+        isinstance(gated_bases, (tuple, list)) and all(isinstance(item, str) for item in gated_bases),
+        "consumer gated_base must be a branch name or a list of branch names",
     )
+    try:
+        gated_bases = bases.parse_bases(gated_bases)
+    except bases.BasePatternError as exc:
+        raise PolicyError(f"consumer gated_base must be a branch name or a list of branch names: {exc}") from exc
     attesters = _str_tuple(data.get("attesters"), "consumer attesters")
     _require(
         bool(attesters) and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", item) for item in attesters),
@@ -275,7 +290,7 @@ def _consumer(data: Any) -> Consumer:
     inert = data.get("inert_manifest")
     fixtures = data.get("omp_fixture_prefix")
     return Consumer(
-        gated_base=gated_base,
+        gated_bases=gated_bases,
         attesters=attesters,
         soundness_manifest=_relative_path(data.get("soundness_manifest"), "consumer soundness_manifest"),
         omp_config=_relative_path(data.get("omp_config"), "consumer omp_config"),

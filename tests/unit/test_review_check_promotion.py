@@ -663,7 +663,7 @@ def test_hosted_promotion_policy_comes_from_exact_base_commit(monkeypatch: pytes
 def test_the_promotion_review_must_come_from_the_bound_review(monkeypatch: pytest.MonkeyPatch) -> None:
     reviews = [_review(promo=_promo_dict())]
     assert _evaluate_gate(monkeypatch, reviews=reviews)[0] == review_check.PASS
-    other = Binding("beta-review", frozenset({"beta-owner"}), "develop")
+    other = Binding("beta-review", frozenset({"beta-owner"}))
     status, message = _evaluate_gate(monkeypatch, reviews=reviews, binding=other)
     assert status == review_check.WAITING
     assert "waiting" in message or "promotion refused" in message

@@ -17,7 +17,7 @@ on:
         type: string
         default: joeharris76/theseus
       gated_base:
-        description: Branch the gate applies to; its tip supplies the trusted policy and lock
+        description: Branches the gate applies to, as a newline or comma separated list of branch names and prefix patterns such as release/*; the tip of the pull request's own base supplies the trusted policy and lock
         required: true
         type: string
       policy_path:
@@ -53,23 +53,22 @@ permissions: {}
 jobs:
   guard:
     name: guard
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == inputs.gated_base
     outputs:
       trusted_commit: ${{ steps.lock.outputs.trusted_commit }}
+      gated: ${{ steps.base.outputs.gated }}
+      base: ${{ steps.base.outputs.base }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: read
     steps:
-      - name: Refuse a malformed pin, a foreign caller or a dispatch from another branch
+      - name: Refuse a malformed pin or a foreign caller
         env:
           THESEUS_REF: ${{ inputs.theseus_ref }}
           GATED_BASE: ${{ inputs.gated_base }}
           CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           REPOSITORY: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          CURRENT_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$THESEUS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -87,21 +86,37 @@ jobs:
               exit 2
               ;;
           esac
-          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$CURRENT_REF" != "refs/heads/$GATED_BASE" ]; then
-            echo "theseus-gate: error: dispatch runs only from $GATED_BASE" >&2
-            exit 2
-          fi
 
-      - name: Check out the trusted copy of the consumer lock
+      - name: Check out the pinned Theseus base matcher
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.gated_base }}
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bases.py
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve whether this ref is a gated base
+        id: base
+        env:
+          GATED_BASES: ${{ inputs.gated_base }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REF: ${{ github.ref }}
+        run: python3 -I -S theseus-bootstrap/src/theseus_reviewer/bases.py resolve
+
+      - name: Check out the trusted copy of the consumer lock
+        if: steps.base.outputs.gated == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.base.outputs.base }}
           path: trusted
           persist-credentials: false
           sparse-checkout: .github/theseus-lock.json
           sparse-checkout-cone-mode: false
 
       - name: Refuse a pin that differs from the trusted consumer lock
+        if: steps.base.outputs.gated == 'true'
         id: lock
         env:
           THESEUS_REF: ${{ inputs.theseus_ref }}
@@ -136,13 +151,14 @@ jobs:
     name: gate
     needs: guard
     if: >-
-      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      needs.guard.outputs.gated == 'true' &&
       github.event_name != 'schedule' && github.event_name != 'workflow_run' && github.event_name != 'push' &&
       (github.event_name != 'issue_comment' || (github.event.issue.pull_request && ((startsWith(github.event.comment.body, 'Stand-in review: APPROVE')) || contains(github.event.comment.body, 'Omp candidate check: ') || (startsWith(github.event.comment.body, 'Review adjudication: ')) || (github.event.action == 'deleted' && (contains(github.event.comment.body, 'Stand-in review: APPROVE') || contains(github.event.comment.body, 'Review adjudication: '))) || (github.event.action == 'edited' && ((contains(github.event.changes.body.from, 'Stand-in review: APPROVE')) || contains(github.event.changes.body.from, 'Omp candidate check: ') || (contains(github.event.changes.body.from, 'Review adjudication: ')))))))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: ${{ inputs.environment }}
     permissions:
+      actions: write
       contents: read
       pull-requests: read
     env:
@@ -174,7 +190,9 @@ jobs:
           ref: ${{ inputs.theseus_ref }}
           path: theseus-bootstrap
           persist-credentials: false
-          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout: |
+            src/theseus_reviewer/bootstrap.py
+            src/theseus_reviewer/bases.py
           sparse-checkout-cone-mode: false
 
       - name: Install the gate pin from the current gated-branch lock
@@ -208,6 +226,31 @@ jobs:
             echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Hand a comment on another gated base's pull request to that base's workflow
+        if: github.event_name == 'issue_comment' && steps.resolve.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          GATED_BASES: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
+          BASES: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bases.py
+        run: |
+          set -euo pipefail
+          PR_BASE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq 'select(.state == "open") | .base.ref')"
+          if [ -z "$PR_BASE" ] || [ "$PR_BASE" = "$REVIEW_TRUSTED_BASE" ]; then
+            exit 0
+          fi
+          CHECK=0
+          python3 -I -S "$BASES" check "$GATED_BASES" "$PR_BASE" || CHECK=$?
+          case "$CHECK" in
+            0) ;;
+            1) exit 0 ;;
+            *) exit 2 ;;
+          esac
+          gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE" -f pr="$PR_NUMBER"
+          echo "theseus-gate: dispatched the gate for #$PR_NUMBER on $PR_BASE"
+
       - name: Mint the App token
         id: app
         if: steps.resolve.outputs.pr != ''
@@ -225,6 +268,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
           PR_NUMBER: ${{ steps.resolve.outputs.pr }}
           KNOWN_HEAD: ${{ steps.resolve.outputs.head_sha }}
           HEAD_CHANGED: ${{ github.event_name == 'pull_request_target' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') }}
@@ -268,12 +312,23 @@ jobs:
     env:
       REPO: ${{ github.repository }}
     steps:
-      - name: Dispatch the gate for the gated-branch pull request at this head
+      - name: Check out the pinned Theseus base matcher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.theseus_repository }}
+          ref: ${{ inputs.theseus_ref }}
+          path: theseus-bootstrap
+          persist-credentials: false
+          sparse-checkout: src/theseus_reviewer/bases.py
+          sparse-checkout-cone-mode: false
+
+      - name: Dispatch the gate for each gated-branch pull request at this head
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          GATED_BASE: ${{ inputs.gated_base }}
+          GATED_BASES: ${{ inputs.gated_base }}
           CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          BASES: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bases.py
         run: |
           set -euo pipefail
           case "$HEAD_SHA" in
@@ -282,24 +337,36 @@ jobs:
               exit 2
               ;;
           esac
-          PR_NUMBER="$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" | jq -r --arg sha "$HEAD_SHA" --arg base "$GATED_BASE" '[.[] | select(.base.ref == $base and .state == "open" and .head.sha == $sha) | .number][0] // empty')"
-          if [ -z "$PR_NUMBER" ]; then
-            echo "theseus-gate: no open $GATED_BASE pull request has head $HEAD_SHA; nothing to gate"
-            exit 0
+          PULLS="$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" | jq -r --arg sha "$HEAD_SHA" '.[] | select(.state == "open" and .head.sha == $sha) | "\(.number) \(.base.ref)"')"
+          DISPATCHED=0
+          while read -r PR_NUMBER PR_BASE; do
+            [ -n "$PR_NUMBER" ] || continue
+            CHECK=0
+            python3 -I -S "$BASES" check "$GATED_BASES" "$PR_BASE" || CHECK=$?
+            case "$CHECK" in
+              0) ;;
+              1) continue ;;
+              *) exit 2 ;;
+            esac
+            gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE" -f pr="$PR_NUMBER" -f head_sha="$HEAD_SHA" < /dev/null
+            echo "theseus-gate: dispatched the gate for #$PR_NUMBER on $PR_BASE at $HEAD_SHA"
+            DISPATCHED=$((DISPATCHED + 1))
+          done <<< "$PULLS"
+          if [ "$DISPATCHED" -eq 0 ]; then
+            echo "theseus-gate: no open gated-branch pull request has head $HEAD_SHA; nothing to gate"
           fi
-          gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$GATED_BASE" -f pr="$PR_NUMBER" -f head_sha="$HEAD_SHA"
-          echo "theseus-gate: dispatched the gate for #$PR_NUMBER at $HEAD_SHA"
 
   sweep:
     name: sweep
     needs: guard
     if: >-
-      github.ref == format('refs/heads/{0}', inputs.gated_base) &&
+      needs.guard.outputs.gated == 'true' &&
       (github.event_name == 'schedule' || github.event_name == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: ${{ inputs.environment }}
     permissions:
+      actions: write
       contents: read
       pull-requests: read
     env:
@@ -331,7 +398,9 @@ jobs:
           ref: ${{ inputs.theseus_ref }}
           path: theseus-bootstrap
           persist-credentials: false
-          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout: |
+            src/theseus_reviewer/bootstrap.py
+            src/theseus_reviewer/bases.py
           sparse-checkout-cone-mode: false
 
       - name: Install the gate pin from the current gated-branch lock
@@ -354,19 +423,42 @@ jobs:
           permission-pull-requests: read
           permission-contents: read
 
-      - name: Gate every open pull request targeting the gated branch
+      - name: Gate every open pull request targeting a gated branch
         working-directory: trusted
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
-          GATED_BASE: ${{ inputs.gated_base }}
+          DISPATCH_TOKEN: ${{ github.token }}
+          GATED_BASES: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
+          BASES: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bases.py
         run: |
           set -euo pipefail
-          PRS="$(gh api --paginate "repos/$REPO/pulls?base=$GATED_BASE&state=open&per_page=100" --jq '.[] | "\(.number) \(.head.sha)"')"
+          PRS="$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.number) \(.head.sha) \(.base.ref)"')"
           FAILED=""
           RESULT="$RUNNER_TEMP/review-gate-result"
-          while read -r PR_NUMBER HEAD_SHA; do
+          while read -r PR_NUMBER HEAD_SHA PR_BASE; do
             [ -n "$PR_NUMBER" ] || continue
+            CHECK=0
+            python3 -I -S "$BASES" check "$GATED_BASES" "$PR_BASE" || CHECK=$?
+            case "$CHECK" in
+              0) ;;
+              1) continue ;;
+              *) exit 2 ;;
+            esac
+            if [ "$PR_BASE" != "$REVIEW_TRUSTED_BASE" ]; then
+              if [ "$EVENT_NAME" = schedule ]; then
+                DISPATCHED=0
+                GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE" -f pr="$PR_NUMBER" -f head_sha="$HEAD_SHA" < /dev/null || DISPATCHED=$?
+                if [ "$DISPATCHED" -ne 0 ]; then
+                  echo "::warning::review-gate could not be dispatched on $PR_BASE for #$PR_NUMBER (exit $DISPATCHED)"
+                  FAILED="$FAILED $PR_NUMBER"
+                fi
+              fi
+              continue
+            fi
             rm -f "$RESULT"
             STATUS=0
             REVIEW_GATE_RESULT_FILE="$RESULT" theseus gate --repo "$REPO" --pr "$PR_NUMBER" --policy "$POLICY_PATH" --root . --head-sha "$HEAD_SHA" < /dev/null || STATUS=$?

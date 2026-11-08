@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from . import (
     adjudication,
     base_change,
+    bases,
     capacity,
     commands,
     comment_disputes,
@@ -76,6 +77,7 @@ from .policy import (
     INLINE_BRIEF_MAX_BYTES,
     SIZE_BUCKETS,
     Binding,
+    Consumer,
     Policy,
     PolicyError,
     RetryRules,
@@ -408,11 +410,14 @@ def _backoff_reset(
     return reset_at
 
 
-def _pull_guard(pull: Mapping[str, Any], event: Mapping[str, Any], head_sha: str, gated_base: str) -> str | None:
+def _pull_guard(
+    pull: Mapping[str, Any], event: Mapping[str, Any], head_sha: str, consumer: Consumer, trusted_base: str
+) -> str | None:
     if pull["state"] != "open":
         return "the pull request is not open"
-    if pull["base"]["ref"] != gated_base:
-        return f"the pull request does not target {gated_base}"
+    base = pull["base"]["ref"]
+    if base != trusted_base or not consumer.is_gated(base):
+        return f"the pull request does not target {trusted_base}"
     if pull.get("draft"):
         return "the pull request is a draft"
     inputs = event.get("inputs")
@@ -466,7 +471,7 @@ def _plan_adjudication(out_dir: Path, plan: dict[str, Any], policy: Policy, even
     try:
         comment = github.get_json(f"repos/{repo}/issues/comments/{int((event.get('comment') or {}).get('id'))}")
         found = _plan_history(repo, pr, policy.bot_login)
-        previous = github.latest_state(repo, pr, policy.consumer.gated_base)
+        previous = github.latest_state(repo, pr, plan["base_ref"])
     except edits.EditStateError as exc:
         print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 2
@@ -692,9 +697,9 @@ def command_plan(args: argparse.Namespace) -> int:
     run_id = os.environ["GITHUB_RUN_ID"]
     event_name = os.environ["GITHUB_EVENT_NAME"]
     event = _event()
-    gated_base = policy.consumer.gated_base
-    if event_name == "workflow_dispatch" and os.environ.get("GITHUB_REF") != f"refs/heads/{gated_base}":
-        print(f"review-verdict: error: dispatch runs only from {gated_base}", file=sys.stderr)
+    trusted_base = bases.trusted_base(policy.consumer.primary_base)
+    if event_name == "workflow_dispatch" and os.environ.get("GITHUB_REF") != f"refs/heads/{trusted_base}":
+        print(f"review-verdict: error: dispatch runs only from {trusted_base}", file=sys.stderr)
         return 2
     pr = _pr_number(args.pr)
     out_dir = Path(args.out)
@@ -703,7 +708,7 @@ def command_plan(args: argparse.Namespace) -> int:
     plan["base_sha"] = pull["base"]["sha"]
     plan["base_ref"] = pull["base"]["ref"]
     plan["head_sha"] = pull["head"]["sha"]
-    guard_reason = _pull_guard(pull, event, plan["head_sha"], gated_base)
+    guard_reason = _pull_guard(pull, event, plan["head_sha"], policy.consumer, trusted_base)
     if guard_reason is not None:
         plan["decision_reason"] = guard_reason
         return _finish_plan(out_dir, plan)
@@ -731,7 +736,7 @@ def command_plan(args: argparse.Namespace) -> int:
         plan["decision_reason"] = "the comment is not a review command"
         return _finish_plan(out_dir, plan)
     try:
-        previous = github.latest_state(repo, pr, gated_base)
+        previous = github.latest_state(repo, pr, plan["base_ref"])
     except (github.GitHubError, KeyError, ValueError) as exc:
         if manual:
             plan["decision_reason"] = f"the retry state could not be read: {exc}"
@@ -2000,10 +2005,8 @@ def _surface_twice_failed(
     _summary(f"review-verdict #{number} {head}: {description}")
 
 
-def _state_after_base_change(
-    repo: str, number: int, base_changed_at: datetime | None, gated_base: str
-) -> retry.State | None:
-    state = github.latest_state(repo, number, gated_base)
+def _state_after_base_change(repo: str, number: int, base_changed_at: datetime | None, base: str) -> retry.State | None:
+    state = github.latest_state(repo, number, base)
     if state is None or not base_change.survives(state.updated_at, base_changed_at):
         return None
     return state
@@ -2046,7 +2049,7 @@ def _retry_reason(
     number = pull["number"]
     head = pull["head"]["sha"]
     base_changed_at = github.base_changed_at(repo, number)
-    state = _state_after_base_change(repo, number, base_changed_at, binding.gated_base)
+    state = _state_after_base_change(repo, number, base_changed_at, pull["base"]["ref"])
     relevant = tuple(run for run in runs or () if run.head in (None, head))
 
     def resolved() -> tuple[tuple[sweep.Run, ...], tuple[sweep.Run, ...]]:
@@ -2285,7 +2288,9 @@ def command_sweep(args: argparse.Namespace) -> int:
     full = runs is not None
     dispatched = 0
     errors: list[str] = []
-    for pull in github.get_paginated(f"repos/{repo}/pulls?state=open&base={policy.consumer.gated_base}&per_page=100"):
+    for pull in github.get_paginated(f"repos/{repo}/pulls?state=open&per_page=100"):
+        if not policy.consumer.is_gated(pull["base"]["ref"]):
+            continue
         if dispatched >= policy.retry.sweep_max_dispatches:
             break
         if (
@@ -2316,7 +2321,7 @@ def command_sweep(args: argparse.Namespace) -> int:
                 WORKFLOW_FILE,
                 number,
                 pull["head"]["sha"],
-                policy.consumer.gated_base,
+                pull["base"]["ref"],
                 sweep.STATELESS_RETRY_REASON if reason == STATELESS_FAILURE else None,
             )
         except (github.GitHubError, KeyError, TypeError, ValueError, OSError) as exc:

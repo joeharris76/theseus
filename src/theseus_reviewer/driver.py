@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 from . import capacity, cli, commands, github, isolation, omp_pin, providers
 from ._vendor import yaml
-from .policy import PolicyError, load_policy
+from .policy import Consumer, PolicyError, load_policy
 
 STATE_FILE = Path("state") / github.STATE_FILE
 SCAN_SECRETS = ("TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN")
@@ -80,7 +80,7 @@ class CredentialError(Exception):
 class GitHubSink:
     app_token: str
     job_token: str
-    gated_base: str
+    consumer: Consumer
     policy: Path
 
     def status(self, repo: str, head: str, payload: Path) -> None:
@@ -93,8 +93,9 @@ class GitHubSink:
         github.post_file(f"repos/{repo}/pulls/{pr}/reviews", payload, self.app_token)
 
     def dispatch_gate(self, repo: str, pr: int, head: str) -> None:
-        if github.pull_base_ref(repo, pr, self.app_token) == self.gated_base:
-            github.dispatch_gate(repo, pr, head, self.job_token, self.gated_base)
+        base = github.pull_base_ref(repo, pr, self.app_token)
+        if self.consumer.is_gated(base):
+            github.dispatch_gate(repo, pr, head, self.job_token, base)
 
     def gate(self, repo: str, pr: int, head: str) -> None:
         github.post_gate(repo, pr, head, self.app_token, self.policy)
@@ -167,10 +168,10 @@ class CiEnvironment:
         if missing:
             raise CredentialError(f"the App is configured but {', '.join(missing)} is empty")
         try:
-            gated_base = load_policy(self.policy).consumer.gated_base
+            consumer = load_policy(self.policy).consumer
         except (OSError, PolicyError) as exc:
             raise CredentialError(f"the review policy cannot be read: {exc}") from exc
-        return GitHubSink(self.app_token, self.job_token, gated_base, self.policy)
+        return GitHubSink(self.app_token, self.job_token, consumer, self.policy)
 
     def session(self) -> AbstractContextManager[None]:
         return nullcontext()

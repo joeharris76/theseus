@@ -123,7 +123,7 @@ def test_gate_reuses_the_checker_decision_and_helpers() -> None:
 def test_gate_config_carries_the_binding_and_matchers_of_the_policy() -> None:
     config = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
     assert config.binding == BINDING
-    assert config.consumer.gated_base == "develop"
+    assert config.consumer.gated_bases == ("develop",)
     assert config.policy_path == POLICY_REL
     assert config.matchers.is_soundness_path("benchbox/core/equivalence/checker.py")
     assert config.matchers.is_inert_path("docs/index.md")
@@ -133,7 +133,7 @@ def test_gate_config_follows_the_consumer_not_a_default(beta_root: Path) -> None
     config = gate.load_gate_config(POLICY_REL, beta_root)
     assert config.binding.bot_login == "beta-review"
     assert config.binding.attesters == frozenset({"beta-owner", "beta-deputy"})
-    assert config.binding.gated_base == "main"
+    assert config.consumer.gated_bases == ("main",)
 
 
 def test_gate_config_fails_when_the_policy_file_is_missing(tmp_path: Path) -> None:
