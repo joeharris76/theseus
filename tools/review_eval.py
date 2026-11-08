@@ -33,13 +33,50 @@ MAX_FINDINGS = 40
 TEXT_CAP = 1200
 DEFAULT_CASE_TIMEOUT = 5400
 POLICY_PATH = ".github/review.yml"
-CONFIG_FILES = (
-    "src/theseus_reviewer/render.py",
-    "src/theseus_reviewer/classify.py",
-    ".github/review.yml",
-    ".github/review-omp-config.yml",
-)
+CONFIG_FILES = (".github/review.yml", ".github/review-omp-config.yml")
+ENGINE_PREFIX = "src/theseus_reviewer/"
+ENGINE_EXCLUDED = {
+    "__init__.py": "package marker",
+    "__main__.py": "entry point",
+    "bootstrap.py": "installer; runs before any review",
+    "gate.py": "posts the gate status from an existing verdict",
+    "sweep.py": "dispatches retries; selects no reviewer and reads no diff",
+    "github.py": "GitHub API client",
+    "omp_pin.py": "installs and verifies the pinned omp binary; the pin itself lives in the policy",
+    "omp_watch.py": "watches for new omp releases",
+    "omp_bump.py": "omp pin bump tooling",
+    "omp_bump_gate.py": "omp pin bump gate",
+    "omp_candidate.py": "omp candidate canary tooling",
+    "candidate_canaries.py": "omp candidate canary tooling",
+    "candidate_chain.py": "omp candidate canary tooling",
+    "candidate_checks.py": "omp candidate canary tooling",
+    "candidate_env.py": "omp candidate canary tooling",
+    "candidate_stub.py": "omp candidate canary tooling",
+    "promotion.py": "consumer promotion of a Theseus release",
+    "promotion_check.py": "consumer promotion check",
+    "soundness_paths.py": "path manifest parser",
+    "inert_paths.py": "path manifest parser",
+    "matcher_cli.py": "path matcher command",
+    "matchers.py": "path matcher loading",
+    "isolation.py": "process isolation checks",
+    "processes.py": "process snapshots",
+    "disk_scan.py": "secret scan of the disk",
+    "redaction_check.py": "secret redaction",
+    "credentials.py": "secret recognition",
+    "selfexec.py": "re-execution helper",
+    "gateway_report.py": "gateway health report",
+    "preflight.py": "gateway preflight",
+    "reset.py": "retry backoff reset",
+    "legacy.py": "0.1.x name compatibility",
+    "main.py": "entry point",
+    "commands.py": "subprocess helpers",
+    "audit.py": "audit trail",
+    "edits.py": "detection of edited bot comments",
+    "review_check.py": "gate decision from posted statuses",
+    "absence.py": "classification of absent attempts for retry",
+}
 CONFIG_PREFIXES = ("src/theseus_reviewer/templates/",)
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 GUIDANCE_GLOB = re.compile(r"\.github/review-guidance[^/]*")
 GUIDANCE_KEY = re.compile(r"^\s*review_guidance:\s*[\"']?([^\s\"'#]+)", re.MULTILINE)
 PATH_VALUE = re.compile(r"^\s+[a-z_]+:\s*[\"']?([A-Za-z0-9_./-]+\.(?:txt|yml|yaml|md))[\"']?\s*$", re.MULTILINE)
@@ -330,7 +367,14 @@ def guidance_paths(tree: Tree) -> set[str]:
 
 
 def is_reviewer_config(path: str, guidance: set[str]) -> bool:
-    return path in CONFIG_FILES or path.startswith(CONFIG_PREFIXES) or path in guidance
+    if path in CONFIG_FILES or path in guidance:
+        return True
+    if not path.startswith(ENGINE_PREFIX) or path.startswith(f"{ENGINE_PREFIX}_vendor/"):
+        return False
+    if path.startswith(CONFIG_PREFIXES):
+        return True
+    relative = path.removeprefix(ENGINE_PREFIX)
+    return relative.endswith(".py") and "/" not in relative and relative not in ENGINE_EXCLUDED
 
 
 def config_entries(tree: Tree) -> dict[str, bytes]:
@@ -541,7 +585,7 @@ def rescored(result: Mapping[str, Any], cases: Mapping[str, Case]) -> dict[str, 
     return aggregate(scores)
 
 
-def usable_result(result: Any, where: str) -> list[str]:
+def usable_result(result: Any, where: str, today: str | None = None) -> list[str]:
     problems = []
     if not isinstance(result, dict) or result.get("schema") != SCHEMA:
         return [f"{where}: not a schema {SCHEMA} result"]
@@ -551,6 +595,14 @@ def usable_result(result: Any, where: str) -> list[str]:
         problems.append(f"{where}: the run is incomplete; every case must have been reviewed")
     if result.get("dirty") is not False:
         problems.append(f"{where}: the run was made on uncommitted reviewer configuration")
+    date, sha = result.get("date"), result.get("git_sha")
+    if not isinstance(date, str) or not DATE.fullmatch(date) or not isinstance(sha, str) or not sha:
+        problems.append(f"{where}: the result carries no valid date and commit")
+    else:
+        if Path(where).name != f"{date}-{sha[:12]}.json":
+            problems.append(f"{where}: the file name must be {date}-{sha[:12]}.json")
+        if date > (today or datetime.now(UTC).strftime("%Y-%m-%d")):
+            problems.append(f"{where}: the result is dated in the future")
     return problems
 
 
@@ -566,9 +618,11 @@ def read_results(tree: Tree) -> dict[str, Any]:
     return results
 
 
-def latest_baseline(results: Mapping[str, Any]) -> tuple[str, Any] | None:
-    usable = [(path, data) for path, data in sorted(results.items()) if not usable_result(data, path)]
-    return usable[-1] if usable else None
+def latest_baseline(results: Mapping[str, Any], today: str | None = None) -> tuple[str, Any] | None:
+    day = today or datetime.now(UTC).strftime("%Y-%m-%d")
+    usable = [(path, data) for path, data in results.items() if not usable_result(data, path, day)]
+    usable.sort(key=lambda item: (item[1]["date"], item[0]), reverse=True)
+    return usable[0] if usable else None
 
 
 @dataclass(frozen=True)
@@ -577,18 +631,25 @@ class Verdict:
     lines: tuple[str, ...]
 
 
-def check_change(root: Path, base: str, head: str) -> Verdict:
+def check_change(root: Path, base: str, head: str, today: str | None = None) -> Verdict:
     base_tree, head_tree = committed_tree(root, base), committed_tree(root, head)
     base_guidance, head_guidance = guidance_paths(base_tree), guidance_paths(head_tree)
     changed = [
         path
         for path in git(root, "diff", "--name-only", "-z", base, head).decode("utf-8").split("\0")
-        if path and (is_reviewer_config(path, base_guidance) or is_reviewer_config(path, head_guidance))
+        if path
+        and (
+            is_reviewer_config(path, base_guidance)
+            or is_reviewer_config(path, head_guidance)
+            or path.startswith(f"{RESULTS_DIR}/")
+        )
     ]
     if not changed:
-        return Verdict(True, ("no template, policy or guidance change; nothing to score",))
-    listing = [f"reviewer configuration changed: {', '.join(changed)}"]
-    baseline = latest_baseline(read_results(base_tree))
+        return Verdict(True, ("no reviewer configuration or recorded result change; nothing to score",))
+    listing = [f"reviewer configuration or recorded results changed: {', '.join(changed)}"]
+    day = today or datetime.now(UTC).strftime("%Y-%m-%d")
+    base_results = read_results(base_tree)
+    baseline = latest_baseline(base_results, day)
     if baseline is None:
         return Verdict(
             True,
@@ -596,18 +657,31 @@ def check_change(root: Path, base: str, head: str) -> Verdict:
         )
     baseline_path, baseline_result = baseline
     cases = load_cases_from_tree(base_tree)
+    rewritten = [path for path in changed if path in base_results]
+    if rewritten:
+        return Verdict(
+            False,
+            (
+                *listing,
+                f"recorded results are append-only: {', '.join(rewritten)} changed or was removed; "
+                "an owner-reviewed baseline pull request is needed",
+            ),
+        )
     attached = [
         (path, data)
         for path, data in sorted(read_results(head_tree).items())
-        if path not in read_results(base_tree) and not usable_result(data, path)
+        if path not in base_results and not usable_result(data, path, day)
     ]
     digest = tree_digest(config_entries(head_tree))
     corpus = tree_digest(corpus_entries(head_tree))
-    matching = [
-        (path, data)
-        for path, data in attached
-        if data.get("config_digest") == digest and data.get("corpus_digest") == corpus
-    ]
+    matching = sorted(
+        (
+            (path, data)
+            for path, data in attached
+            if data.get("config_digest") == digest and data.get("corpus_digest") == corpus
+        ),
+        key=lambda item: (item[1]["date"], item[0]),
+    )
     if not matching:
         return Verdict(
             False,
@@ -615,7 +689,8 @@ def check_change(root: Path, base: str, head: str) -> Verdict:
                 *listing,
                 f"attach a live eval run for this exact configuration under {RESULTS_DIR}/ "
                 f"(config digest {digest[:12]}, corpus digest {corpus[:12]}): "
-                "python tools/review_eval.py run --mode live",
+                "python tools/review_eval.py run --mode live; a change that only adds or alters recorded results "
+                "needs an owner-reviewed baseline pull request carrying the same evidence",
                 *(f"ignored {path}: it describes a different configuration or corpus" for path, _ in attached),
             ),
         )

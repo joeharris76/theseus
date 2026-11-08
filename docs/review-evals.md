@@ -74,20 +74,23 @@ A result is `evals/results/<date>-<sha>.json`: the observations, per-case and ag
 
 A pull request that changes any of
 
-- `src/theseus_reviewer/templates/`, `render.py` or `classify.py`;
+- any module under `src/theseus_reviewer/` (the templates, `render.py`, `classify.py`, `protocol.py`, `cli.py` and every other module that can shape what a reviewer is asked or how its answer is judged), except the plumbing listed below;
 - `.github/review.yml` (policy, models, omp pin) or `.github/review-omp-config.yml`;
-- the consumer guidance file the policy names (`consumer.review_guidance`) or any `.github/review-guidance*`,
+- the consumer guidance file the policy names (`consumer.review_guidance`) or any `.github/review-guidance*`;
+- anything under `evals/results/`,
 
 must attach a live eval run for exactly the configuration it proposes, and that run must not score lower than the newest recorded baseline.
 
 CI enforces it in the `review eval corpus and score rule` job. On a pull request it runs the base branch's copy of `tools/review_eval.py` (so the change cannot loosen its own check) and `check-change`:
 
-1. No file above changed: pass.
+1. No file above changed: pass. Anything under `_vendor/` is not counted.
 2. No usable live baseline under `evals/results/` on the base: pass, and the rule is inactive until one is recorded.
-3. Otherwise the pull request must add a result file that is `live`, complete (every case reviewed), made on a clean tree, and whose `config_digest` and `corpus_digest` equal those of the pull request's committed files. A run for any other state of the files is ignored.
-4. The baseline and the attached run are both rescored over the base's cases with the base's expectations. The aggregate of the attached run must be at least the baseline's.
+3. Otherwise the pull request must add a result file that is `live`, named `<date>-<first 12 characters of git_sha>.json` after its own contents, not dated in the future, complete (every case reviewed), made on a clean tree, and whose `config_digest` and `corpus_digest` equal those of the pull request's committed files. A run for any other state of the files is ignored. A pull request that edits or removes an existing result fails, and one that only adds results needs the same evidence; both need an owner-reviewed baseline pull request.
+4. The baseline and the attached run are both rescored over the base's cases with the base's expectations. The baseline is the usable result with the newest `date` (not later than today), never chosen by file name. The aggregate of the attached run must be at least the baseline's.
 
 To attach a run: commit the change, run `python3 tools/review_eval.py run --mode live` (use `--repeat 3` for noisy changes), add the written `evals/results/*.json` in a further commit, and push. Editing a template, the policy, guidance or the corpus after the run changes the digest and the run must be repeated; rebasing onto a main that changed one of those files does too.
+
+Engine modules excluded because they cannot change what a reviewer is asked or how its output is judged (`ENGINE_EXCLUDED` in the tool, each with its reason): `__init__`, `__main__`, `main` (entry points); `bootstrap` (installer); `gate`, `review_check` (gate status from an existing verdict); `sweep` (retry dispatch); `github` (API client); `omp_pin`, `omp_watch`, `omp_bump`, `omp_bump_gate`, `omp_candidate` and the `candidate_*` modules (omp pin tooling; the pin itself is in the policy and does trigger); `promotion`, `promotion_check`; `soundness_paths`, `inert_paths`, `matcher_cli`, `matchers` (path manifests); `isolation`, `processes`, `disk_scan`, `redaction_check`, `credentials`, `selfexec` (sandboxing and secret handling); `gateway_report`, `preflight` (gateway health); `reset`, `absence` (retry state); `legacy` (0.1.x names); `commands` (subprocess helpers); `audit`, `edits` (audit trail and edited-comment detection). A new module triggers the rule until it is added to that list in a reviewed change.
 
 What the rule does not do: the check cannot tell a real run from a fabricated file. The result carries the full observations so the owner can read what the reviewer said, and `tools/` and `evals/` are gate paths and soundness paths, so the full diff gets the gate template and the owner's review. The rule stops accidents and drift, and gives the owner a score to read.
 

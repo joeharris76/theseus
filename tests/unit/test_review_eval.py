@@ -243,10 +243,13 @@ def _result(repository: Path, variant: str, *, mode: str = "live", dirty: bool =
     return TOOL.build_result(CASES, runs, mode=mode, meta=_meta(repository, dirty=dirty))
 
 
-def _attach(repository: Path, name: str, result: dict[str, Any]) -> None:
+def _attach(repository: Path, label: str, result: dict[str, Any], *, named: str = "") -> str:
+    result["git_sha"] = (label.encode().hex() + "0" * 12)[:40]
+    name = named or f"{result['date']}-{result['git_sha'][:12]}.json"
     target = repository / TOOL.RESULTS_DIR / name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result), encoding="utf-8")
+    return name
 
 
 @pytest.fixture
@@ -259,7 +262,7 @@ def repository(tmp_path: Path) -> Path:
         ".github/review.yml": POLICY,
         ".github/review-guidance.md": "Look for broken invariants.\n",
         TEMPLATE: "template one\n",
-        "src/theseus_reviewer/other.py": "x = 1\n",
+        "src/theseus_reviewer/gate.py": "x = 1\n",
     }.items():
         (root / relative).parent.mkdir(parents=True, exist_ok=True)
         (root / relative).write_text(text, encoding="utf-8")
@@ -274,12 +277,12 @@ def _change(repository: Path, relative: str, text: str) -> str:
 
 
 def _check(repository: Path, base: str) -> Any:
-    return TOOL.check_change(repository, base, "HEAD")
+    return TOOL.check_change(repository, base, "HEAD", "2026-12-01")
 
 
 def test_a_diff_without_reviewer_configuration_needs_no_score(repository: Path) -> None:
     base = _git(repository, "rev-parse", "HEAD")
-    _change(repository, "src/theseus_reviewer/other.py", "x = 2\n")
+    _change(repository, "src/theseus_reviewer/gate.py", "x = 2\n")
 
     verdict = _check(repository, base)
 
@@ -299,7 +302,9 @@ def test_the_rule_is_inactive_while_no_live_baseline_is_recorded(repository: Pat
 
 
 def _with_baseline(repository: Path) -> str:
-    _attach(repository, "2026-11-01-base.json", _result(repository, "good"))
+    baseline = _result(repository, "good")
+    baseline["date"] = "2026-11-01"
+    _attach(repository, "baseline", baseline)
     return _commit(repository, "baseline")
 
 
@@ -316,7 +321,7 @@ def test_a_template_policy_or_guidance_change_must_attach_a_run(repository: Path
 def test_an_attached_run_that_does_not_lower_the_score_passes(repository: Path) -> None:
     base = _with_baseline(repository)
     _change(repository, TEMPLATE, "template two\n")
-    _attach(repository, "2026-11-08-head.json", _result(repository, "good"))
+    _attach(repository, "head", _result(repository, "good"))
     _commit(repository, "attach")
 
     verdict = _check(repository, base)
@@ -327,7 +332,7 @@ def test_an_attached_run_that_does_not_lower_the_score_passes(repository: Path) 
 def test_an_attached_run_that_lowers_the_score_fails(repository: Path) -> None:
     base = _with_baseline(repository)
     _change(repository, TEMPLATE, "template two\n")
-    _attach(repository, "2026-11-08-head.json", _result(repository, "regressed"))
+    _attach(repository, "head", _result(repository, "regressed"))
     _commit(repository, "attach")
 
     verdict = _check(repository, base)
@@ -342,7 +347,7 @@ def test_a_stored_score_cannot_hide_a_lower_run(repository: Path) -> None:
     forged["aggregate"]["score"] = 1.0
     for entry in forged["cases"].values():
         entry["score"]["score"] = 1.0
-    _attach(repository, "2026-11-08-head.json", forged)
+    _attach(repository, "head", forged)
     _commit(repository, "attach")
 
     assert not _check(repository, base).ok
@@ -353,9 +358,9 @@ def test_a_run_for_other_configuration_or_of_another_kind_is_not_accepted(reposi
     _change(repository, TEMPLATE, "template two\n")
     stale = _result(repository, "good")
     stale["config_digest"] = "0" * 64
-    _attach(repository, "2026-11-08-a-stale.json", stale)
-    _attach(repository, "2026-11-08-b-fake.json", _result(repository, "good", mode="fake"))
-    _attach(repository, "2026-11-08-c-dirty.json", _result(repository, "good", dirty=True))
+    _attach(repository, "stale", stale)
+    _attach(repository, "fake", _result(repository, "good", mode="fake"))
+    _attach(repository, "dirty", _result(repository, "good", dirty=True))
     _commit(repository, "attach")
 
     verdict = _check(repository, base)
@@ -368,7 +373,7 @@ def test_an_incomplete_run_is_not_accepted(repository: Path) -> None:
     _change(repository, TEMPLATE, "template two\n")
     runs = {case_id: [TOOL.unreviewed(TOOL.UNAVAILABLE, "down")] for case_id in CASES}
     incomplete = TOOL.build_result(CASES, runs, mode="live", meta=_meta(repository))
-    _attach(repository, "2026-11-08-head.json", incomplete)
+    _attach(repository, "head", incomplete)
     _commit(repository, "attach")
 
     assert not _check(repository, base).ok
@@ -383,7 +388,7 @@ def test_the_baseline_is_scored_with_the_base_expectations(repository: Path) -> 
     expected.write_text(json.dumps(data), encoding="utf-8")
     (repository / TEMPLATE).write_text("template two\n", encoding="utf-8")
     _commit(repository, "loosen the control and change the template")
-    _attach(repository, "2026-11-08-head.json", _result(repository, "regressed"))
+    _attach(repository, "head", _result(repository, "regressed"))
     _commit(repository, "attach")
 
     assert not _check(repository, base).ok
@@ -457,3 +462,104 @@ def test_the_outcome_a_review_cached_becomes_an_observation(tmp_path: Path) -> N
     assert observation["decision"] == "SHIP_WITH_FIXES"
     assert observation["findings"] == [{"severity": "Medium", "file": "a.py", "line": 3, "title": "t", "detail": "d"}]
     assert TOOL.parse_outcome(tmp_path / "missing") is None
+
+
+@pytest.mark.parametrize(
+    ("relative", "triggers"),
+    [
+        ("src/theseus_reviewer/templates/deep.md", True),
+        ("src/theseus_reviewer/protocol.py", True),
+        ("src/theseus_reviewer/cli.py", True),
+        ("src/theseus_reviewer/new_module.py", True),
+        ("src/theseus_reviewer/gate.py", False),
+        ("src/theseus_reviewer/bootstrap.py", False),
+        ("src/theseus_reviewer/sweep.py", False),
+        ("src/theseus_reviewer/github.py", False),
+        ("src/theseus_reviewer/_vendor/yaml/__init__.py", False),
+        ("tests/unit/test_gate.py", False),
+        (".github/review-omp-config.yml", True),
+    ],
+)
+def test_the_engine_triggers_the_rule_except_for_the_listed_plumbing(relative: str, triggers: bool) -> None:
+    assert TOOL.is_reviewer_config(relative, set()) is triggers
+
+
+def test_every_excluded_engine_file_exists_and_is_justified() -> None:
+    for name, reason in TOOL.ENGINE_EXCLUDED.items():
+        assert (ROOT / TOOL.ENGINE_PREFIX / name).is_file(), name
+        assert reason
+
+
+def test_the_baseline_is_the_newest_by_date_not_by_path() -> None:
+    def usable(date: str, sha: str) -> dict[str, Any]:
+        return {"schema": 1, "mode": "live", "complete": True, "dirty": False, "date": date, "git_sha": sha}
+
+    results = {
+        "evals/results/2026-11-01-aaaaaaaaaaaa.json": usable("2026-11-01", "a" * 12),
+        "evals/results/2026-11-05-bbbbbbbbbbbb.json": usable("2026-11-05", "b" * 12),
+        "evals/results/2026-11-03-zzzzzzzzzzzz.json": usable("2026-11-03", "z" * 12),
+    }
+
+    path, _ = TOOL.latest_baseline(results, "2026-12-01")
+
+    assert path.endswith("2026-11-05-bbbbbbbbbbbb.json")
+
+
+def test_a_result_with_the_wrong_name_or_a_future_date_is_never_a_baseline() -> None:
+    good = {"schema": 1, "mode": "live", "complete": True, "dirty": False, "date": "2026-11-05", "git_sha": "b" * 40}
+
+    assert TOOL.usable_result(good, "evals/results/2026-11-05-bbbbbbbbbbbb.json", "2026-12-01") == []
+    assert TOOL.usable_result(good, "evals/results/2026-11-05-other.json", "2026-12-01")
+    assert TOOL.usable_result(good, "evals/results/2026-11-05-bbbbbbbbbbbb.json", "2026-11-04")
+    assert TOOL.usable_result({**good, "date": "soon"}, "evals/results/soon-bbbbbbbbbbbb.json", "2026-12-01")
+    assert TOOL.latest_baseline({"evals/results/2026-11-05-other.json": good}, "2026-12-01") is None
+
+
+def test_a_misnamed_future_dated_result_cannot_steer_the_baseline(repository: Path) -> None:
+    base = _with_baseline(repository)
+    steering = _result(repository, "regressed")
+    steering["date"] = "2099-01-01"
+    _git(repository, "switch", "--quiet", "-c", "change")
+    _attach(repository, "steer", steering)
+    _attach(repository, "steer2", _result(repository, "regressed"), named="2026-11-30-chosen-name.json")
+    _commit(repository, "add results")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "attach a live eval run" in " ".join(verdict.lines)
+
+
+def test_a_results_only_change_needs_the_same_evidence_or_an_owner_reviewed_baseline(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _git(repository, "switch", "--quiet", "-c", "change")
+    stale = _result(repository, "good")
+    stale["config_digest"] = "0" * 64
+    _attach(repository, "stale", stale)
+    _commit(repository, "add a result")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "owner-reviewed baseline pull request" in " ".join(verdict.lines)
+
+
+def test_a_results_only_change_with_matching_evidence_and_no_lower_score_passes(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _git(repository, "switch", "--quiet", "-c", "change")
+    _attach(repository, "next", _result(repository, "good"))
+    _commit(repository, "add a result")
+
+    assert _check(repository, base).ok
+
+
+def test_a_recorded_result_cannot_be_edited_or_removed(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _git(repository, "switch", "--quiet", "-c", "change")
+    recorded = next((repository / TOOL.RESULTS_DIR).glob("*.json"))
+    recorded.write_text(
+        recorded.read_text(encoding="utf-8").replace('"complete": true', '"complete": true '), encoding="utf-8"
+    )
+    _commit(repository, "edit a result")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "append-only" in " ".join(verdict.lines)
