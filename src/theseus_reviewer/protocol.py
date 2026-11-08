@@ -834,13 +834,21 @@ class AdvisoryScope:
     advisory: bool
     changed: frozenset[str] = frozenset()
 
+    def _known(self, name: str) -> list[str]:
+        folded = _clean_path(name).casefold()
+        every = (*self.new_files, *self.changed, *self.added)
+        return [path for path in dict.fromkeys(every) if _clean_path(path).casefold() == folded]
+
     def verified(self, finding: Finding) -> bool:
-        if finding.origin != PRE_EXISTING or finding.file in self.new_files or names_other_location(finding):
-            return False
-        if finding.file in self.changed and finding.file not in self.added:
+        if finding.origin != PRE_EXISTING or names_other_location(finding):
             return False
         end = finding.end_line or finding.line
-        return not any(start <= end and finding.line <= last for start, last in self.added.get(finding.file, ()))
+        for path in self._known(finding.file) or [finding.file]:
+            if path in self.new_files or (path in self.changed and path not in self.added):
+                return False
+            if any(start <= end and finding.line <= last for start, last in self.added.get(path, ())):
+                return False
+        return True
 
     def demotes(self, finding: Finding) -> bool:
         return self.advisory and finding.severity in ADVISORY_SEVERITIES and self.verified(finding)

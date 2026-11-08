@@ -474,3 +474,17 @@ def test_a_mapped_changed_file_and_an_untouched_file_still_demote(policy: Policy
     plan = _scope_plan(policy, diff, [CHECKER])
     assert _judged(plan, _old("Medium", 2)).decision == protocol.SHIP
     assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP
+
+
+def test_another_spelling_of_a_changed_path_gets_the_same_checks(policy: Policy) -> None:
+    import unicodedata
+
+    plan = _plan_with(policy, added_lines={CHECKER: [[1, 5]], "docs/naïve.py": [[1, 5]]}, changed_paths=[CHECKER])
+    plan["changed_paths"] = [CHECKER, "docs/naïve.py"]
+    shouted = _old_in(CHECKER.upper())
+    decomposed = _old_in(unicodedata.normalize("NFD", "docs/naïve.py"))
+    assert _judged(plan, shouted).decision == protocol.SHIP_WITH_FIXES
+    assert _judged(plan, decomposed).decision == protocol.SHIP_WITH_FIXES
+    unmapped = {**plan, "added_lines": {}}
+    assert _judged(unmapped, _old_in(CHECKER.title())).decision == protocol.SHIP_WITH_FIXES
+    assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP
