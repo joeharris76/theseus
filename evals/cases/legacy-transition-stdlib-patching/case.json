@@ -1,0 +1,61 @@
+{
+  "id": "legacy-transition-stdlib-patching",
+  "incident": "Theseus tests/unit/reviewer/test_legacy_transition.py and test_github.py before fddee19: tests faked posting and downloads by patching the standard library (subprocess.run and Popen through a module attribute) instead of a seam the code owns.",
+  "message": "Test the state artifact download",
+  "expected": {
+    "decisions": [
+      "SHIP_WITH_FIXES",
+      "DO_NOT_SHIP"
+    ],
+    "findings": [
+      {
+        "id": "tests-patch-subprocess-instead-of-an-owned-seam",
+        "path": "tests/unit/reviewer/test_github.py",
+        "terms": [
+          [
+            "subprocess",
+            "standard library",
+            "stdlib"
+          ],
+          [
+            "patch",
+            "monkeypatch",
+            "fake",
+            "mock",
+            "seam"
+          ]
+        ]
+      }
+    ],
+    "acceptable": []
+  },
+  "fake": {
+    "good": [
+      {
+        "decision": "SHIP_WITH_FIXES",
+        "summary": "One test-quality defect.",
+        "files_examined": [
+          "tests/unit/reviewer/test_github.py"
+        ],
+        "defects": [
+          {
+            "severity": "Medium",
+            "file": "tests/unit/reviewer/test_github.py",
+            "line": 36,
+            "title": "Tests patch subprocess.run through the github module instead of an owned seam",
+            "detail": "monkeypatch.setattr(github.subprocess, 'run', ...) replaces the standard library's process runner process-wide and ties the test to how download_state shells out. Move the gh call behind a function github owns and patch that."
+          }
+        ]
+      }
+    ],
+    "regressed": [
+      {
+        "decision": "SHIP",
+        "summary": "No defects.",
+        "files_examined": [
+          "tests/unit/reviewer/test_github.py"
+        ]
+      }
+    ]
+  }
+}
