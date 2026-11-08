@@ -1,0 +1,81 @@
+{
+  "id": "pr41-forced-fixed-dispute",
+  "incident": "Theseus #41 (BenchBox #3950, D1): on a forced dispute re-review of an unchanged patch judge() rewrote a fixed disposition to not_fixed while the published rationale still said the fix works, so the label read maintained against its own evidence and counted toward escalation.",
+  "message": "Keep a disputed finding open on a forced re-review of an unchanged patch",
+  "expected": {
+    "decisions": [
+      "SHIP_WITH_FIXES",
+      "DO_NOT_SHIP"
+    ],
+    "findings": [
+      {
+        "id": "forced-dispute-flips-fixed-against-its-evidence",
+        "path": "src/theseus_reviewer/protocol.py",
+        "terms": [
+          [
+            "fixed"
+          ],
+          [
+            "not_fixed",
+            "maintained",
+            "contradict",
+            "evidence",
+            "rationale",
+            "rewrit",
+            "flip",
+            "overrid",
+            "escalat"
+          ]
+        ]
+      }
+    ],
+    "acceptable": [
+      {
+        "path": "tests/unit/reviewer/test_protocol.py",
+        "terms": [
+          [
+            "fixed"
+          ],
+          [
+            "maintained",
+            "evidence",
+            "contradict",
+            "pins",
+            "asserts"
+          ]
+        ]
+      }
+    ]
+  },
+  "fake": {
+    "good": [
+      {
+        "decision": "SHIP_WITH_FIXES",
+        "summary": "One defect.",
+        "files_examined": [
+          "src/theseus_reviewer/protocol.py",
+          "tests/unit/reviewer/test_protocol.py"
+        ],
+        "defects": [
+          {
+            "severity": "High",
+            "file": "src/theseus_reviewer/protocol.py",
+            "line": 41,
+            "title": "A forced dispute round rewrites fixed to not_fixed while the evidence still says it is fixed",
+            "detail": "judge() flips a fixed disposition on a disputed finding to not_fixed in a forced round, so the published label is maintained against the reviewer's own evidence and the finding counts toward escalation. The verdict should be invalid, or the finding withdrawn."
+          }
+        ]
+      }
+    ],
+    "regressed": [
+      {
+        "decision": "SHIP",
+        "summary": "No defects.",
+        "files_examined": [
+          "src/theseus_reviewer/protocol.py",
+          "tests/unit/reviewer/test_protocol.py"
+        ]
+      }
+    ]
+  }
+}

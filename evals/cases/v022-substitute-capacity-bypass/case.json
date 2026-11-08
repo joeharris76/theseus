@@ -1,0 +1,62 @@
+{
+  "id": "v022-substitute-capacity-bypass",
+  "incident": "Theseus v0.2.2 (#35, found in review of BenchBox #3978, fixed in #37): a substitute model skipped the slot's own capacity check, so a load above the primary's window ran in the smaller slot.",
+  "message": "Substitute a served candidate when the primary is not served",
+  "expected": {
+    "decisions": [
+      "SHIP_WITH_FIXES",
+      "DO_NOT_SHIP"
+    ],
+    "findings": [
+      {
+        "id": "substitute-skips-slot-capacity",
+        "path": "src/theseus_reviewer/selection.py",
+        "terms": [
+          [
+            "substitut"
+          ],
+          [
+            "capacity",
+            "window",
+            "load",
+            "limit",
+            "oversize",
+            "too large"
+          ]
+        ]
+      }
+    ],
+    "acceptable": []
+  },
+  "fake": {
+    "good": [
+      {
+        "decision": "SHIP_WITH_FIXES",
+        "summary": "One defect.",
+        "files_examined": [
+          "src/theseus_reviewer/selection.py",
+          "tests/unit/reviewer/test_selection.py"
+        ],
+        "defects": [
+          {
+            "severity": "High",
+            "file": "src/theseus_reviewer/selection.py",
+            "line": 41,
+            "title": "A substituted reviewer skips the slot's own capacity check",
+            "detail": "When providers.resolve returns a substitute, the load check against the slot capacity is skipped, so a load above the primary's capacity runs in the smaller slot instead of escalating."
+          }
+        ]
+      }
+    ],
+    "regressed": [
+      {
+        "decision": "SHIP",
+        "summary": "No defects.",
+        "files_examined": [
+          "src/theseus_reviewer/selection.py",
+          "tests/unit/reviewer/test_selection.py"
+        ]
+      }
+    ]
+  }
+}
