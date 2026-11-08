@@ -249,3 +249,22 @@ def hunk_index(diff_text: str) -> dict[str, list[Hunk]]:
             Hunk(start + 1, position, int(match.group("start")), new_count, additive and new_count > 0, size)
         )
     return index
+
+
+def deleting_files(diff_text: str) -> frozenset[str]:
+    """Files with at least one hunk that deletes a line."""
+    found: set[str] = set()
+    path: str | None = None
+    remaining = 0
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            path, remaining = None, 0
+        elif remaining == 0 and line.startswith("+++ "):
+            path = _target_path(line)
+        elif (match := _HUNK.match(line)) is not None:
+            remaining = int(match.group("count") or "1")
+        elif line.startswith("+") or line.startswith(" "):
+            remaining -= 1
+        elif line.startswith("-") and path is not None:
+            found.add(path)
+    return frozenset(found)

@@ -812,7 +812,19 @@ ADVISORY_SEVERITIES = ("Medium", "Low")
 FORCED_FIXED_MARK = "is marked fixed on a dispute re-review of an unchanged patch"
 
 
-_NAMES_LOCATION = re.compile(r"[\w./-]+:\d+|\blines?\s+\d+", re.IGNORECASE)
+_LOCATION_MARKS = re.compile(
+    r"#L\d+|\bL\d+\b|:\s*L?\d+|\blines?\s*\d+|\(\s*\d+\s*\)",
+    re.IGNORECASE,
+)
+_FILE_TOKEN = re.compile(r"[\w./-]+\.\w{1,8}")
+
+
+def names_other_location(finding: Finding) -> bool:
+    text = f"{finding.title}\n{finding.detail}"
+    if _LOCATION_MARKS.search(text):
+        return True
+    own = {finding.file, finding.file.rsplit("/", 1)[-1]}
+    return any(token.strip(".") not in own for token in _FILE_TOKEN.findall(text))
 
 
 @dataclass(frozen=True)
@@ -822,7 +834,7 @@ class AdvisoryScope:
     advisory: bool
 
     def verified(self, finding: Finding) -> bool:
-        if finding.origin != PRE_EXISTING or finding.file in self.new_files or _NAMES_LOCATION.search(finding.detail):
+        if finding.origin != PRE_EXISTING or finding.file in self.new_files or names_other_location(finding):
             return False
         end = finding.end_line or finding.line
         return not any(start <= end and finding.line <= last for start, last in self.added.get(finding.file, ()))

@@ -65,6 +65,7 @@ from .diff import (
     binary_notice_count,
     changed_lines,
     commentable_lines,
+    deleting_files,
     hunk_index,
     select_files,
 )
@@ -1171,10 +1172,13 @@ def _threaded_findings(threads: Sequence[Mapping[str, Any]], bot_login: str) -> 
 def _added_ranges(diff_text: str | None) -> dict[str, list[list[int]]] | None:
     if diff_text is None:
         return None
-    return {
+    ranges = {
         path: [[start, end] for start, end in coverage.merge(numbers)]
         for path, numbers in changed_lines(diff_text).items()
     }
+    for path in deleting_files(diff_text):
+        ranges[path] = [[1, 10_000_000]]
+    return ranges
 
 
 def _stage_since_review(plan: dict[str, Any], out_dir: Path, step: protocol.Round, inputs: RoundInputs) -> None:

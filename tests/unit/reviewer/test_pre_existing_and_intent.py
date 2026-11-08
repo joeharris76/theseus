@@ -399,3 +399,43 @@ def test_the_origin_rule_in_every_template_covers_deleted_and_grouped_defects() 
     for name in TEMPLATES:
         text = (TEMPLATE_DIR / f"{name}.md").read_text(encoding="utf-8")
         assert "including by deleting or moving code, is introduced" in text and "spans several" in text
+
+
+@pytest.mark.parametrize(
+    ("title", "detail"),
+    [
+        ("Old issue", "Same pattern at line 11."),
+        ("Old issue", "see lines 11-12"),
+        ("Old issue", "see the code at checker.py:11"),
+        ("Old issue", "see other.py:3"),
+        ("Old issue", "see foo: 11"),
+        ("Old issue", "permalink checker.py#L11"),
+        ("Old issue", "also at L11"),
+        ("Old issue", "also at call site (11)"),
+        ("Old issue at other.py", "plain detail"),
+        ("Old issue at line 11", "plain detail"),
+        ("Old issue (11)", "plain detail"),
+        ("Old issue", "mirrors util/helpers.py"),
+    ],
+)
+def test_any_other_location_in_the_title_or_detail_blocks_demotion(policy: Policy, title: str, detail: str) -> None:
+    finding = {**_old("Medium", 2), "title": title, "detail": detail}
+    assert _judged(_plan_with(policy), finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_naming_its_own_path_does_not_block_demotion(policy: Policy) -> None:
+    finding = {**_old("Medium", 2), "detail": "benchbox/core/equivalence/checker.py never validates it"}
+    assert _judged(_plan_with(policy), finding).decision == protocol.SHIP
+
+
+def test_a_file_with_any_deleting_hunk_never_demotes_and_other_files_still_do() -> None:
+    from theseus_reviewer.diff import deleting_files
+
+    diff = (
+        "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,1 @@\n a\n-gone\n"
+        "@@ -90,1 +89,2 @@\n x\n+y\n"
+        "diff --git a/g b/g\n--- a/g\n+++ b/g\n@@ -1,1 +1,2 @@\n a\n+b\n"
+    )
+    assert deleting_files(diff) == {"f"}
+    ranges = cli._added_ranges(diff)
+    assert ranges["f"] == [[1, 10_000_000]] and ranges["g"] == [[2, 2]]
