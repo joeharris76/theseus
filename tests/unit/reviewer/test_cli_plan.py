@@ -12,11 +12,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from theseus_reviewer import capacity, cli, coverage, gitdiff, github, protocol, render, sweep
+from theseus_reviewer import cli, coverage, gitdiff, github, protocol, render, sweep
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint
-from theseus_reviewer.policy import BRIEF_MAX_BYTES
+from theseus_reviewer.policy import BRIEF_MAX_BYTES, INLINE_BRIEF_MAX_BYTES
 from theseus_reviewer.render import dispute_listing
 from theseus_reviewer.retry import State
 from theseus_reviewer.selection import PoolBlock
@@ -2111,14 +2111,23 @@ def _added_lines_diff(total_bytes: int) -> str:
     )
 
 
-def test_a_brief_past_the_old_argument_limit_is_planned_inline_from_its_rendered_size(
+def test_a_brief_that_renders_between_the_inline_and_the_overall_limit_is_planned_as_a_file_list(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     diff = _added_lines_diff(250_000)
+    assert INLINE_BRIEF_MAX_BYTES < len(diff.encode("utf-8")) < BRIEF_MAX_BYTES
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
+
+
+def test_a_brief_that_renders_within_the_inline_limit_is_planned_inline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(INLINE_BRIEF_MAX_BYTES - 40_000)
     _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
     assert values["decision"] == "review"
     assert plan["brief_mode"] == "inline" and plan["diff_inline"] == diff
-    assert plan[capacity.LOAD_KEY] >= capacity.review_load(0, len(diff), "inline")
 
 
 def test_a_diff_that_fits_only_without_the_template_is_planned_as_a_file_list(

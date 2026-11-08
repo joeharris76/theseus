@@ -59,7 +59,7 @@ instruction prose of the template itself.
 | `change_data` | prose+diff | 400000 | file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
 | `response_template` | JSON | 16384 | JSON template to populate, rendered after `change_data`; see below |
 
-Rendered briefs must fit the fixed 400000-byte brief bound.
+Rendered briefs must fit the fixed 400000-byte brief bound; an inline brief must fit 100000 bytes.
 `change_data` dominates the budget; when the inline diff does not fit, the
 renderer falls back to file-list mode and the reviewer reads from the working
 directory. Placeholders use Python `str.format` braces; literal braces in

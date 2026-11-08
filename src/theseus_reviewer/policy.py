@@ -15,6 +15,7 @@ OMP_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max"
 READ_ONLY_KINDS = ("hard", "soft")
 DELIVERIES = ("comment", "review")
 BRIEF_MAX_BYTES = 400_000
+INLINE_BRIEF_MAX_BYTES = 100_000
 POLICY_KEYS = frozenset(
     {
         "version",

@@ -58,7 +58,17 @@ from .diff import binary_files, binary_notice_count, commentable_lines, hunk_ind
 from .evidence import is_binary_candidate
 from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
-from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
+from .policy import (
+    BRIEF_MAX_BYTES,
+    INLINE_BRIEF_MAX_BYTES,
+    SIZE_BUCKETS,
+    Binding,
+    Policy,
+    PolicyError,
+    RetryRules,
+    Reviewer,
+    load_policy,
+)
 from .render import (
     SLOT_MAX_BYTES,
     TEMPLATES,
@@ -1516,7 +1526,7 @@ def _choose_brief_mode(
     if inline_eligible:
         inline = {**plan, "brief_mode": "inline", "diff_inline": diff_text}
         rendered = _rendered_brief_bytes(inline, plan_dir, marked=False)
-        if rendered is not None and rendered + SLOT_MAX_BYTES["file_priority"] <= BRIEF_MAX_BYTES:
+        if rendered is not None and rendered + SLOT_MAX_BYTES["file_priority"] <= INLINE_BRIEF_MAX_BYTES:
             return "inline", rendered + priority_rows
     file_list = {**plan, "brief_mode": "file-list", "diff_inline": None}
     worst = _rendered_brief_bytes(file_list, plan_dir, marked=True)

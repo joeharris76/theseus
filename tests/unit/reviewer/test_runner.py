@@ -9,10 +9,11 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from theseus_reviewer import absence, cli, omp_pin, redaction_check, runner
+from theseus_reviewer import absence, brief, cli, omp_pin, redaction_check, runner
 from theseus_reviewer.brief import create_exclusive
 from theseus_reviewer.commands import Invocation
 from theseus_reviewer.policy import Policy
@@ -674,14 +675,37 @@ def test_a_file_created_between_the_check_and_the_write_is_neither_followed_nor_
 
 
 @skip_on_windows
-def test_a_failed_exclusive_create_holds_no_descriptor(tmp_path: Path) -> None:
+def test_a_file_wrapper_that_fails_after_the_descriptor_is_opened_leaks_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import builtins
+    import warnings
+
+    def failing_wrapper(path: Path, mode: str, opener: Any) -> Any:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            return builtins.open(path, mode, buffering=1, opener=opener)
+
+    monkeypatch.setattr(brief, "open", failing_wrapper, raising=False)
     descriptors = Path("/dev/fd")
     before = len(list(descriptors.iterdir()))
-    with pytest.raises(TypeError):
-        create_exclusive(tmp_path / "bad.diff", "not bytes")  # type: ignore[arg-type]
-    with pytest.raises(FileNotFoundError):
-        create_exclusive(tmp_path / "missing" / "x.diff", b"+x\n")
+    with pytest.raises(RuntimeWarning):
+        create_exclusive(tmp_path / "bad.diff", b"+x\n")
     assert len(list(descriptors.iterdir())) == before
+
+
+@skip_on_windows
+def test_staging_returns_none_when_the_exclusive_create_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace, _ = _workspace(tmp_path)
+    source = tmp_path / "diff.patch"
+    source.write_text("+x\n", encoding="utf-8")
+
+    def refuse(path: Path, data: bytes) -> None:
+        raise PermissionError(path)
+
+    monkeypatch.setattr(runner, "create_exclusive", refuse)
+    assert runner.stage_pull_request_diff(source, workspace) is None
+    assert not (workspace / runner.STAGED_DIFF_NAME).exists()
 
 
 @skip_on_windows
