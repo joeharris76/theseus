@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 _FULL_HUNK = re.compile(r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 STAGED_DIFF_NAME = ".review-pull-request.diff"
+SINCE_STAGED_NAME = ".review-since-last-review.diff"
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,7 @@ def _target_path(line: str) -> str | None:
     return target[2:] if target.startswith("b/") else target
 
 
-def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
-    lines_by_path: dict[str, set[int]] = {}
+def _walk(diff_text: str) -> Iterator[tuple[str, int, bool]]:
     path: str | None = None
     new_line = 0
     remaining = 0
@@ -50,11 +51,50 @@ def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
         if path is None or remaining <= 0:
             continue
         if line.startswith("+") or line.startswith(" "):
-            lines_by_path.setdefault(path, set()).add(new_line)
+            yield path, new_line, line.startswith("+")
             new_line += 1
             remaining -= 1
-        elif line.startswith("\\"):
+
+
+def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    lines_by_path: dict[str, set[int]] = {}
+    for path, number, _ in _walk(diff_text):
+        lines_by_path.setdefault(path, set()).add(number)
+    return {name: frozenset(numbers) for name, numbers in lines_by_path.items()}
+
+
+def changed_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    """Lines the change touches on the new side: added lines, plus every new-side line of a hunk that deletes."""
+    found: dict[str, set[int]] = {name: set(numbers) for name, numbers in added_lines(diff_text).items()}
+    path: str | None = None
+    span: tuple[int, int] | None = None
+    remaining = 0
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            path, span, remaining = None, None, 0
             continue
+        if remaining == 0 and line.startswith("+++ "):
+            path = _target_path(line)
+            continue
+        match = _HUNK.match(line)
+        if match is not None:
+            start = int(match.group("start"))
+            count = int(match.group("count") or "1")
+            span = (start, start + max(count, 1))
+            remaining = count
+            continue
+        if line.startswith("+") or line.startswith(" "):
+            remaining -= 1
+        elif line.startswith("-") and path is not None and span is not None:
+            found.setdefault(path, set()).update(range(span[0], span[1] + 1))
+    return {name: frozenset(numbers) for name, numbers in found.items()}
+
+
+def added_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    lines_by_path: dict[str, set[int]] = {}
+    for path, number, added in _walk(diff_text):
+        if added:
+            lines_by_path.setdefault(path, set()).add(number)
     return {name: frozenset(numbers) for name, numbers in lines_by_path.items()}
 
 
@@ -209,3 +249,22 @@ def hunk_index(diff_text: str) -> dict[str, list[Hunk]]:
             Hunk(start + 1, position, int(match.group("start")), new_count, additive and new_count > 0, size)
         )
     return index
+
+
+def deleting_files(diff_text: str) -> frozenset[str]:
+    """Files with at least one hunk that deletes a line."""
+    found: set[str] = set()
+    path: str | None = None
+    remaining = 0
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            path, remaining = None, 0
+        elif remaining == 0 and line.startswith("+++ "):
+            path = _target_path(line)
+        elif (match := _HUNK.match(line)) is not None:
+            remaining = int(match.group("count") or "1")
+        elif line.startswith("+") or line.startswith(" "):
+            remaining -= 1
+        elif line.startswith("-") and path is not None:
+            found.add(path)
+    return frozenset(found)
