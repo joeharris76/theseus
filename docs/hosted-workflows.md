@@ -8,7 +8,7 @@ Theseus ships two reusable workflows, `.github/workflows/review.yml` and `.githu
 | `review-gate.yml` | `review-gate` | `gate.yml` | `review-gate` status from the App |
 | `review-request.yml` | `review-request` | none (a no-op job) | its completion is the bridge trigger |
 
-The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. During the 0.2.x transition each status is also posted under its 0.1.x context; see "Migrating from 0.1.x".
+The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. Since 0.2.5 only these contexts are posted; the 0.1.x contexts are never written again, so a ruleset that still requires one must be changed first (see "Migrating from 0.1.x").
 
 ## Caller context
 
@@ -184,7 +184,7 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 | 0.1.x | 0.2.5 |
 |---|---|
 | status context `oracle-verdict` | `review-verdict` (`oracle-verdict` is no longer posted) |
-| policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; the mirror is keyed on the new name, so a policy left at `oracle-verdict` posts under that name and satisfies nothing |
+| policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; a policy left at `oracle-verdict` posts under that name, and the gate, which reads only `review-verdict`, never sees it |
 | status context `oracle-gate` | `review-gate` (`oracle-gate` is no longer posted) |
 | callee secret `ORACLE_APP_ID` | `REVIEW_APP_ID` |
 | callee secret `ORACLE_APP_PRIVATE_KEY` | `REVIEW_APP_PRIVATE_KEY` |
