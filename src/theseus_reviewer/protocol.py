@@ -795,7 +795,8 @@ def judge(
             if advisory_scope.demotes(item)
             and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
             and not advisory_scope.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
-            and (workspace is None or _is_file(_resolve_tree(item.file, workspace), workspace))
+            and workspace is not None
+            and _is_file(_resolve_tree(item.file, workspace), workspace)
         )
         if advisory_scope is not None and not uncounted
         else ()

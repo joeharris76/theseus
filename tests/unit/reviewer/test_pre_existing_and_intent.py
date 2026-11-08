@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,20 @@ pytestmark = [pytest.mark.unit, pytest.mark.fast]
 ADDED = {CHECKER: [[10, 12]]}
 
 
+def _workspace() -> str:
+    root = Path(tempfile.mkdtemp(prefix="advisory-ws-"))
+    for name in (CHECKER, "docs/naïve.py", "elsewhere/untouched.py", "src/x.py"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("x\n", encoding="utf-8")
+    return str(root)
+
+
+WORKSPACE = _workspace()
+
+
 def _plan_with(policy: Policy, mode: str = "advisory", **over: Any) -> dict[str, Any]:
     plan = _protocol_plan(policy, pre_existing=mode)
-    return {**plan, "added_lines": ADDED, "new_files": [], **over}
+    return {**plan, "added_lines": ADDED, "new_files": [], "workspace": WORKSPACE, **over}
 
 
 def _old(severity: str, line: int = 2, **over: Any) -> dict[str, Any]:
@@ -447,6 +459,7 @@ def _scope_plan(policy: Policy, diff: str, changed: list[str]) -> dict[str, Any]
         "added_lines": cli._added_ranges(diff),
         "new_files": [],
         "changed_paths": changed,
+        "workspace": WORKSPACE,
     }
 
 
@@ -630,3 +643,9 @@ def test_the_advisory_exception_is_in_the_brief_only_when_the_policy_opts_in(pol
         _git(workspace, "init", "--quiet")
         held = {**plan, "protocol": {**plan["protocol"], "pre_existing": mode}}
         assert (ADVISORY_RULE in cli._assemble_prompt(held, plan_dir, _classification("large"), workspace)) is expected
+
+
+def test_without_a_workspace_nothing_demotes(policy: Policy) -> None:
+    plan = _plan_with(policy)
+    del plan["workspace"]
+    assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
