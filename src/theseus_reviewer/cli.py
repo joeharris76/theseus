@@ -985,7 +985,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         whole_files=set(active_promotion.whole_paths) if active_promotion is not None else set(),
     )
     plan["added_lines"] = _added_ranges(inputs.full_diff)
-    plan["new_files"] = sorted(item.path for item in all_files if item.status == "added")
+    plan["new_files"] = sorted(item.path for item in all_files if item.status in ("added", "renamed", "copied"))
     plan["changed_paths"] = sorted({path for item in all_files for path in item.paths})
     _stage_since_review(plan, out_dir, step, inputs)
     if policy.brief.include_intent:

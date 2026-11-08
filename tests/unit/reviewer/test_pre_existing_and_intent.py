@@ -488,3 +488,35 @@ def test_another_spelling_of_a_changed_path_gets_the_same_checks(policy: Policy)
     unmapped = {**plan, "added_lines": {}}
     assert _judged(unmapped, _old_in(CHECKER.title())).decision == protocol.SHIP_WITH_FIXES
     assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP
+
+
+def test_a_renamed_or_copied_file_never_demotes(policy: Policy) -> None:
+    plan = _plan_with(policy, new_files=[CHECKER], added_lines={CHECKER: [[40, 41]]})
+    assert _judged(plan, _old("Medium", 2)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_symlink_alias_of_a_changed_file_is_resolved_before_the_scope_check(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "alias.py").symlink_to("real.py")
+    plan = _plan_with(policy, added_lines={"real.py": [[1, 5]]}, changed_paths=["real.py"])
+    finding = {**_old("Medium", 2), "file": "alias.py"}
+    verdict = validate(_v("s", [finding]))
+    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_record_that_needs_trimming_drops_its_advisory_list_first() -> None:
+    entry = {"id": "D9", "severity": "Low", "file": "p" * 390, "line": 1, "end_line": None, "title": "t" * 190}
+    defects = [
+        {"id": f"D{n}", "severity": "High", "file": "q" * 300, "line": 3, "end_line": None, "title": "u" * 190}
+        for n in range(1, 11)
+    ]
+    record = {k: v for k, v in _record_for_marker().items() if k != "patch_map"}
+    marker = protocol.encode_marker({**record, "open_defects": defects, "advisory": [entry] * 5})
+    decoded = protocol.decode_marker(marker)
+    assert decoded is not None and len(decoded["open_defects"]) == 10
+
+
+def _record_for_marker() -> dict[str, Any]:
+    from .test_rounds import _decided
+
+    return _decided(HEAD)

@@ -236,7 +236,11 @@ def encode_marker(record: Mapping[str, Any], patches: Mapping[str, str] | None =
             return trimmed
     for title_limit, file_limit in MARKER_TRIMS:
         trimmed = render(
-            {**record, "summary": "", "open_defects": _trim_defects(record["open_defects"], title_limit, file_limit)}
+            {
+                **{key: value for key, value in record.items() if key != "advisory"},
+                "summary": "",
+                "open_defects": _trim_defects(record["open_defects"], title_limit, file_limit),
+            }
         )
         if len(trimmed) <= MARKER_LIMIT:
             return trimmed
@@ -781,7 +785,13 @@ def judge(
         outside = tuple(outside_list)[:NOT_COUNTED_LIMIT]
     counted = tuple(dict.fromkeys(in_scope))
     merged = len(in_scope) - len(counted)
-    advisory = tuple(item for item in counted if advisory_scope.demotes(item)) if advisory_scope is not None else ()
+    advisory = (
+        tuple(
+            item for item in counted if advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
+        )
+        if advisory_scope is not None
+        else ()
+    )
     counted = tuple(item for item in counted if item not in advisory)
     uncounted = verdict.listed - len(verdict.defects)
     confirmed_claims = sum(1 for item in carried if item["id"] in claimed)
