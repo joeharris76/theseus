@@ -520,3 +520,12 @@ def _record_for_marker() -> dict[str, Any]:
     from .test_rounds import _decided
 
     return _decided(HEAD)
+
+
+def test_the_path_the_model_cited_is_checked_as_well_as_its_symlink_target(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "alias.py").symlink_to("real.py")
+    plan = _plan_with(policy, new_files=["alias.py"], added_lines={"alias.py": []}, changed_paths=["alias.py"])
+    finding = {**_old("Medium", 2), "file": "alias.py"}
+    verdict = validate(_v("s", [finding]))
+    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES

@@ -787,7 +787,10 @@ def judge(
     merged = len(in_scope) - len(counted)
     advisory = (
         tuple(
-            item for item in counted if advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
+            item
+            for item in counted
+            if advisory_scope.demotes(item)
+            and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
         )
         if advisory_scope is not None
         else ()
