@@ -8,7 +8,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest import mock
 
 from theseus_reviewer import isolation, omp_pin
 from theseus_reviewer._vendor import yaml
@@ -259,12 +258,11 @@ class WorkflowRunner:
         return result
 
     def _check_isolation(self, result: Step, env: dict[str, str]) -> None:
-        with mock.patch.dict(os.environ, env, clear=True):
-            try:
-                isolation.require_isolation()
-                expected = 0
-            except (OSError, ValueError, KeyError):
-                expected = 1
+        try:
+            isolation.require_isolation(environ=env)
+            expected = 0
+        except (OSError, ValueError, KeyError):
+            expected = 1
         assert result.code == expected, result.stderr
         self.waived.add(ISOLATION_PHASE)
 

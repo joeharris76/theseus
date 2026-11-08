@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from theseus_reviewer import absence, cli, omp_pin, redaction_check, runner
+from theseus_reviewer.brief import create_exclusive
 from theseus_reviewer.commands import Invocation
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.verdict import RESPONSE_PLACEHOLDERS
@@ -616,7 +617,7 @@ def _run_review(
 
 def _capture_prompt_body(tmp_path: Path) -> str:
     stdout = "\n".join([_reads("a.txt"), _envelope(json.dumps(VERDICT))])
-    return f"open('{tmp_path}/prompt.txt', 'w').write(sys.argv[-1])\nprint({json.dumps(stdout)})"
+    return f"open('{tmp_path}/prompt.txt', 'w').write(sys.stdin.read())\nprint({json.dumps(stdout)})"
 
 
 @skip_on_windows
@@ -658,18 +659,29 @@ def test_a_file_created_between_the_check_and_the_write_is_neither_followed_nor_
     target = workspace / runner.STAGED_DIFF_NAME
     target.symlink_to(outside)
     with pytest.raises(OSError):
-        runner._create_exclusive(target, b"+x\n")
+        create_exclusive(target, b"+x\n")
     assert not outside.exists()
     assert target.is_symlink()
     existing = workspace / "existing.diff"
     existing.write_text("kept\n", encoding="utf-8")
     with pytest.raises(FileExistsError):
-        runner._create_exclusive(existing, b"+x\n")
+        create_exclusive(existing, b"+x\n")
     assert existing.read_text(encoding="utf-8") == "kept\n"
     clean = workspace / "clean.diff"
-    runner._create_exclusive(clean, b"+x\n")
+    create_exclusive(clean, b"+x\n")
     assert clean.read_bytes() == b"+x\n"
     assert stat.S_IMODE(clean.stat().st_mode) == 0o600
+
+
+@skip_on_windows
+def test_a_failed_exclusive_create_holds_no_descriptor(tmp_path: Path) -> None:
+    descriptors = Path("/dev/fd")
+    before = len(list(descriptors.iterdir()))
+    with pytest.raises(TypeError):
+        create_exclusive(tmp_path / "bad.diff", "not bytes")  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        create_exclusive(tmp_path / "missing" / "x.diff", b"+x\n")
+    assert len(list(descriptors.iterdir())) == before
 
 
 @skip_on_windows
@@ -1292,14 +1304,12 @@ def test_capture_scrubs_an_encoded_credential_used_as_an_argument_key(
 
 
 @skip_on_windows
-@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind the superuser")
-def test_staging_returns_none_when_the_exclusive_create_fails(tmp_path: Path) -> None:
+def test_staging_returns_none_when_the_workspace_cannot_record_the_exclusion(tmp_path: Path) -> None:
     workspace, _ = _workspace(tmp_path)
     source = tmp_path / "diff.patch"
     source.write_text("+x\n", encoding="utf-8")
-    workspace.chmod(0o500)
-    try:
-        assert runner.stage_pull_request_diff(source, workspace) is None
-    finally:
-        workspace.chmod(0o700)
+    exclude = workspace / ".git" / "info" / "exclude"
+    exclude.unlink(missing_ok=True)
+    exclude.mkdir(parents=True)
+    assert runner.stage_pull_request_diff(source, workspace) is None
     assert not (workspace / runner.STAGED_DIFF_NAME).exists()

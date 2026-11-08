@@ -7,12 +7,14 @@ import signal
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from . import absence, coverage, credentials, evidence, omp_pin, processes, promotion, protocol, redaction_check
+from .brief import create_exclusive
 from .commands import Invocation, build
 from .diff import STAGED_DIFF_NAME
 from .policy import Reviewer
@@ -68,16 +70,10 @@ def stage_pull_request_diff(source: Path, workspace: Path) -> Path | None:
         exclude_path.parent.mkdir(parents=True, exist_ok=True)
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(f"/{STAGED_DIFF_NAME}\n")
-        _create_exclusive(target, data)
+        create_exclusive(target, data)
     except OSError:
         return None
     return target
-
-
-def _create_exclusive(target: Path, data: bytes) -> None:
-    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(data)
 
 
 def _plan_protected(plan: Mapping[str, Any]) -> Callable[[str], bool]:
@@ -95,9 +91,16 @@ def _digest(path: Path) -> str | None:
         return "unreadable"
 
 
+def _stdin(invocation: Invocation) -> AbstractContextManager[IO[bytes] | int]:
+    if invocation.stdin_path is None:
+        return nullcontext(subprocess.DEVNULL)
+    return invocation.stdin_path.open("rb")
+
+
 def execute(invocation: Invocation, timeout_seconds: int) -> RunResult:
     bystanders = processes.children() if processes.OrphanWatch.active else frozenset()
     with (
+        _stdin(invocation) as stdin_file,
         tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace", dir=invocation.cwd) as stdout_file,
         tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace", dir=invocation.cwd) as stderr_file,
     ):
@@ -105,7 +108,7 @@ def execute(invocation: Invocation, timeout_seconds: int) -> RunResult:
             process = subprocess.Popen(
                 list(invocation.argv),
                 cwd=invocation.cwd,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=stdout_file,
                 stderr=stderr_file,
                 start_new_session=True,
@@ -267,7 +270,11 @@ def review(
     invocation = build(reviewer, workspace, prompt, scratch)
     staged_before = _digest(workspace / STAGED_DIFF_NAME)
     promotion_before = promotion.staged_tree_digest(workspace)
-    result = execute(invocation, reviewer.timeout_minutes * 60)
+    try:
+        result = execute(invocation, reviewer.timeout_minutes * 60)
+    finally:
+        if invocation.stdin_path is not None:
+            invocation.stdin_path.unlink(missing_ok=True)
     outcome = _judge(
         reviewer,
         invocation,

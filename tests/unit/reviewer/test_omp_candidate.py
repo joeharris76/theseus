@@ -28,7 +28,14 @@ from theseus_reviewer import (
     providers,
 )
 from theseus_reviewer._vendor import yaml
-from theseus_reviewer.candidate_chain import AGENTS_TOKEN, NATIVE_TOKEN, ClientRun
+from theseus_reviewer.candidate_chain import (
+    AGENTS_TOKEN,
+    NATIVE_TOKEN,
+    TRANSPORT_HEAD,
+    TRANSPORT_PROMPT,
+    TRANSPORT_TAIL,
+    ClientRun,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -155,6 +162,12 @@ def _good_runs() -> dict[str, ClientRun]:
         "quota-terminal": _run("quota-terminal", _read("quota_terminal.jsonl"), 1, upstream=(_request(),)),
         "upstream-auth": _run("upstream-auth", _read("upstream_auth.jsonl"), 1, upstream=(_request(),)),
         "bad-token": _run("bad-token", _read("gateway_rejection.jsonl"), 1),
+        "prompt-transport": _run(
+            "prompt-transport",
+            "",
+            upstream=(_request(prompt=f"{TRANSPORT_HEAD} {TRANSPORT_TAIL}"),),
+            argv=("omp", "--print"),
+        ),
         **_probe_runs(),
     }
 
@@ -1090,3 +1103,28 @@ def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_se
         clients = json.loads((workdir / "gateway-clients.json").read_text(encoding="utf-8"))
         assert cli.GATEWAY_CLIENT in clients
         assert clients[cli.GATEWAY_CLIENT]["models"]
+
+
+def test_the_prompt_transport_probe_exceeds_what_one_argument_can_hold() -> None:
+    assert len(TRANSPORT_PROMPT.encode("utf-8")) > candidate_checks.ARGV_PROMPT_LIMIT
+
+
+def test_the_prompt_transport_check_is_green_on_a_run_that_delivered_both_tokens() -> None:
+    checks = candidate_checks.transport_checks(_good_runs()["prompt-transport"])
+    assert [(check.name, check.rows, check.failures) for check in checks] == [("live-prompt-transport", (14,), ())]
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"upstream": (_request(prompt=TRANSPORT_HEAD),)}, TRANSPORT_TAIL),
+        ({"upstream": (_request(prompt="Review the change."),)}, TRANSPORT_HEAD),
+        ({"argv": ("omp", f"{TRANSPORT_HEAD} text")}, "command line carries the prompt"),
+        ({"exit_code": 1}, "exited 1"),
+    ],
+)
+def test_the_prompt_transport_check_is_red_when_the_prompt_does_not_arrive_on_stdin(
+    fields: dict[str, Any], expected: str
+) -> None:
+    failures = _failed(candidate_checks.transport_checks(replace(_good_runs()["prompt-transport"], **fields)))
+    assert expected in " ".join(failures["live-prompt-transport"])

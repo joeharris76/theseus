@@ -4,12 +4,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
-
-from theseus_reviewer import local
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -39,13 +35,35 @@ def _repo(path: Path, files: dict[str, str]) -> Path:
     return path
 
 
-def _windows_locale_run(real_run: Any) -> Any:
-    def run(*args: Any, **kwargs: Any) -> Any:
-        if kwargs.get("text") and "encoding" not in kwargs:
-            kwargs["encoding"] = "cp1252"
-        return real_run(*args, **kwargs)
+LEGACY_LOCALE_PROBE = """
+import locale, sys
+from pathlib import Path
+assert locale.getpreferredencoding(False).lower() not in ("utf-8", "utf8"), locale.getpreferredencoding(False)
+from theseus_reviewer import local
+repo = Path(sys.argv[1])
+"""
 
-    return run
+
+def _legacy_locale(body: str, repo: Path) -> subprocess.CompletedProcess[str]:
+    """Run `body` in a child whose locale encoding is not UTF-8 (the Windows cp1252 failure mode)."""
+    env = {
+        **os.environ,
+        "MUTANT_UNDER_TEST": "",
+        "LC_ALL": "C",
+        "LANG": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0",
+        "PYTHONIOENCODING": "ascii:backslashreplace",
+    }
+    return subprocess.run(
+        [sys.executable, "-c", LEGACY_LOCALE_PROBE + body, str(repo)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
 
 
 def test_local_imports_without_fcntl() -> None:
@@ -81,17 +99,21 @@ def test_explicit_collection_skips_without_fcntl() -> None:
     assert "error" not in proc.stdout.lower()
 
 
-def test_git_show_decodes_smart_quotes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_git_show_decodes_smart_quotes(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo", {"note.md": f"quoted {SMART_QUOTE}text{SMART_QUOTE}\n"})
-    monkeypatch.setattr(local, "subprocess", SimpleNamespace(run=_windows_locale_run(subprocess.run)))
-    assert SMART_QUOTE in local._git(repo, "show", "HEAD:note.md")
+    proc = _legacy_locale("print(ascii(local._git(repo, 'show', 'HEAD:note.md')))", repo)
+    assert proc.returncode == 0, proc.stderr
+    assert "\\u201d" in proc.stdout
 
 
-def test_repository_remote_decodes_smart_quotes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repository_remote_decodes_smart_quotes(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo", {"note.md": "plain\n"})
     _git(repo, "remote", "add", "origin", f"https://github.com/acme/r{SMART_QUOTE}epo")
-    monkeypatch.setattr(local, "subprocess", SimpleNamespace(run=_windows_locale_run(subprocess.run)))
-    with pytest.raises(local.Refused, match="cannot tell which GitHub repository"):
-        local._repository(repo)
+    body = "try:\n    local._repository(repo)\nexcept local.Refused as exc:\n    print('refused:', exc)\n"
+    proc = _legacy_locale(body, repo)
+    assert proc.returncode == 0, proc.stderr
+    assert "cannot tell which GitHub repository" in proc.stdout
     _git(repo, "remote", "set-url", "origin", "https://github.com/acme/repo.git")
-    assert local._repository(repo) == "acme/repo"
+    proc = _legacy_locale("print(local._repository(repo))", repo)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "acme/repo"

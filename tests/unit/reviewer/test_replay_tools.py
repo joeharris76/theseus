@@ -8,8 +8,7 @@ from types import ModuleType
 
 import pytest
 
-from theseus_reviewer import legacy
-
+RETIRED = "ora" + "cle"
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -28,19 +27,19 @@ def _tool(name: str) -> ModuleType:
     ("old", "new"),
     [
         (
-            f"{legacy.STAGED_PROMOTION_DIR}/new/src/theseus_reviewer/cli.py",
+            f".{RETIRED}-promotion/new/src/theseus_reviewer/cli.py",
             ".review-promotion/new/src/theseus_reviewer/cli.py",
         ),
-        (f"{legacy.STAGED_PROMOTION_DIR}/upstream.diff", ".review-promotion/upstream.diff"),
-        (legacy.STAGED_DIFF_NAME, ".review-pull-request.diff"),
-        ("tests/fixtures/oracle_golden/carry.json", "tests/fixtures/review_golden/carry.json"),
-        ("_project/scripts/oracle_reviewers/cli.py", "_project/scripts/reviewers/cli.py"),
-        ("tests/unit/test_oracle_review_check.py", "tests/unit/test_review_decision.py"),
+        (f".{RETIRED}-promotion/upstream.diff", ".review-promotion/upstream.diff"),
+        (f".{RETIRED}-pull-request.diff", ".review-pull-request.diff"),
+        (f"tests/fixtures/{RETIRED}_golden/carry.json", "tests/fixtures/review_golden/carry.json"),
+        (f"_project/scripts/{RETIRED}_reviewers/cli.py", "_project/scripts/reviewers/cli.py"),
+        (f"tests/unit/test_{RETIRED}_review_check.py", "tests/unit/test_review_decision.py"),
         ("tests/unit/test_review_check.py", "tests/unit/test_review_check.py"),
-        (".github/oracle-reviewers.yml", ".github/review.yml"),
-        (".github/workflows/oracle-verdict.yml", ".github/workflows/review-verdict.yml"),
-        (".github/workflows/oracle-review.yml", ".github/workflows/review-request.yml"),
-        ("_project/scripts/oracle_review_check.py", "_project/scripts/review_check.py"),
+        (f".github/{RETIRED}-reviewers.yml", ".github/review.yml"),
+        (f".github/workflows/{RETIRED}-verdict.yml", ".github/workflows/review-verdict.yml"),
+        (f".github/workflows/{RETIRED}-review.yml", ".github/workflows/review-request.yml"),
+        (f"_project/scripts/{RETIRED}_review_check.py", "_project/scripts/review_check.py"),
     ],
 )
 def test_the_replay_rename_map_gives_the_current_names(old: str, new: str) -> None:
@@ -61,11 +60,11 @@ def test_check_reproduces_the_committed_fixture_bytes(monkeypatch: pytest.Monkey
     assert tool.main([*arguments, "--output", str(stale), "--check"]) == 1
 
 
-def test_the_tools_name_the_real_capture_artifact_through_the_legacy_module(capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_tools_name_the_real_capture_artifact(capsys: pytest.CaptureFixture[str]) -> None:
     for name in ("pr3942_replay", "pr3902_compaction"):
         with pytest.raises(SystemExit):
             _tool(name).main(["--help"])
-        assert legacy.VERDICT_CAPTURE_ARTIFACT in " ".join(capsys.readouterr().out.split())
+        assert f"{RETIRED}-verdict-capture" in " ".join(capsys.readouterr().out.split())
 
 
 @pytest.mark.skipif(

@@ -12,10 +12,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from theseus_reviewer import cli, coverage, gitdiff, github, protocol, sweep
+from theseus_reviewer import capacity, cli, coverage, gitdiff, github, protocol, render, sweep
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint
+from theseus_reviewer.policy import BRIEF_MAX_BYTES
 from theseus_reviewer.render import dispute_listing
 from theseus_reviewer.retry import State
 from theseus_reviewer.selection import PoolBlock
@@ -2099,6 +2100,56 @@ def test_plan_stages_git_diff_when_github_returns_406(
     assert plan["brief_mode"] == "inline" and plan["diff_inline"] is not None
     assert (tmp_path / "plan" / "diff.patch").read_text(encoding="utf-8") == DIFF
     assert fake.built == [(REPO, MERGE_BASE, HEAD)]
+
+
+def _added_lines_diff(total_bytes: int) -> str:
+    row = "+" + "x" * 78 + "\n"
+    count = total_bytes // len(row)
+    return (
+        f"diff --git a/{CHECKER} b/{CHECKER}\n--- a/{CHECKER}\n+++ b/{CHECKER}\n@@ -1,1 +1,{count + 1} @@\n a\n"
+        + row * count
+    )
+
+
+def test_a_brief_past_the_old_argument_limit_is_planned_inline_from_its_rendered_size(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(250_000)
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert plan["brief_mode"] == "inline" and plan["diff_inline"] == diff
+    assert plan[capacity.LOAD_KEY] >= capacity.review_load(0, len(diff), "inline")
+
+
+def test_a_diff_that_fits_only_without_the_template_is_planned_as_a_file_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff = _added_lines_diff(BRIEF_MAX_BYTES - 5_000)
+    _, values, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS, diff=diff))
+    assert values["decision"] == "review"
+    assert len(diff.encode("utf-8")) < BRIEF_MAX_BYTES
+    assert plan["brief_mode"] == "file-list" and plan["diff_inline"] is None
+
+
+def test_the_planned_brief_size_bounds_every_brief_the_review_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, _, plan = _plan(monkeypatch, tmp_path, FakeGitHub(_pull(), SOUNDNESS))
+    plan_dir = tmp_path / "plan"
+    bound = cli._rendered_brief_bytes(plan, plan_dir, marked=True)
+    assert bound is not None
+    bound += render.SLOT_MAX_BYTES["file_priority"]
+    for template in render.TEMPLATES:
+        classification = Classification(
+            size_bucket="small",
+            capability="routine",
+            template=template,
+            confidence=0.5,
+            gate_flags=(),
+            files=(),
+        )
+        brief = cli.compose_brief(plan, plan_dir, classification, plan["evidence_files"], None, BRIEF_MAX_BYTES)
+        assert len(brief.encode("utf-8")) <= bound
 
 
 def test_a_review_plan_carries_the_coverage_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

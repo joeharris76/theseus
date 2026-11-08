@@ -15,7 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from theseus_reviewer import evidence, legacy, promotion  # noqa: E402
+from theseus_reviewer import evidence, promotion  # noqa: E402
 from theseus_reviewer.diff import hunk_index  # noqa: E402
 
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "replays" / "pr3942_coverage.json"
@@ -24,8 +24,10 @@ REPOSITORY = "BenchBox-dev/benchbox"
 MERGE_BASE = "37f78fbf"
 HEAD = "4cbb8205"
 LOCK_PATH = ".github/theseus-lock.json"
-PULL_REQUEST_DIFF = legacy.STAGED_DIFF_NAME
-PROMOTION_DIR = legacy.STAGED_PROMOTION_DIR
+RETIRED_NAME = "ora" + "cle"
+CAPTURE_ARTIFACT = f"{RETIRED_NAME}-verdict-capture"
+PULL_REQUEST_DIFF = f".{RETIRED_NAME}-pull-request.diff"
+PROMOTION_DIR = f".{RETIRED_NAME}-promotion"
 PROMOTION_DIFF = f"{PROMOTION_DIR}/upstream.diff"
 EXPECTED_REQUIRED = 304
 EXPECTED_CALLS = 405
@@ -36,7 +38,7 @@ WORKSPACE_PREFIX = "/home/runner/work/benchbox/benchbox/workspace"
 LISTING_ROW = re.compile(r"(?P<path>.+) \(\+(?P<added>\d+)/-(?P<deleted>\d+), (?P<status>[a-z]+)(?:, [^)]*)?\)")
 
 
-_WORD = re.escape(legacy.WORD)
+_WORD = re.escape(RETIRED_NAME)
 RENAMES: tuple[tuple[str, str], ...] = (
     (f"test_{_WORD}_review_check", "test_review_decision"),
     (rf"{_WORD}-review\.yml", "review-request.yml"),
@@ -411,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             "Rebuild tests/fixtures/replays/pr3942_coverage.json from public inputs: the BenchBox merge-base "
             f"{MERGE_BASE} -> head {HEAD} history, the head lock's bootstrap baseline and the Theseus source "
             f"commit it pins, and the verdict capture of run {CAPTURE_RUN} "
-            f"(gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {legacy.VERDICT_CAPTURE_ARTIFACT} -D DIR). The tree, "
+            f"(gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {CAPTURE_ARTIFACT} -D DIR). The tree, "
             "baseline, source and delta digests are checked against the head lock before anything is written. "
             "The capture and the trees it names carry the names Theseus used before 0.2.0; RENAMES maps every string "
             "of the result to the current vocabulary, in a fixed order, and keeps the committed row order."

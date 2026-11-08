@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import absence, legacy, omp_bump, omp_pin
+from . import absence, omp_bump, omp_pin
 from .github import RUN_TITLE_PULL, TRUSTED_EVENTS, WORKFLOW_PATH, GitHubError, get_json, parse_time
 from .policy import PolicyError, load_policy
 
@@ -41,10 +41,8 @@ CONTRACT_SIGNATURES = (
     (absence.EMPTY, "exit code 0 with no output"),
     (absence.ERROR, "the reviewer could not be started"),
 )
-ATTEMPT_ARTIFACT_NAMES = tuple(
-    f"{prefix}{slot}" for prefix in ("review-verdict-attempt-", legacy.ATTEMPT_ARTIFACT_PREFIX) for slot in range(1, 6)
-)
-REVIEW_WORKFLOWS = frozenset({WORKFLOW_PATH, legacy.WORKFLOW_PATH})
+ATTEMPT_ARTIFACT_NAMES = tuple(f"review-verdict-attempt-{slot}" for slot in range(1, 6))
+REVIEW_WORKFLOWS = frozenset({WORKFLOW_PATH})
 REVIEW_EVENTS = TRUSTED_EVENTS | {"push"}
 WATCH_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 LEDGER_ARTIFACT = "omp-watch-ledger"
@@ -58,7 +56,6 @@ DOWNLOAD_WORKERS = 8
 PENDING, CLEAR, REVERT, IDLE = "pending", "clear", "revert", "idle"
 BOT_AUTHOR_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 REVERT_SUBJECT_PREFIX = "revert(review): restore omp "
-REVERT_SUBJECT_PREFIXES = (REVERT_SUBJECT_PREFIX, legacy.REVERT_SUBJECT_PREFIX)
 LEDGER_PAGES = 10
 
 JsonGetter = Callable[[str], Any]
@@ -138,7 +135,7 @@ class PinChange:
 
     @property
     def is_revert(self) -> bool:
-        return self.author_email == BOT_AUTHOR_EMAIL and self.subject.startswith(REVERT_SUBJECT_PREFIXES)
+        return self.author_email == BOT_AUTHOR_EMAIL and self.subject.startswith(REVERT_SUBJECT_PREFIX)
 
 
 @dataclass(frozen=True)

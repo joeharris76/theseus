@@ -293,7 +293,7 @@ def test_a_policy_with_an_unknown_top_level_key_is_rejected_by_name() -> None:
 def test_the_brief_size_bound_is_a_fixed_constant() -> None:
     from theseus_reviewer.policy import BRIEF_MAX_BYTES
 
-    assert BRIEF_MAX_BYTES == 100_000
+    assert BRIEF_MAX_BYTES == 400_000
     assert not hasattr(parse_policy(_raw()), "brief_max_bytes")
 
 

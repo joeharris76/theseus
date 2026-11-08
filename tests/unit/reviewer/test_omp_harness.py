@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,11 @@ def test_omp_argv_is_locked_down_reviewer(tmp_path: Path) -> None:
     assert "--no-title" in argv and "--no-session" in argv
     assert argv[argv.index("--add-dir") + 1] == str(WS)
     assert argv[argv.index("--config") + 1] == str(tmp_path / "omp-review-overlay.yml")
-    assert argv[-1] == PROMPT
+    assert PROMPT not in argv
+    assert invocation.stdin_path == tmp_path / "omp-prompt.txt"
+    assert invocation.stdin_path.read_text(encoding="utf-8") == PROMPT
+    if os.name != "nt":
+        assert stat.S_IMODE(invocation.stdin_path.stat().st_mode) == 0o600
     assert invocation.cwd == tmp_path / "omp-cwd"
     assert invocation.cwd != WS
     assert invocation.output_file is None

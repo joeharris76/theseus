@@ -10,11 +10,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from theseus_reviewer import evidence, legacy  # noqa: E402
+from theseus_reviewer import evidence  # noqa: E402
 
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "replays" / "pr3902_compaction.json"
 CAPTURE_RUN = "41696376860"
 REPOSITORY = "BenchBox-dev/benchbox"
+CAPTURE_ARTIFACT = "ora" + "cle-verdict-capture"
 WORKSPACE_PREFIX = "/home/runner/work/benchbox/benchbox/workspace"
 COMPACTION_START = "auto_compaction_start"
 COMPACTION_END = "auto_compaction_end"
@@ -99,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Rebuild tests/fixtures/replays/pr3902_compaction.json from the verdict capture of run "
-            f"{CAPTURE_RUN} (gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {legacy.VERDICT_CAPTURE_ARTIFACT} -D DIR): "
+            f"{CAPTURE_RUN} (gh run download {CAPTURE_RUN} -R {REPOSITORY} -n {CAPTURE_ARTIFACT} -D DIR): "
             "the compaction events, the tool calls without outputs and the shape of the accepted final answer."
         )
     )

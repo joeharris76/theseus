@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import legacy
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
 from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
@@ -105,17 +104,6 @@ def post_pending(token: str, repo: str, head_sha: str) -> None:
 
 
 def _post_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any]) -> None:
-    failures: list[CheckError] = []
-    for context in (*legacy.mirror_contexts(payload["context"]), payload["context"]):
-        try:
-            _post_one_payload(token, repo, head_sha, {**payload, "context": context})
-        except CheckError as exc:
-            failures.append(exc)
-    if failures:
-        raise CheckError("; ".join(str(item) for item in failures))
-
-
-def _post_one_payload(token: str, repo: str, head_sha: str, payload: dict[str, Any]) -> None:
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         f"{API_ROOT}/repos/{repo}/statuses/{head_sha}",

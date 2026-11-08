@@ -490,31 +490,3 @@ def test_the_audit_command_is_registered_with_its_options() -> None:
     parsed = parser.parse_args(["audit-coverage", "--capture", "c.json", "--policy", "p.yml", "--json"])
     assert parsed.handler is audit.command_audit and parsed.json is True
     assert (parsed.head, parsed.repo_root, parsed.base_ref, parsed.trusted_ref) == ("HEAD", ".", "", "")
-
-
-def test_a_capture_recorded_by_0_1_x_audits_the_same_under_the_current_staged_names(tmp_path: Path) -> None:
-    from theseus_reviewer import legacy, promotion, runner
-
-    workspace = tmp_path / "workspace"
-    (workspace / promotion.STAGED_PROMOTION_DIR / "new" / "src").mkdir(parents=True)
-    (workspace / promotion.STAGED_PROMOTION_DIR / "new" / "src" / "a.py").write_text("x\n" * 10, encoding="utf-8")
-    (workspace / "src").mkdir()
-    (workspace / "src" / "a.py").write_text("unrelated\n" * 10, encoding="utf-8")
-    (workspace / runner.STAGED_DIFF_NAME).write_text("d\n" * 5, encoding="utf-8")
-
-    def capture(diff: str, staged: str) -> dict[str, Any]:
-        return {
-            "schema": 2,
-            "reads": [
-                {"path": f"/home/runner/work/r/r/workspace/{diff}", "lines": [[1, 5]]},
-                {"path": f"{staged}/new/src/a.py:1-10", "lines": [[1, 10]]},
-            ],
-        }
-
-    current = capture(runner.STAGED_DIFF_NAME, promotion.STAGED_PROMOTION_DIR)
-    old = capture(legacy.STAGED_DIFF_NAME, legacy.STAGED_PROMOTION_DIR)
-    expected = audit.returned_from_capture(current, workspace)
-    assert audit.returned_from_capture(old, workspace) == expected
-    returned, unresolved = expected
-    assert unresolved == 0
-    assert set(returned) == {runner.STAGED_DIFF_NAME, f"{promotion.STAGED_PROMOTION_DIR}/new/src/a.py"}

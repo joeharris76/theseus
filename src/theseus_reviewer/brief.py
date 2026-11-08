@@ -24,8 +24,15 @@ def with_full_diff(text: str, path: Path | None) -> str:
     return text
 
 
+def _open_private(path: str, flags: int) -> int:
+    return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+
+
+def create_exclusive(path: Path, data: bytes) -> None:
+    with open(path, "xb", opener=_open_private) as handle:
+        handle.write(data)
+
+
 def write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-        handle.write(text)
+    create_exclusive(path, text.encode("utf-8"))

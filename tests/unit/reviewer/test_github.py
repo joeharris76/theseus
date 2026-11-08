@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -633,7 +634,7 @@ def _artifact(run_id: int) -> dict[str, Any]:
 
 
 def test_latest_state_downloads_matching_verdict_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
-    name = github.state_artifact_name(7, github.STATE_ARTIFACT_PREFIX)
+    name = github.state_artifact_name(7)
     downloaded = _state_sources(monkeypatch, {name: [_artifact(1)]}, {"1": _run(path=github.WORKFLOW_PATH)})
     state = github.latest_state(REPO, 7, BASE)
     assert state is not None and state.strikes == 1
@@ -660,7 +661,7 @@ def test_latest_state_prefers_the_published_state_over_a_same_second_attempt(mon
 
 
 def test_latest_state_ignores_artifacts_from_another_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
-    name = github.state_artifact_name(7, github.STATE_ARTIFACT_PREFIX)
+    name = github.state_artifact_name(7)
     downloaded = _state_sources(monkeypatch, {name: [_artifact(1)]}, {"1": _run(path=".github/workflows/other.yml")})
     assert github.latest_state(REPO, 7, BASE) is None
     assert downloaded == []
@@ -891,7 +892,7 @@ def test_post_status_posts_with_the_given_token(monkeypatch: pytest.MonkeyPatch)
     calls = _recording_run(monkeypatch)
     payload = {"state": "pending", "context": "review-verdict", "description": "d", "target_url": "u"}
     github.post_status(REPO, SHA, payload, "app-token")
-    assert calls.count == 2
+    assert calls.count == 1
     argv, env = calls[0]
     assert argv[:4] == ["gh", "api", "--method", "POST"] and f"repos/{REPO}/statuses/{SHA}" in argv
     assert env["GH_TOKEN"] == "app-token" and environment.get("GH_TOKEN") != "app-token"
@@ -1200,13 +1201,12 @@ def test_a_failing_gh_status_post_raises_after_attempting_both_contexts_legacy_f
     }
     with pytest.raises(github.GitHubError, match="could not post a status"):
         github.post_status(REPO, SHA, payload, "app-token")
-    assert calls.count == 2
-    for index, context in enumerate(("oracle-verdict", "review-verdict")):
-        argv, _ = calls[index]
-        assert f"repos/{REPO}/statuses/{SHA}" in argv
-        assert f"context={context}" in argv
-        assert "state=failure" in argv
-        assert "description=large: lists defects" in argv
+    assert calls.count == 1
+    argv, _ = calls[0]
+    assert f"repos/{REPO}/statuses/{SHA}" in argv
+    assert "context=review-verdict" in argv
+    assert "state=failure" in argv
+    assert "description=large: lists defects" in argv
 
 
 def test_the_state_download_runs_gh_run_download_with_the_run_id_name_and_directory(
@@ -1226,3 +1226,41 @@ def test_the_state_download_runs_gh_run_download_with_the_run_id_name_and_direct
         "-R",
         REPO,
     ]
+
+
+def test_latest_state_fails_closed_when_the_state_download_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_download(repo: str, run_id: str, name: str, directory: str) -> None:
+        raise github.GitHubError(f"could not download {name} from run {run_id}: HTTP 500")
+
+    _serve(monkeypatch, _full_run())
+    monkeypatch.setattr(github, "get_paginated", _pulls_api([_api_pull(7)], {7: []}))
+    monkeypatch.setattr(github, "download_state_artifact", failing_download)
+    with pytest.raises(github.GitHubError, match="could not download"):
+        github.latest_state(REPO, 7, BASE)
+
+
+def test_a_failed_gh_run_download_raises(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text("#!/bin/sh\necho 'HTTP 404: artifact not found' >&2\nexit 1\n", encoding="utf-8")
+    fake_gh.chmod(0o755)
+    probe = (
+        "import sys\n"
+        "from theseus_reviewer import github\n"
+        "try:\n"
+        "    github.download_state_artifact('o/r', '5', 'state', sys.argv[1])\n"
+        "except github.GitHubError as exc:\n"
+        "    print(exc)\n"
+        "    raise SystemExit(3)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe, str(tmp_path)],
+        env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", "MUTANT_UNDER_TEST": ""},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 3, proc.stderr
+    assert "could not download state from run 5: HTTP 404" in proc.stdout

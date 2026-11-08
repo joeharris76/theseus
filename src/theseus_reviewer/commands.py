@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import omp_pin
+from .brief import create_exclusive
 from .credentials import GATEWAY_ENV
 from .policy import OMP_THINKING_LEVELS, Reviewer
 
 FORBIDDEN_FLAGS = ("--dangerously-skip-permissions", "--yolo", "--dangerously-bypass-approvals-and-sandbox")
 OMP_READ_TOOLS = "read,grep,glob"
+PROMPT_FILE = "omp-prompt.txt"
 LOOPBACK_PROXY = re.compile(r"http://127\.0\.0\.1:\d{1,5}")
 GATEWAY_NO_PROXY = "127.0.0.1,localhost,::1"
 OMP_BASE_ENV = ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TZ", "USER", "LOGNAME", "SHELL")
@@ -63,6 +65,7 @@ class Invocation:
     cwd: Path
     output_file: Path | None
     env: Mapping[str, str] | None = None
+    stdin_path: Path | None = None
 
 
 _gateway_proxy = ""
@@ -100,6 +103,14 @@ def write_overlay(scratch: Path, text: str = OMP_OVERLAY_TEXT) -> Path:
     overlay = scratch / "omp-review-overlay.yml"
     overlay.write_text(text, encoding="utf-8")
     return overlay
+
+
+def write_prompt(scratch: Path, prompt: str) -> Path:
+    scratch.mkdir(parents=True, exist_ok=True)
+    target = scratch / PROMPT_FILE
+    target.unlink(missing_ok=True)
+    create_exclusive(target, prompt.encode("utf-8"))
+    return target
 
 
 def build_omp(
@@ -142,9 +153,8 @@ def build_omp(
         "--no-session",
         "--config",
         str(overlay),
-        prompt,
     )
-    return Invocation(argv, review_cwd, None, omp_env())
+    return Invocation(argv, review_cwd, None, omp_env(), write_prompt(scratch, prompt))
 
 
 def build(reviewer: Reviewer, workspace: Path, prompt: str, scratch: Path) -> Invocation:

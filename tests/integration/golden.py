@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import legacy, protocol
+from theseus_reviewer import protocol
 from theseus_reviewer.policy import load_policy
 
 from .harness import PINNED_OMP, REPO_ROOT, Harness, ReviewRun, Step
@@ -83,7 +83,6 @@ def posted(harness: Harness, pr: int, head: str) -> dict[str, Any]:
                 "creator": item["creator"]["login"],
             }
             for item in github.statuses.get(head, [])
-            if item["context"] not in legacy.STATUS_CONTEXT_PAIRS.values()
         ],
         "reviews": [
             {"body": item["body"], "commit_id": item["commit_id"], "creator": item["user"]["login"]}

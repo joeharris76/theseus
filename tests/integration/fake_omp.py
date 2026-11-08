@@ -341,7 +341,7 @@ def main(argv: list[str]) -> int:
         return 0
     workspace = argv[argv.index("--add-dir") + 1]
     cwd = argv[argv.index("--cwd") + 1]
-    prompt = argv[-1]
+    prompt = sys.stdin.read()
     reply, call = _next_reply(home, script["replies"], prompt)
     model = _resolved_model(argv)
     _record_model(home, call, model)

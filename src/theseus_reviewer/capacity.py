@@ -13,7 +13,7 @@ from ._vendor import yaml
 from .diff import Hunk, hunk_index
 from .providers import candidates, configured_models, routed, strip_effort
 
-OVERHEAD_TOKENS = {"inline": 80_000, "file-list": 170_000, "promotion": 170_000}
+OVERHEAD_TOKENS = {"inline": 80_000, "file-list": 165_000, "promotion": 165_000}
 BYTES_PER_TOKEN = 2.27
 USAGE_LIMIT_FALLBACK = "usage-limit"
 CATALOG_TIMEOUT_SECONDS = 60

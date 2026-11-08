@@ -14,7 +14,7 @@ from time import sleep
 from typing import Any
 from urllib.parse import quote
 
-from . import edits, legacy, reset
+from . import edits, reset
 from .retry import State
 
 STATE_ARTIFACT_PREFIX = "review-verdict-state-"
@@ -200,16 +200,16 @@ def review_edit_states(node_ids: Sequence[str]) -> dict[str, tuple[Any, bool]]:
     return states
 
 
-def state_artifact_name(pr: int, prefix: str = STATE_ARTIFACT_PREFIX) -> str:
-    return f"{prefix}{pr}"
+def state_artifact_name(pr: int) -> str:
+    return f"{STATE_ARTIFACT_PREFIX}{pr}"
 
 
-def attempt_state_artifact_name(pr: int, prefix: str = STATE_ARTIFACT_PREFIX) -> str:
-    return f"{prefix}attempt-{pr}"
+def attempt_state_artifact_name(pr: int) -> str:
+    return f"{STATE_ARTIFACT_PREFIX}attempt-{pr}"
 
 
 WORKFLOW_PATH = ".github/workflows/review-verdict.yml"
-WORKFLOW_PATHS = (WORKFLOW_PATH, legacy.WORKFLOW_PATH)
+WORKFLOW_PATHS = (WORKFLOW_PATH,)
 TRUSTED_EVENTS = frozenset({"pull_request_target", "issue_comment", "schedule", "workflow_dispatch"})
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
@@ -333,8 +333,6 @@ def latest_state(repo: str, pr: int, base: str) -> State | None:
     names = (
         state_artifact_name(pr),
         attempt_state_artifact_name(pr),
-        state_artifact_name(pr, legacy.STATE_ARTIFACT_PREFIX),
-        attempt_state_artifact_name(pr, legacy.STATE_ARTIFACT_PREFIX),
     )
     return _latest_state(repo, pr, names, WORKFLOW_PATHS, base)
 
@@ -456,7 +454,6 @@ def run_timed_out(repo: str, run_id: int) -> bool:
 
 
 SWEEP_FAILURE_SURFACE_PREFIX = "review-verdict failed twice without a result at: "
-SWEEP_FAILURE_SURFACE_PREFIXES = (SWEEP_FAILURE_SURFACE_PREFIX, legacy.SWEEP_FAILURE_SURFACE_PREFIX)
 
 
 def commit_statuses(repo: str, sha: str) -> list[dict[str, Any]]:
@@ -472,17 +469,6 @@ def is_app_status(status: Mapping[str, Any], bot_login: str) -> bool:
 
 
 def post_status(repo: str, head_sha: str, payload: Mapping[str, Any], token: str) -> None:
-    failures: list[GitHubError] = []
-    for context in (*legacy.mirror_contexts(payload["context"]), payload["context"]):
-        try:
-            _post_one_status(repo, head_sha, {**payload, "context": context}, token)
-        except GitHubError as exc:
-            failures.append(exc)
-    if failures:
-        raise GitHubError("; ".join(str(item) for item in failures))
-
-
-def _post_one_status(repo: str, head_sha: str, payload: Mapping[str, Any], token: str) -> None:
     env = dict(os.environ)
     env["GH_TOKEN"] = token
     result = subprocess.run(
@@ -529,19 +515,7 @@ def post_file(path: str, payload: Path, token: str) -> None:
 
 
 def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:
-    path = f"repos/{repo}/statuses/{head_sha}"
-    document = json.loads(payload.read_text(encoding="utf-8"))
-    failures: list[GitHubError] = []
-    for context in (*legacy.mirror_contexts(document["context"]), document["context"]):
-        with tempfile.TemporaryDirectory() as directory:
-            posted = Path(directory) / "status.json"
-            posted.write_text(json.dumps({**document, "context": context}), encoding="utf-8")
-            try:
-                post_file(path, posted, token)
-            except GitHubError as exc:
-                failures.append(exc)
-    if failures:
-        raise GitHubError("; ".join(str(item) for item in failures))
+    post_file(f"repos/{repo}/statuses/{head_sha}", payload, token)
 
 
 def pull_base_ref(repo: str, pr: int, token: str) -> str:

@@ -9,7 +9,7 @@ from pathlib import Path
 from .brief import FILE_LIST_DIFF_LINE, with_full_diff
 from .classifier import ChangedFile
 from .classify import Classification
-from .policy import SIZE_BUCKETS
+from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS
 from .protocol import DEFECT_ID, REPLY_LIMIT, strip_marker_lines
 from .verdict import RESPONSE_PLACEHOLDERS, VERDICT_KEYS
 
@@ -33,7 +33,7 @@ SLOT_MAX_BYTES = {
     "max_defects": 4,
     "prior_rule": 3072,
     "retry_note": 512,
-    "change_data": 100000,
+    "change_data": BRIEF_MAX_BYTES,
     "response_template": 16384,
 }
 _SHA = re.compile(r"[0-9a-f]{40}")

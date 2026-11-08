@@ -32,7 +32,6 @@ from . import (
     gateway_report,
     gitdiff,
     github,
-    legacy,
     omp_pin,
     processes,
     promotion,
@@ -61,6 +60,8 @@ from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
 from .policy import BRIEF_MAX_BYTES, SIZE_BUCKETS, Binding, Policy, PolicyError, RetryRules, Reviewer, load_policy
 from .render import (
+    SLOT_MAX_BYTES,
+    TEMPLATES,
     UNOPENED_PR,
     OversizeError,
     dispute_listing,
@@ -82,6 +83,9 @@ DIFF_NOT_STAGED_DETAIL = "the full pull request diff could not be staged in the 
 CAPTURE_DIR = "captures"
 SUMMARY_FILE = "summary.json"
 LEAK_DETAIL = "the reviewer's exit could not be confirmed clean"
+PRIORITY_ROW_BYTES = 90
+WORST_CASE_PR = 10 ** SLOT_MAX_BYTES["pr"] - 1
+WORST_CASE_DIFF_PATH = Path("/" + "p" * 1000) / runner.STAGED_DIFF_NAME
 
 
 class DiffNotStagedError(Exception):
@@ -103,7 +107,6 @@ REPOST = "repost"
 REFUSED = "refused"
 HOLD = "hold"
 PROSE_SUFFIXES = (".md", ".mdx", ".rst")
-DIFF_HEADROOM_BYTES = 32768
 GUARD_ATTEMPTS = 3
 GUARD_PAUSE_SECONDS = 2
 
@@ -494,9 +497,7 @@ def adjudicate_round(
 
 
 RERUN_COMMAND = "/review"
-_RERUN_COMMAND = re.compile(
-    rf"(?:{re.escape(RERUN_COMMAND)}|{re.escape(legacy.OWNER_COMMAND)})(?![\w-])", re.IGNORECASE
-)
+_RERUN_COMMAND = re.compile(rf"{re.escape(RERUN_COMMAND)}(?![\w-])", re.IGNORECASE)
 
 
 def _is_rerun_command(event: Mapping[str, Any]) -> bool:
@@ -1193,39 +1194,6 @@ def _plan_review(
     def _protected(path: str) -> bool:
         return path in upstream_protected or matchers.is_protected(path) or bool(matching([path], held))
 
-    listing_bytes = len(file_listing(changed).encode("utf-8"))
-    diff_bytes = len((diff_text or "").encode("utf-8"))
-    file_list_bytes = len(
-        file_list_block(
-            changed,
-            evidence_files,
-            evidence_files,
-            _block_hints(evidence_files, full_diff or "", out_dir, whole_files),
-        ).encode("utf-8")
-    )
-    if listing_bytes > BRIEF_MAX_BYTES:
-        brief_mode = "oversize"
-    elif (
-        promotion_record is None
-        and diff_text is not None
-        and diff_bytes <= BRIEF_MAX_BYTES - DIFF_HEADROOM_BYTES
-        and _inline_complete(diff_text, evidence_files)
-        and not _opaque_in_diff(diff_text, _protected)
-    ):
-        brief_mode = "inline"
-    elif file_list_bytes > BRIEF_MAX_BYTES:
-        brief_mode = "oversize"
-    else:
-        brief_mode = "file-list"
-    if brief_mode == "inline":
-        required, brief_bytes = 0, listing_bytes + diff_bytes
-    else:
-        required, brief_bytes = (
-            capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files),
-            file_list_bytes,
-        )
-    load_mode = "promotion" if promotion_record is not None else "inline" if brief_mode == "inline" else "file-list"
-    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes, load_mode)
     evidence_set = set(evidence_files)
     plan.update(
         {
@@ -1260,8 +1228,8 @@ def _plan_review(
             "unchanged_files": [item.path for item in scoped if item not in changed] if partial else [],
             "untracked_files": [item.path for item in files if item not in scoped] if partial else [],
             "restart_summary": restart,
-            "diff_inline": diff_text if brief_mode == "inline" else None,
-            "brief_mode": brief_mode,
+            "diff_inline": None,
+            "brief_mode": "file-list",
             "scope": "changed" if partial else "full",
             "coverage": coverage.VERSION,
             "reviewed_head": latest["head_sha"] if partial else None,
@@ -1272,6 +1240,20 @@ def _plan_review(
     )
     if promotion_record is not None:
         plan["promotion"] = dict(promotion_record)
+    brief_mode, brief_bytes = _choose_brief_mode(
+        plan,
+        out_dir,
+        diff_text,
+        inline_eligible=promotion_record is None
+        and diff_text is not None
+        and _inline_complete(diff_text, evidence_files)
+        and not _opaque_in_diff(diff_text, _protected),
+    )
+    plan["brief_mode"] = brief_mode
+    plan["diff_inline"] = diff_text if brief_mode == "inline" else None
+    required = 0 if brief_mode == "inline" else capacity.required_bytes(evidence_files, full_diff, out_dir, whole_files)
+    load_mode = "promotion" if promotion_record is not None else "inline" if brief_mode == "inline" else "file-list"
+    plan[capacity.LOAD_KEY] = capacity.review_load(required, brief_bytes, load_mode)
 
 
 def _same_model(left: Reviewer, right: Reviewer) -> bool:
@@ -1386,12 +1368,13 @@ def _chain_reviewer(plan: Mapping[str, Any], name: str) -> Reviewer:
     raise SystemExit(f"review-verdict: {name!r} is not in this run's reviewer chain")
 
 
-def _assemble_prompt(
+def compose_brief(
     plan: Mapping[str, Any],
     plan_dir: Path,
     classification: Classification,
-    workspace: Path,
-    unread: Sequence[str] = (),
+    unread: Sequence[str],
+    diff_path: Path | None,
+    max_bytes: int,
 ) -> str:
     reviewed = [
         ChangedFile(
@@ -1460,17 +1443,7 @@ def _assemble_prompt(
     prior_block = f"\nEarlier defects:\n{prior_listing(prior)}\n" if prior else ""
     if shown:
         prior_block += f"\nDisputed findings:\n{dispute_listing(shown)}\n"
-    staged = None
-    if plan.get("diff_inline"):
-        diff_text: str | None = plan["diff_inline"]
-    else:
-        diff_text = None
-        source = plan_dir / DIFF_FILE
-        staged = runner.stage_pull_request_diff(source, workspace)
-        if staged is None and source.is_file() and source.read_text(encoding="utf-8").strip():
-            raise DiffNotStagedError(DIFF_NOT_STAGED_DETAIL)
-        if plan.get("promotion") and promotion.stage_promotion_workspace(plan_dir, workspace) is None:
-            raise DiffNotStagedError("the staged promotion tree could not be written into the workspace")
+    diff_text: str | None = plan["diff_inline"] if plan.get("diff_inline") else None
     return render_review(
         template_name=classification.template,
         retry_note=retry_note(len(marked)),
@@ -1492,9 +1465,65 @@ def _assemble_prompt(
         prior_ids=[item["id"] for item in prior],
         files_block=files_block,
         diff_text=diff_text,
-        diff_path=staged,
-        max_bytes=BRIEF_MAX_BYTES,
+        diff_path=diff_path,
+        max_bytes=max_bytes,
     )
+
+
+def _assemble_prompt(
+    plan: Mapping[str, Any],
+    plan_dir: Path,
+    classification: Classification,
+    workspace: Path,
+    unread: Sequence[str] = (),
+) -> str:
+    staged = None
+    if not plan.get("diff_inline"):
+        source = plan_dir / DIFF_FILE
+        staged = runner.stage_pull_request_diff(source, workspace)
+        if staged is None and source.is_file() and source.read_text(encoding="utf-8").strip():
+            raise DiffNotStagedError(DIFF_NOT_STAGED_DETAIL)
+        if plan.get("promotion") and promotion.stage_promotion_workspace(plan_dir, workspace) is None:
+            raise DiffNotStagedError("the staged promotion tree could not be written into the workspace")
+    return compose_brief(plan, plan_dir, classification, unread, staged, BRIEF_MAX_BYTES)
+
+
+def _rendered_brief_bytes(plan: Mapping[str, Any], plan_dir: Path, *, marked: bool) -> int | None:
+    unread = plan.get("evidence_files", ()) if marked else ()
+    plan = {**plan, "pr": WORST_CASE_PR}
+    size = 0
+    for template in TEMPLATES:
+        classification = Classification(
+            size_bucket=SIZE_BUCKETS[0],
+            capability="deep",
+            template=template,
+            confidence=1.0,
+            gate_flags=("x",),
+            files=(),
+        )
+        try:
+            text = compose_brief(plan, plan_dir, classification, unread, WORST_CASE_DIFF_PATH, BRIEF_MAX_BYTES)
+        except OversizeError:
+            return None
+        size = max(size, len(text.encode("utf-8")))
+    return size
+
+
+def _choose_brief_mode(
+    plan: Mapping[str, Any], plan_dir: Path, diff_text: str | None, *, inline_eligible: bool
+) -> tuple[str, int]:
+    priority_rows = min(SLOT_MAX_BYTES["file_priority"], PRIORITY_ROW_BYTES * len(plan.get("reviewed_files", ())))
+    if inline_eligible:
+        inline = {**plan, "brief_mode": "inline", "diff_inline": diff_text}
+        rendered = _rendered_brief_bytes(inline, plan_dir, marked=False)
+        if rendered is not None and rendered + SLOT_MAX_BYTES["file_priority"] <= BRIEF_MAX_BYTES:
+            return "inline", rendered + priority_rows
+    file_list = {**plan, "brief_mode": "file-list", "diff_inline": None}
+    worst = _rendered_brief_bytes(file_list, plan_dir, marked=True)
+    typical = _rendered_brief_bytes(file_list, plan_dir, marked=False)
+    if worst is None or typical is None or worst + SLOT_MAX_BYTES["file_priority"] > BRIEF_MAX_BYTES:
+        return "oversize", 0
+    return "file-list", typical + priority_rows
 
 
 def command_review(args: argparse.Namespace) -> int:
@@ -1965,9 +1994,7 @@ def _own_statuses(
 ) -> list[dict[str, Any]]:
     found = []
     for status in github.commit_statuses(repo, head):
-        if status.get("context") not in legacy.context_aliases(status_context) or not github.is_app_status(
-            status, bot_login
-        ):
+        if status.get("context") != status_context or not github.is_app_status(status, bot_login):
             continue
         created = github.parse_time(status.get("created_at"))
         if created is None or not base_change.survives(created, base_changed_at):
@@ -2013,7 +2040,7 @@ def _already_surfaced(
         return False
     newest = max(mine, key=lambda status: status.get("updated_at") or status.get("created_at") or "")
     return newest.get("state") == "pending" and str(newest.get("description") or "").startswith(
-        github.SWEEP_FAILURE_SURFACE_PREFIXES
+        github.SWEEP_FAILURE_SURFACE_PREFIX
     )
 
 
