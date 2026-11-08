@@ -125,6 +125,10 @@ class Consumer:
     def primary_base(self) -> str:
         return self.gated_bases[0]
 
+    @property
+    def has_several_bases(self) -> bool:
+        return len(self.gated_bases) > 1
+
     def is_gated(self, branch: str) -> bool:
         return bases.matches(self.gated_bases, branch)
 

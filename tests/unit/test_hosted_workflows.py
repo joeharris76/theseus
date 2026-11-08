@@ -451,6 +451,21 @@ def test_the_guard_resolves_gated_bases_with_the_pinned_matcher_before_any_trust
         assert step_named(document, "guard", LOCK_STEP)["if"] == "steps.base.outputs.gated == 'true'"
 
 
+def test_a_gate_comment_on_another_gated_bases_pull_request_is_handed_to_that_bases_workflow() -> None:
+    gate = load(WORKFLOWS / "gate.yml")
+    handoff = step_named(gate, "gate", "Hand a comment on another gated base's pull request to that base's workflow")
+    assert handoff["if"] == "github.event_name == 'issue_comment' && steps.resolve.outputs.pr != ''"
+    assert handoff["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert handoff["env"]["REVIEW_TRUSTED_BASE"] == "${{ needs.guard.outputs.base }}"
+    assert 'check "$GATED_BASES" "$PR_BASE"' in handoff["run"]
+    assert 'gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE"' in handoff["run"]
+    assert gate["jobs"]["gate"]["permissions"]["actions"] == "write"
+    bootstrap = step_named(gate, "gate", "Check out the pinned Theseus bootstrap")
+    assert "src/theseus_reviewer/bases.py" in bootstrap["with"]["sparse-checkout"]
+    names = [step["name"] for step in steps_of(gate, "gate")]
+    assert names.index("Resolve the pull request") < names.index(handoff["name"]) < names.index("Mint the App token")
+
+
 def test_every_python_phase_of_a_gated_job_knows_the_base_its_policy_was_read_from() -> None:
     review = load(WORKFLOWS / "review.yml")
     for job in ("sweep", "health", "review"):

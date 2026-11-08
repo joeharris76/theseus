@@ -158,6 +158,7 @@ jobs:
     timeout-minutes: 10
     environment: ${{ inputs.environment }}
     permissions:
+      actions: write
       contents: read
       pull-requests: read
     env:
@@ -189,7 +190,9 @@ jobs:
           ref: ${{ inputs.theseus_ref }}
           path: theseus-bootstrap
           persist-credentials: false
-          sparse-checkout: src/theseus_reviewer/bootstrap.py
+          sparse-checkout: |
+            src/theseus_reviewer/bootstrap.py
+            src/theseus_reviewer/bases.py
           sparse-checkout-cone-mode: false
 
       - name: Install the gate pin from the current gated-branch lock
@@ -222,6 +225,31 @@ jobs:
           if printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Hand a comment on another gated base's pull request to that base's workflow
+        if: github.event_name == 'issue_comment' && steps.resolve.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr }}
+          GATED_BASES: ${{ inputs.gated_base }}
+          CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+          REVIEW_TRUSTED_BASE: ${{ needs.guard.outputs.base }}
+          BASES: ${{ github.workspace }}/theseus-bootstrap/src/theseus_reviewer/bases.py
+        run: |
+          set -euo pipefail
+          PR_BASE="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq 'select(.state == "open") | .base.ref')"
+          if [ -z "$PR_BASE" ] || [ "$PR_BASE" = "$REVIEW_TRUSTED_BASE" ]; then
+            exit 0
+          fi
+          CHECK=0
+          python3 -I -S "$BASES" check "$GATED_BASES" "$PR_BASE" || CHECK=$?
+          case "$CHECK" in
+            0) ;;
+            1) exit 0 ;;
+            *) exit 2 ;;
+          esac
+          gh workflow run "$CALLER_WORKFLOW" --repo "$REPO" --ref "$PR_BASE" -f pr="$PR_NUMBER"
+          echo "theseus-gate: dispatched the gate for #$PR_NUMBER on $PR_BASE"
 
       - name: Mint the App token
         id: app

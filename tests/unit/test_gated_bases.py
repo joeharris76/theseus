@@ -61,6 +61,7 @@ def _stub_pull(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
     monkeypatch.setattr(gate, "annotate_receipt", lambda *a: None)
     monkeypatch.setattr(gate, "fetch_bump_refusals", lambda *a, **k: [])
     monkeypatch.setattr(gate, "fetch_promotion_refusals", lambda *a, **k: (False, []))
+    monkeypatch.setattr(gate, "fetch_head_pulls", lambda *a: [])
 
 
 def _attestation(login: str) -> dict[str, Any]:
@@ -188,6 +189,66 @@ def test_a_pull_request_into_an_unlisted_base_is_refused(
     with pytest.raises(gate.UngatedBase, match="posted only for develop, release/\\*"):
         gate.evaluate("acme/r", 7, "token", config)
     assert not config.admits(base)
+
+
+def _head_pull(number: int, base: str, *, state: str = "open", head: str = HEAD) -> dict[str, Any]:
+    return {"number": number, "state": state, "base": {"ref": base}, "head": {"sha": head}}
+
+
+def test_a_head_that_is_also_a_pull_request_into_another_gated_base_is_refused_for_both(
+    develop_root: Path, release_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pulls = [_head_pull(7, RELEASE), _head_pull(8, "develop")]
+
+    monkeypatch.setenv(bases.TRUSTED_BASE_ENV, RELEASE)
+    from_release = gate.load_gate_config(POLICY_REL, release_root)
+    _stub_pull(monkeypatch, RELEASE)
+    monkeypatch.setattr(gate, "fetch_head_pulls", lambda token, repo, head: pulls)
+    with pytest.raises(gate.EvaluationFailed, match="also an open pull request into develop"):
+        gate.evaluate("acme/r", 7, "token", from_release)
+
+    monkeypatch.setenv(bases.TRUSTED_BASE_ENV, "develop")
+    from_develop = gate.load_gate_config(POLICY_REL, develop_root)
+    _stub_pull(monkeypatch, "develop")
+    monkeypatch.setattr(gate, "fetch_head_pulls", lambda token, repo, head: pulls)
+    with pytest.raises(gate.EvaluationFailed, match=f"also an open pull request into {RELEASE}"):
+        gate.evaluate("acme/r", 8, "token", from_develop)
+
+
+@pytest.mark.parametrize(
+    "others",
+    [
+        [],
+        [_head_pull(8, RELEASE, state="closed")],
+        [_head_pull(8, RELEASE, head="d" * 40)],
+        [_head_pull(8, "feature/x")],
+        [_head_pull(8, "main")],
+        [_head_pull(8, "develop")],
+    ],
+)
+def test_a_head_shared_only_with_closed_moved_unlisted_or_same_base_pull_requests_is_still_gated(
+    others: list[dict[str, Any]], develop_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(bases.TRUSTED_BASE_ENV, raising=False)
+    config = gate.load_gate_config(POLICY_REL, develop_root)
+    _stub_pull(monkeypatch, "develop")
+    monkeypatch.setattr(gate, "fetch_head_pulls", lambda token, repo, head: [_head_pull(7, "develop"), *others])
+    monkeypatch.setattr(gate, "fetch_comments", lambda *a: [_attestation("develop-owner")])
+    assert gate.evaluate("acme/r", 7, "token", config)[1] == PASS
+
+
+def test_a_single_base_consumer_never_looks_for_other_pull_requests_of_the_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(bases.TRUSTED_BASE_ENV, raising=False)
+    config = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
+    _stub_pull(monkeypatch, "develop")
+
+    def forbidden(*args: Any) -> None:
+        raise AssertionError("a single gated base has no rival base")
+
+    monkeypatch.setattr(gate, "fetch_head_pulls", forbidden)
+    assert gate.evaluate("acme/r", 7, "token", config)[0] == HEAD
 
 
 def test_a_policy_is_never_applied_to_a_pull_request_whose_own_base_supplied_a_different_policy(
