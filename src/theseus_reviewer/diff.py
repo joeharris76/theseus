@@ -63,6 +63,33 @@ def commentable_lines(diff_text: str) -> dict[str, frozenset[int]]:
     return {name: frozenset(numbers) for name, numbers in lines_by_path.items()}
 
 
+def changed_lines(diff_text: str) -> dict[str, frozenset[int]]:
+    """Lines the change touches on the new side: added lines, plus every new-side line of a hunk that deletes."""
+    found: dict[str, set[int]] = {name: set(numbers) for name, numbers in added_lines(diff_text).items()}
+    path: str | None = None
+    span: tuple[int, int] | None = None
+    remaining = 0
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            path, span, remaining = None, None, 0
+            continue
+        if remaining == 0 and line.startswith("+++ "):
+            path = _target_path(line)
+            continue
+        match = _HUNK.match(line)
+        if match is not None:
+            start = int(match.group("start"))
+            count = int(match.group("count") or "1")
+            span = (start, start + max(count, 1))
+            remaining = count
+            continue
+        if line.startswith("+") or line.startswith(" "):
+            remaining -= 1
+        elif line.startswith("-") and path is not None and span is not None:
+            found.setdefault(path, set()).update(range(span[0], span[1] + 1))
+    return {name: frozenset(numbers) for name, numbers in found.items()}
+
+
 def added_lines(diff_text: str) -> dict[str, frozenset[int]]:
     lines_by_path: dict[str, set[int]] = {}
     for path, number, added in _walk(diff_text):

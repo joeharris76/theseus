@@ -809,6 +809,12 @@ INTRODUCED = "introduced"
 ADVISORY_SEVERITIES = ("Medium", "Low")
 
 
+FORCED_FIXED_MARK = "is marked fixed on a dispute re-review of an unchanged patch"
+
+
+_NAMES_LOCATION = re.compile(r"[\w./-]+:\d+|\blines?\s+\d+", re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class AdvisoryScope:
     added: Mapping[str, Sequence[Sequence[int]]]
@@ -816,7 +822,7 @@ class AdvisoryScope:
     advisory: bool
 
     def verified(self, finding: Finding) -> bool:
-        if finding.origin != PRE_EXISTING or finding.file in self.new_files:
+        if finding.origin != PRE_EXISTING or finding.file in self.new_files or _NAMES_LOCATION.search(finding.detail):
             return False
         end = finding.end_line or finding.line
         return not any(start <= end and finding.line <= last for start, last in self.added.get(finding.file, ()))

@@ -15,6 +15,7 @@ from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import State
 
 from .test_attempts import CHECKER, HEAD, RUN_ID, _classification, _v, _write
+from .test_attempts import DIFF as DIFF_FOR_ANCHOR
 from .test_cli_plan import (
     CAPTURE,
     TWO_FILE_DIFF,
@@ -510,3 +511,21 @@ def test_threadless_finding_two_keyed_comment_disputes_escalation_owner_adjudica
         review_check.PASS,
         f"review: pass (review verdict for {HEAD})",
     )
+
+
+def test_a_carried_finding_from_an_earlier_head_opens_on_the_files_first_changed_line(
+    policy: Policy, tmp_path: Path
+) -> None:
+    plan = _carry_plan(policy, _prior("D1", line=2))
+    plan["protocol"]["previous_head"] = "c" * 40
+    final = _final(policy, tmp_path, plan, _with_priors(_v("s"), D1="not_fixed"))
+    comment = final.review["comments"][0]
+    assert comment["line"] == min(commentable_lines(DIFF_FOR_ANCHOR)[CHECKER])
+    assert "recorded at line 2 of an earlier head" in comment["body"]
+
+
+def test_a_same_head_carried_finding_keeps_its_line(policy: Policy, tmp_path: Path) -> None:
+    plan = _carry_plan(policy, _prior("D1", line=2))
+    plan["protocol"]["previous_head"] = HEAD
+    final = _final(policy, tmp_path, plan, _with_priors(_v("s"), D1="not_fixed"))
+    assert final.review["comments"][0]["line"] == 2

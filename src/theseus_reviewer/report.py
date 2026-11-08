@@ -110,23 +110,31 @@ def _threads_to_open(
     known = plan.get("open_findings") or {}
     opened: list[tuple[Finding, str]] = []
     unanchored: list[str] = []
+    previous_head = (plan.get("protocol") or {}).get("previous_head")
+    moved = previous_head is not None and previous_head != plan.get("head_sha")
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
-        end = entry.get("end_line")
+        lines = commentable.get(entry["file"], frozenset())
+        line, end = entry["line"], entry.get("end_line")
+        if moved or line not in lines:
+            # The recorded line belongs to an earlier head: open on the file's first changed line instead.
+            if not moved or not lines:
+                unanchored.append(entry["id"])
+                continue
+            line, end = min(lines), None
         finding = Finding(
             entry["severity"],
             entry["file"],
-            entry["line"],
+            line,
             entry["title"],
-            "",
-            end if isinstance(end, int) and end > entry["line"] else None,
+            f"Opened on the first changed line of the file; the finding was recorded at line {entry['line']} of an earlier head."
+            if line != entry["line"]
+            else "",
+            end if isinstance(end, int) and end > line else None,
         )
-        if entry["line"] in commentable.get(entry["file"], frozenset()):
-            if dedup.fingerprint(finding.file, finding.title) not in known:
-                opened.append((finding, entry["id"]))
-        else:
-            unanchored.append(entry["id"])
+        if dedup.fingerprint(finding.file, finding.title) not in known:
+            opened.append((finding, entry["id"]))
     return opened, unanchored
 
 

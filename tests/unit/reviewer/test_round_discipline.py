@@ -370,3 +370,16 @@ def test_the_new_protocol_keys_default_to_today_and_are_strictly_validated() -> 
         bad["brief"] = brief
         with pytest.raises(PolicyError, match="brief"):
             parse_policy(bad)
+
+
+def test_after_a_forced_fixed_invalid_every_later_attempt_demotes_even_if_attempts_remain(policy: Policy) -> None:
+    plan = _forced_plan(policy, chain=[policy.reviewers["small"].to_json(), policy.reviewers["medium"].to_json()])
+    detail = f"disputed finding D1 {protocol.FORCED_FIXED_MARK}, which cannot fix anything"
+    stalled = [selection.Attempt(1, "small", selection.ABSENT, "invalid", detail)]
+    marked = cli._with_last_attempt(plan, _classification("small"), stalled, policy.reviewers["small"], 2)
+    assert marked["last_attempt"] is True
+    other = [selection.Attempt(1, "small", selection.ABSENT, "invalid", "some other problem")]
+    assert (
+        cli._with_last_attempt(plan, _classification("small"), other, policy.reviewers["small"], 2)["last_attempt"]
+        is False
+    )

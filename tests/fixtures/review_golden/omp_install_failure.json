@@ -181,6 +181,7 @@
       },
       "pre_existing": "block",
       "previous": null,
+      "previous_head": null,
       "prior": [],
       "reason": "first review of this pull request",
       "round": 1,

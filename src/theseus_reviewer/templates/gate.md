@@ -68,9 +68,9 @@ exist in the head commit. When the defect spans several lines, set end_line to t
 otherwise set end_line to null.
 When one defect class recurs at several places, list it once: name the class in the title and every location in
 the detail (path:line). It counts as one defect. Never list the same defect again under a new title.
-Set origin to pre-existing only when the defective lines were already in the base commit and this change neither
-adds nor modifies them; otherwise set origin to introduced. The review checks origin against the diff, so lines
-this change adds are always introduced.
+Set origin to pre-existing only when the defect itself already existed at the base commit; a defect this change
+causes, including by deleting or moving code, is introduced. When in doubt, or when the defect spans several
+locations, set origin to introduced. The review checks origin against the diff.
 
 Set status to complete when you have read what the review needs and decided. If you could not read the files
 the review needs, set status to incomplete, explain why in incomplete_reason, and set decision to NONE. Never

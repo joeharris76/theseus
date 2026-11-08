@@ -61,9 +61,9 @@ from .classify import Classification, classification_note, classify_diff, fallba
 from .diff import (
     SINCE_STAGED_NAME,
     STAGED_DIFF_NAME,
-    added_lines,
     binary_files,
     binary_notice_count,
+    changed_lines,
     commentable_lines,
     hunk_index,
     select_files,
@@ -1137,6 +1137,7 @@ def _protocol_round(
         "pre_existing": policy.protocol.pre_existing,
         "step_back": step.step_back,
         "finding_rounds": len(protocol.finding_streak(found.records, latest["cycle"])) if follow_up else 0,
+        "previous_head": latest.get("head_sha") if follow_up else None,
     }
     if step.forced:
         plan["protocol"]["maintained"] = protocol.maintained_counts(found.records, digest)
@@ -1172,7 +1173,7 @@ def _added_ranges(diff_text: str | None) -> dict[str, list[list[int]]] | None:
         return None
     return {
         path: [[start, end] for start, end in coverage.merge(numbers)]
-        for path, numbers in added_lines(diff_text).items()
+        for path, numbers in changed_lines(diff_text).items()
     }
 
 
@@ -1500,7 +1501,11 @@ def _with_last_attempt(
         recovery=recovery.Recovery(recovery.RETRY, recovery.FALLBACK),
     )
     step = selection.next_step(_selection(plan, classification), [*attempts, failed])
-    return {**plan, "last_attempt": step.kind != selection.REVIEW}
+    stalled = any(
+        item.reviewer == reviewer.name and item.absence == INVALID and protocol.FORCED_FIXED_MARK in item.detail
+        for item in attempts
+    )
+    return {**plan, "last_attempt": stalled or step.kind != selection.REVIEW}
 
 
 def _assemble_prompt(

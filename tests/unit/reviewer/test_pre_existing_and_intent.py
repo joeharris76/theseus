@@ -366,3 +366,36 @@ def test_the_retry_brief_names_only_the_unseen_hunks_of_the_marked_file(policy: 
     assert "[hunks not fully seen in your previous attempt]" in row
     assert f"(unseen: {STAGED_DIFF_NAME} lines 8-10)" in row
     assert re.search(r"lines 4-6", row) is None
+
+
+def test_changed_lines_cover_every_new_side_line_of_a_hunk_that_deletes() -> None:
+    from theseus_reviewer.diff import changed_lines
+
+    diff = (
+        "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,5 +1,4 @@\n a\n-if x is None: return\n use(x.attr)\n b\n c\n"
+        "@@ -40,2 +39,3 @@\n ctx\n+only an addition\n ctx2\n"
+    )
+    found = changed_lines(diff)["f"]
+    assert {1, 2, 3, 4, 5} <= found and 39 not in found and 40 in found
+
+
+def test_a_defect_caused_by_deleting_a_guard_is_never_advisory(policy: Policy) -> None:
+    plan = _plan_with(policy, added_lines={CHECKER: [[1, 5]]})
+    assert _judged(plan, _old("Medium", 3)).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["The same pattern recurs at checker.py:11.", "Also see line 11.", "other.py:3 repeats it"],
+)
+def test_a_finding_that_names_another_location_is_never_advisory(policy: Policy, detail: str) -> None:
+    plan = _plan_with(policy)
+    assert _judged(plan, _old("Medium", 2, detail=detail)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_the_origin_rule_in_every_template_covers_deleted_and_grouped_defects() -> None:
+    from theseus_reviewer.render import TEMPLATE_DIR, TEMPLATES
+
+    for name in TEMPLATES:
+        text = (TEMPLATE_DIR / f"{name}.md").read_text(encoding="utf-8")
+        assert "including by deleting or moving code, is introduced" in text and "spans several" in text
