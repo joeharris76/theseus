@@ -33,6 +33,7 @@ POLICY_KEYS = frozenset(
         "evidence",
         "consumer",
         "promotion",
+        "brief",
     }
 )
 
@@ -103,6 +104,13 @@ class ClassifierRules:
 class ProtocolRules:
     max_defects: int
     max_do_not_ship: int
+    max_finding_rounds: int | None = None
+    pre_existing: str = "block"
+
+
+@dataclass(frozen=True)
+class BriefRules:
+    include_intent: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,6 +188,7 @@ class Policy:
     omp_sha256: Mapping[str, str] = field(default_factory=dict)
     evidence: EvidenceRules = EvidenceRules()
     promotion: PromotionRules = PromotionRules()
+    brief: BriefRules = BriefRules()
 
     def binding(self) -> Binding:
         return Binding(self.bot_login, frozenset(self.consumer.attesters))
@@ -401,6 +410,8 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         protocol=ProtocolRules(
             max_defects=int(protocol.get("max_defects", 0)),
             max_do_not_ship=int(protocol.get("max_do_not_ship", 0)),
+            max_finding_rounds=_finding_rounds(protocol),
+            pre_existing=_pre_existing(protocol),
         ),
         pools=pools,
         reviewers=reviewers,
@@ -426,6 +437,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
             allowed_artifact_hosts=allowed_hosts,
             dependencies=dependencies,
         ),
+        brief=_brief_rules(data.get("brief")),
     )
     _require(
         policy.classifier.unavailable_bucket is None or policy.classifier.unavailable_bucket in SIZE_BUCKETS,
@@ -450,3 +462,36 @@ def load_policy(path: Path) -> Policy:
     from ._vendor import yaml
 
     return parse_policy(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+PRE_EXISTING_MODES = ("block", "advisory")
+
+
+def _finding_rounds(protocol: Mapping[str, Any]) -> int | None:
+    value = protocol.get("max_finding_rounds")
+    if value is None:
+        return None
+    _require(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 1,
+        "protocol max_finding_rounds must be an integer of at least 1",
+    )
+    return value
+
+
+def _pre_existing(protocol: Mapping[str, Any]) -> str:
+    value = protocol.get("pre_existing", "block")
+    _require(value in PRE_EXISTING_MODES, f"protocol pre_existing must be one of {PRE_EXISTING_MODES}")
+    return value
+
+
+def _brief_rules(raw: Any) -> BriefRules:
+    if raw is None:
+        return BriefRules()
+    _require(isinstance(raw, Mapping), "brief must be a mapping")
+    unknown = sorted(str(key) for key in set(raw) - {"include_intent"})
+    _require(
+        not unknown, f"brief has unknown key {unknown[0] if unknown else ''!r}; allowed keys are ['include_intent']"
+    )
+    include = raw.get("include_intent", False)
+    _require(isinstance(include, bool), "brief include_intent must be a boolean")
+    return BriefRules(include_intent=include)

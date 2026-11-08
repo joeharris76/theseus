@@ -28,6 +28,16 @@ promotion:                    # optional; when present, repository is required
 
 `classifier.unavailable_bucket` is one of the size buckets (`trivial`, `small`, `medium`, `large`, `huge`, `max`). Without it a classifier outage leaves the change pending, as before. With it, a classifier outage (the judgment service unreachable, or answering 429 or a 5xx; a missing `TYPESAFE_API_KEY` or any other 4xx is configuration and still refuses) classifies the change from that bucket instead, or from the size bucket the service had already answered when that is larger: the capability is `deep`, the template is `deep`, and when the change touches `classifier.gate_paths` the bucket is raised to at least `large` and the template is `gate`. The classification is recorded with `source: fallback`, and the review body says `Classification unavailable (TypeSafe): reviewed from the <bucket> bucket with the <template> template.` A hosted review and a local review behave the same way.
 
+The `protocol` section's `max_defects` and `max_do_not_ship` are required. Three further keys are optional and strictly validated; leaving them out keeps today's behaviour:
+
+```yaml
+protocol:
+  max_finding_rounds: 4     # integer >= 1; see Round discipline
+  pre_existing: advisory    # block (default) or advisory; see Pre-existing findings
+brief:
+  include_intent: true      # boolean, default false; see Author statement
+```
+
 Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 100000 bytes inside the package, and a policy that still sets it is refused.
 
 All `consumer` paths are repository-relative and are read relative to the trusted checkout root (`--root` for the gate, the working directory for `plan`, the trusted root for local review). Absolute paths, `..`, empty or backslash segments are refused.
@@ -130,7 +140,7 @@ A verdict that clears a change, SHIP or SHIP WITH FIXES, is accepted only when t
 - omp cuts a line longer than 768 columns in a read and reports the cut lines in `details.meta.limits.columnTruncated.lines` (`first` and `last`, absolute line numbers); those lines, and the span between them, are not counted as returned, and a read whose cut lines are not reported as numbers counts for nothing. A `:raw` read is not cut and counts in full, so a hunk with a very long line is seen by reading the diff block with `:raw`. omp counts columns in UTF-16 code units (an astral character is two), and a diff line is counted with its `+`, `-` or space prefix. Because a plain read drops every line from the first cut line to the last, the retry hint marks a hunk `:raw` when its block holds a line over 768 columns or lies between two such lines of the same diff, and gives the span to paste, for example `(read with :raw as .review-pull-request.diff:raw:120-180)`; hunks outside that stretch keep their plain `lines a-b` spans. The `read-lines` canary pins the raw read's line numbers.
 - A text file that git reports only as `Binary files differ` needs its whole file read; a binary file needs one successful read; a byte-identical rename or a mode change has no hunk and needs none.
 - Inline briefs hold every changed hunk already; the plan asserts that each required file appears in the diff it inlines and falls back to a file-list brief otherwise.
-- A retry names the diff line spans of the files the earlier attempt left unseen.
+- A retry names the diff line spans of the hunks the earlier attempt left unseen, not of every hunk of the files it missed: the attempt artifact records the unseen spans (`absence.unseen`, up to 200 `[path, source, start, end]` entries), and the retry brief marks each unread required file with `(unseen: <diff> lines a-b, c)`, with `:raw` ranges where a line over 768 columns needs them, `read the whole file` for a whole-file read, and `and N more` past six spans. This is a reading aid only: the rule above still counts every changed hunk.
 - An attempt whose omp stream shows a compaction (`auto_compaction_start`) is refused as incomplete, and the review overlay turns `compaction.enabled` and `compaction.midTurnEnabled` off.
 - Records of an accepted clearing round carry `coverage: 1`. A SHIP or SHIP WITH FIXES recorded without it (made before this rule) is never carried to another head or the same patch; the next round is a full first round, and a follow-up after it takes full scope.
 - Withdrawals and disputed fixes must cite a line inside the lines a read returned.
@@ -140,3 +150,29 @@ A verdict that clears a change, SHIP or SHIP WITH FIXES, is accepted only when t
 Captures are schema 2: they add a `reads` ledger (path, returned line spans, truncated, elided) with no content. `theseus audit-coverage --capture FILE --policy PATH [--repo-root DIR] [--repo OWNER/NAME] [--base-ref REF] [--trusted-ref REF] [--head REF] [--json]` plans the change locally, stages its diffs, and applies the rule to a capture's reads (exact for schema 2; reconstructed favorably from the requested selectors for schema 1, whose results are withheld). A promotion's plan inputs resolve through `REVIEW_PROMOTION_SOURCES`, as for a local review. Exit `0` means every hunk was seen and nothing compacted, `3` not covered, `2` undetermined.
 
 Attempt artifacts are kept 30 days, like captures.
+
+## Round discipline
+
+Without `protocol.max_finding_rounds` a pull request can take any number of follow-up rounds. With it, the round count is derived from the app's own unedited review records: a round with findings is a `first` or `follow-up` record of the current cycle with open defects, forced dispute re-reviews included, counted back from the latest record. A record with no open defects (or a new cycle) resets the count.
+
+- **Step-back.** When the count reaches the cap and the patch changes again, the next round is one full-scope re-review. It keeps every finding id, carries, disputes and the coverage rule exactly as any follow-up does, so no open defect can be dropped. The brief says the pull request has had N rounds with findings, lists the earlier defects (data), and asks the reviewer to look for every remaining instance of each class and report a class once. The verdict body says `Step back: ...` and the record carries `step_back: 1`. The step-back happens once per run of finding rounds; later rounds are ordinary again.
+- **Delta first.** An ordinary follow-up stages `.review-since-last-review.diff`, the diff from the previously reviewed head to this head (built in the trusted plan step by `git diff -M`, never from pull request content; skipped when it cannot be built, is empty or over the brief bound). The brief tells the reviewer to read it first. It is a reading instruction only: required reads, hunk coverage and defect scoping count exactly what they counted before.
+- **Class-level findings.** The templates (v3) ask for one defect entry per recurring class, naming every location, and never the same defect again under a new title.
+- **Last attempt of a dispute round.** A reviewer that answers a dispute re-review of an unchanged patch with a verified `fixed` makes the attempt invalid while another attempt remains. On the last attempt (decided from the run's selection: no retry and no later reviewer left) the disposition is demoted to maintained, so the round publishes and counts toward escalation instead of spending the sweep's budget.
+
+## Disputing a finding
+
+Every finding on a line inside the diff gets a review thread carrying the finding marker, including a finding carried into a round from an author-supplied local record, which previously had none. A finding that cannot be anchored (its line is outside the diff) has no thread, and the review body says so. Two disputes reach the same re-judgement and escalation:
+
+- a reply starting with `Dispute:` on the finding's thread (from an owner, member or collaborator), as before;
+- a pull request comment `Dispute: D<n> - <reason>` from a login in `consumer.attesters`. The prefix is matched case-insensitively; the rest of the grammar is exact (`D<n>`, one space, `- `, a non-empty reason). The comment must be unedited, from a user account, posted after the review that first listed that finding in the current cycle, and name a finding that is still open. The reason is data, shown to the reviewer like a thread reply, which must restate it in `claim` and answer it.
+
+A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. Two dispute re-reviews of one patch that leave the finding open escalate it, after which only an attester's `Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>` settles it.
+
+## Pre-existing findings
+
+The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). The review honours `pre-existing` only when the model says so and the trusted base-to-head diff adds no line in the finding's span and the file is not new in the change. With `protocol.pre_existing: advisory`, a verified pre-existing Medium or Low finding is recorded under `advisory` in the review record, listed under `Pre-existing, not blocking` and does not block; Critical and High always block. With `block` (the default) every finding blocks and a verified pre-existing one only carries a `(pre-existing)` tag.
+
+## Author statement
+
+With `brief.include_intent: true` the brief opens its fenced change data with the pull request title, the first 2000 characters of the description (review and local-record markers and HTML comments removed) and up to three same-repository issues the description closes, fixes, resolves or refs (title and 1000 characters of text each). A local review uses the branch's commit messages instead. All of it is untrusted data: sanitized (links, mentions and credentials removed), inside the existing fences, and never part of a template slot; the template only says to judge whether the change does what the statement says.
