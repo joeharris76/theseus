@@ -25,9 +25,11 @@ from .verdict import (
     DEMOTED_STATUSES,
     DO_NOT_SHIP,
     FIXED,
+    LINK_REMOVED,
     MAX_CLAIM,
     MAX_LINE,
     NOT_FIXED,
+    REDACTED,
     SHIP,
     SHIP_WITH_FIXES,
     WITHDRAWN,
@@ -785,19 +787,19 @@ def judge(
         outside = tuple(outside_list)[:NOT_COUNTED_LIMIT]
     counted = tuple(dict.fromkeys(in_scope))
     merged = len(in_scope) - len(counted)
+    uncounted = verdict.listed - len(verdict.defects)
     advisory = (
         tuple(
             item
             for item in counted
             if advisory_scope.demotes(item)
             and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
-            and not advisory_scope.aliased(_resolve_tree(item.file, workspace), workspace)
+            and not advisory_scope.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
         )
-        if advisory_scope is not None
+        if advisory_scope is not None and not uncounted
         else ()
     )
     counted = tuple(item for item in counted if item not in advisory)
-    uncounted = verdict.listed - len(verdict.defects)
     confirmed_claims = sum(1 for item in carried if item["id"] in claimed)
     total = (
         sum(1 for item in carried if item["id"] not in claimed)
@@ -835,7 +837,7 @@ _FILE_TOKEN = re.compile(r"[\w./-]+\.\w{1,8}")
 
 def names_other_location(finding: Finding) -> bool:
     text = f"{finding.title}\n{finding.detail}"
-    if _LOCATION_MARKS.search(text):
+    if LINK_REMOVED in text or REDACTED in text or _LOCATION_MARKS.search(text):
         return True
     own = {finding.file, finding.file.rsplit("/", 1)[-1]}
     return any(token.strip(".") not in own for token in _FILE_TOKEN.findall(text))
@@ -864,15 +866,18 @@ class AdvisoryScope:
                 return False
         return True
 
-    def aliased(self, target: str, workspace: Path | str | None) -> bool:
-        """Whether a path this change adds or touches is a different spelling (a symlink) of the target."""
+    def aliased(self, targets: Sequence[str], workspace: Path | str | None) -> bool:
+        """Whether a path this change adds or touches is a symlink spelling of, or a directory above, a target."""
         if workspace is None:
             return False
-        goal = _clean_path(target)
-        return any(
-            _clean_path(path) != goal and _resolve_tree(path, workspace) == goal
-            for path in (*self.new_files, *self.changed, *self.added)
-        )
+        goals = {_clean_path(target) for target in targets}
+        for path in (*self.new_files, *self.changed, *self.added):
+            own = _clean_path(path)
+            real = _resolve_tree(path, workspace)
+            for goal in goals:
+                if own != goal and (real == goal or goal.startswith(f"{real}/") or goal.startswith(f"{own}/")):
+                    return True
+        return False
 
     def demotes(self, finding: Finding) -> bool:
         return self.advisory and finding.severity in ADVISORY_SEVERITIES and self.verified(finding)

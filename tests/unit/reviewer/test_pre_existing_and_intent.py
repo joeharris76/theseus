@@ -35,7 +35,7 @@ def _plan_with(policy: Policy, mode: str = "advisory", **over: Any) -> dict[str,
 
 
 def _old(severity: str, line: int = 2, **over: Any) -> dict[str, Any]:
-    return {**_finding(severity, line), "origin": "pre-existing", **over}
+    return {**_finding(severity, line), "detail": "the guard is missing", "origin": "pre-existing", **over}
 
 
 def _judged(plan: dict[str, Any], *findings: dict[str, Any]) -> protocol.Judgement:
@@ -551,3 +551,30 @@ def test_an_unrelated_untouched_file_still_demotes_beside_a_symlink_change(polic
     plan = _plan_with(policy, new_files=["alias.py"], added_lines={"alias.py": []}, changed_paths=["alias.py"])
     verdict = validate(_v("s", [{**_old("Medium", 2), "file": "other.py"}]))
     assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP
+
+
+def test_a_finding_under_a_directory_symlink_the_change_adds_is_not_demoted(policy: Policy, tmp_path: Path) -> None:
+    (tmp_path / "src" / "core").mkdir(parents=True)
+    (tmp_path / "src" / "core" / "foo.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "lib").symlink_to("src/core")
+    plan = _plan_with(policy, new_files=["lib"], added_lines={"lib": []}, changed_paths=["lib"])
+    for cited in ("lib/foo.py", "src/core/foo.py"):
+        verdict = validate(_v("s", [{**_old("Medium", 2), "file": cited}]))
+        assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES, cited
+
+
+@pytest.mark.parametrize("detail", ["recurs at https://github.com/o/n/blob/abc/src/other.py#L40", "see [secret]"])
+def test_a_location_given_only_as_a_link_or_redaction_blocks_demotion(policy: Policy, detail: str) -> None:
+    from theseus_reviewer.verdict import REDACTED
+
+    verdict = validate(_v("s", [{**_old("Medium", 2), "detail": detail.replace("[secret]", REDACTED)}]))
+    assert "[link removed]" in verdict.defects[0].detail or REDACTED in verdict.defects[0].detail
+    assert protocol.judge_planned(verdict, _plan_with(policy)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_findings_beyond_the_listing_cap_keep_demotion_off(policy: Policy) -> None:
+    findings = [_old("Medium", 2, title=f"issue {n}") for n in range(51)]
+    data = {**_v("s", findings[:50]), "defect_count": 51}
+    verdict = validate(data, trusted=True)
+    judgement = protocol.judge_planned(verdict, _plan_with(policy))
+    assert judgement.advisory == () and judgement.decision != protocol.SHIP
