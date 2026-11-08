@@ -726,7 +726,7 @@ def test_a_secret_left_in_the_environment_is_still_withheld_when_a_handover_arri
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env={**os.environ},
+        env={name: value for name, value in os.environ.items() if name not in local.SCRUBBED_AT_START},
         capture_output=True,
         text=True,
         check=True,
