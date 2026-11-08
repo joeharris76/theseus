@@ -179,7 +179,7 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 
 ## Migrating from 0.1.x
 
-0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. 0.2.0 through 0.2.4 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. 0.2.5 deletes both. Theseus writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. This is the only place the old names appear.
+0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. 0.2.0 through 0.2.4 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. 0.2.5 deletes both. Theseus writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
 
 | 0.1.x | 0.2.5 |
 |---|---|

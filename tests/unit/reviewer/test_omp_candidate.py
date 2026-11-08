@@ -165,7 +165,7 @@ def _good_runs() -> dict[str, ClientRun]:
         "prompt-transport": _run(
             "prompt-transport",
             "",
-            upstream=(_request(prompt=f"{TRANSPORT_HEAD} {TRANSPORT_TAIL}"),),
+            upstream=(_request(prompt=TRANSPORT_PROMPT),),
             argv=("omp", "--print"),
         ),
         **_probe_runs(),
@@ -1120,6 +1120,7 @@ def test_the_prompt_transport_check_is_green_on_a_run_that_delivered_both_tokens
         ({"upstream": (_request(prompt=TRANSPORT_HEAD),)}, TRANSPORT_TAIL),
         ({"upstream": (_request(prompt="Review the change."),)}, TRANSPORT_HEAD),
         ({"argv": ("omp", f"{TRANSPORT_HEAD} text")}, "command line carries the prompt"),
+        ({"upstream": (_request(prompt=TRANSPORT_PROMPT.replace("xxxx", "xxx", 1)),)}, "whole and unchanged"),
         ({"exit_code": 1}, "exited 1"),
     ],
 )

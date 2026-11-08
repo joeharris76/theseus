@@ -511,6 +511,8 @@ def transport_checks(run: ClientRun) -> list[Check]:
     for token in (TRANSPORT_HEAD, TRANSPORT_TAIL):
         if token not in prompt:
             failures.append(f"a token sent only on standard input did not reach the model request ({token})")
+    if TRANSPORT_PROMPT not in prompt:
+        failures.append("the prompt sent on standard input did not reach the model request whole and unchanged")
     if any(TRANSPORT_HEAD in item or TRANSPORT_TAIL in item for item in run.argv):
         failures.append("the command line carries the prompt")
     if len(TRANSPORT_PROMPT.encode("utf-8")) <= ARGV_PROMPT_LIMIT:

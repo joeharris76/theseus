@@ -17,6 +17,7 @@ from ._vendor import yaml
 from .candidate_canaries import Canary
 from .candidate_env import quiet_env
 from .candidate_stub import LOOPBACK, CanaryServer, UpstreamStub, UpstreamTurn, error_turn, text_turn, tool_turn
+from .policy import BRIEF_MAX_BYTES
 
 CLIENT_SECONDS = 180
 START_SECONDS = 60
@@ -47,8 +48,7 @@ LONG_SOURCE = "".join(
 PROMPT = "Review the change."
 TRANSPORT_HEAD = "transport-token-head-7f3a"
 TRANSPORT_TAIL = "transport-token-tail-91c2"
-TRANSPORT_BYTES = 200 * 1024
-TRANSPORT_PROMPT = f"{TRANSPORT_HEAD}\n{'x' * TRANSPORT_BYTES}\n{TRANSPORT_TAIL}\nReview the change."
+TRANSPORT_PROMPT = f"{TRANSPORT_HEAD} {'x' * BRIEF_MAX_BYTES} {TRANSPORT_TAIL} Review the change."
 VERDICT = {
     "status": "complete",
     "incomplete_reason": "",
