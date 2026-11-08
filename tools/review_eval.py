@@ -360,9 +360,15 @@ def working_tree(root: Path) -> Tree:
 
 def guidance_paths(tree: Tree) -> set[str]:
     named = {path for path in tree.paths if GUIDANCE_GLOB.fullmatch(path)}
+    named.update(
+        path
+        for path in tree.paths
+        if path.startswith(".github/") and path.removeprefix(".github/").split("/")[0] not in SKELETON_EXCLUDED
+    )
     policy = tree.read(POLICY_PATH)
     if policy is not None:
-        named.update(GUIDANCE_KEY.findall(policy.decode("utf-8", "replace")))
+        text = policy.decode("utf-8", "replace")
+        named.update(name for name in (*GUIDANCE_KEY.findall(text), *PATH_VALUE.findall(text)) if name in tree.paths)
     return named
 
 
@@ -636,7 +642,7 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
     base_guidance, head_guidance = guidance_paths(base_tree), guidance_paths(head_tree)
     changed = [
         path
-        for path in git(root, "diff", "--name-only", "-z", base, head).decode("utf-8").split("\0")
+        for path in git(root, "diff", "--no-renames", "--name-only", "-z", base, head).decode("utf-8").split("\0")
         if path
         and (
             is_reviewer_config(path, base_guidance)
@@ -682,16 +688,17 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
         ),
         key=lambda item: (item[1]["date"], item[0]),
     )
-    if not matching:
+    added = [path for path in read_results(head_tree) if path not in base_results]
+    if len(added) != 1 or [path for path, _ in matching] != added:
         return Verdict(
             False,
             (
                 *listing,
-                f"attach a live eval run for this exact configuration under {RESULTS_DIR}/ "
-                f"(config digest {digest[:12]}, corpus digest {corpus[:12]}): "
+                f"exactly one new result under {RESULTS_DIR}/ is allowed and it must be a usable live run for this "
+                f"exact configuration (config digest {digest[:12]}, corpus digest {corpus[:12]}): "
                 "python tools/review_eval.py run --mode live; a change that only adds or alters recorded results "
                 "needs an owner-reviewed baseline pull request carrying the same evidence",
-                *(f"ignored {path}: it describes a different configuration or corpus" for path, _ in attached),
+                *(f"not accepted: {path}" for path in added if path not in [item for item, _ in matching]),
             ),
         )
     path, result = matching[-1]
@@ -776,6 +783,8 @@ def command_run(arguments: argparse.Namespace) -> int:
         for number in range(arguments.repeat):
             print(f"running {case_id} ({number + 1}/{arguments.repeat})", flush=True)
             runs[case_id].append(run_live_case(case, skeleton, root, arguments.case_timeout))
+    if consumer != root:
+        state = {**state, "config_digest": f"foreign:{tree_digest(skeleton)}"}
     meta = {"date": datetime.now(UTC).strftime("%Y-%m-%d"), "policy": POLICY_PATH, "repeat": arguments.repeat, **state}
     result = build_result(cases, runs, mode="live", meta=meta)
     output = (

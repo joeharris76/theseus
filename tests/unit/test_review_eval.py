@@ -315,7 +315,7 @@ def test_a_template_policy_or_guidance_change_must_attach_a_run(repository: Path
 
     verdict = _check(repository, base)
 
-    assert not verdict.ok and "attach a live eval run" in " ".join(verdict.lines)
+    assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
 
 
 def test_an_attached_run_that_does_not_lower_the_score_passes(repository: Path) -> None:
@@ -365,7 +365,7 @@ def test_a_run_for_other_configuration_or_of_another_kind_is_not_accepted(reposi
 
     verdict = _check(repository, base)
 
-    assert not verdict.ok and "attach a live eval run" in " ".join(verdict.lines)
+    assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
 
 
 def test_an_incomplete_run_is_not_accepted(repository: Path) -> None:
@@ -526,7 +526,7 @@ def test_a_misnamed_future_dated_result_cannot_steer_the_baseline(repository: Pa
 
     verdict = _check(repository, base)
 
-    assert not verdict.ok and "attach a live eval run" in " ".join(verdict.lines)
+    assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
 
 
 def test_a_results_only_change_needs_the_same_evidence_or_an_owner_reviewed_baseline(repository: Path) -> None:
@@ -563,3 +563,46 @@ def test_a_recorded_result_cannot_be_edited_or_removed(repository: Path) -> None
     verdict = _check(repository, base)
 
     assert not verdict.ok and "append-only" in " ".join(verdict.lines)
+
+
+def test_extra_results_beside_the_matching_one_are_refused(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _change(repository, TEMPLATE, "template two\n")
+    _attach(repository, "head", _result(repository, "good"))
+    _attach(repository, "extra", _result(repository, "regressed"))
+    _commit(repository, "attach two")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
+
+
+def test_renaming_a_recorded_result_out_of_the_results_directory_is_refused(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _git(repository, "switch", "--quiet", "-c", "change")
+    recorded = next((repository / TOOL.RESULTS_DIR).glob("*.json"))
+    _git(repository, "mv", str(recorded), str(repository / "moved.json"))
+    _commit(repository, "move a result")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "append-only" in " ".join(verdict.lines)
+
+
+def test_every_skeleton_file_is_reviewer_configuration() -> None:
+    files = {
+        ".github/review.yml": POLICY + "  soundness_manifest: docs/manifest.txt\n",
+        ".github/soundness-paths.txt": "prefix\tsrc/\n",
+        ".github/workflows/ci.yml": "name: ci\n",
+        ".github/theseus-lock.json": "{}\n",
+        "docs/manifest.txt": "x\n",
+        "docs/other.md": "x\n",
+    }
+    tree = TOOL.Tree(tuple(sorted(files)), lambda path: files[path].encode())
+    guidance = TOOL.guidance_paths(tree)
+
+    assert TOOL.is_reviewer_config(".github/soundness-paths.txt", guidance)
+    assert TOOL.is_reviewer_config("docs/manifest.txt", guidance)
+    assert not TOOL.is_reviewer_config(".github/workflows/ci.yml", guidance)
+    assert not TOOL.is_reviewer_config(".github/theseus-lock.json", guidance)
+    assert not TOOL.is_reviewer_config("docs/other.md", guidance)

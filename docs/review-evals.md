@@ -56,7 +56,7 @@ python3 tools/review_eval.py run --mode live [--case ID] [--repeat N] [--out FIL
 python3 tools/review_eval.py score RESULT.json
 ```
 
-`run` builds a throw-away git repository per case (the consumer skeleton, then `base/` as the gated branch, then `head/` as the change) and runs the checkout's own `theseus local-review --member` against it with the policy at the base commit. The skeleton is the consumer's `.github` files outside `workflows/` (policy, omp config, soundness manifest and the guidance file the policy names), so what is scored is the configuration in the checkout: templates, classifier, policy, omp pin, guidance. `--consumer DIR` scores another consumer's configuration with the same cases.
+`run` builds a throw-away git repository per case (the consumer skeleton, then `base/` as the gated branch, then `head/` as the change) and runs the checkout's own `theseus local-review --member` against it with the policy at the base commit. The skeleton is the consumer's `.github` files outside `workflows/` (policy, omp config, soundness manifest and the guidance file the policy names), so what is scored is the configuration in the checkout: templates, classifier, policy, omp pin, guidance. `--consumer DIR` scores another consumer's configuration with the same cases; such a run records a `foreign:` configuration digest and is never accepted as evidence.
 
 Credentials are the local-review ones ([local-review.md](local-review.md)): the classifier key (`TYPESAFE_API_KEY`), and a gateway client, either `~/.omp/review-gateway/local-client.token` on the gateway host or `REVIEW_GATEWAY_URL` with `REVIEW_CLOUD_GATEWAY_TOKEN` from elsewhere. Live runs spend model tokens; a full run reviews each case once at the tier the policy picks for it.
 
@@ -75,7 +75,7 @@ A result is `evals/results/<date>-<sha>.json`: the observations, per-case and ag
 A pull request that changes any of
 
 - any module under `src/theseus_reviewer/` (the templates, `render.py`, `classify.py`, `protocol.py`, `cli.py` and every other module that can shape what a reviewer is asked or how its answer is judged), except the plumbing listed below;
-- `.github/review.yml` (policy, models, omp pin) or `.github/review-omp-config.yml`;
+- `.github/review.yml` (policy, models, omp pin), `.github/review-omp-config.yml`, and every other file the scored run carries in its consumer skeleton: anything under `.github/` except `workflows/`, `dependabot.yml` and `theseus-lock.json`, plus any file the policy names (such as the soundness manifest);
 - the consumer guidance file the policy names (`consumer.review_guidance`) or any `.github/review-guidance*`;
 - anything under `evals/results/`,
 
@@ -85,7 +85,7 @@ CI enforces it in the `review eval corpus and score rule` job. On a pull request
 
 1. No file above changed: pass. Anything under `_vendor/` is not counted.
 2. No usable live baseline under `evals/results/` on the base: pass, and the rule is inactive until one is recorded.
-3. Otherwise the pull request must add a result file that is `live`, named `<date>-<first 12 characters of git_sha>.json` after its own contents, not dated in the future, complete (every case reviewed), made on a clean tree, and whose `config_digest` and `corpus_digest` equal those of the pull request's committed files. A run for any other state of the files is ignored. A pull request that edits or removes an existing result fails, and one that only adds results needs the same evidence; both need an owner-reviewed baseline pull request.
+3. Otherwise the pull request must add exactly one result file (extra ones are refused, so a spare low result cannot become the next baseline) that is `live`, named `<date>-<first 12 characters of git_sha>.json` after its own contents, not dated in the future, complete (every case reviewed), made on a clean tree, and whose `config_digest` and `corpus_digest` equal those of the pull request's committed files. A run for any other state of the files is ignored. A pull request that edits, renames or removes an existing result fails (renames are not detected away), and one that only adds results needs the same evidence; both need an owner-reviewed baseline pull request.
 4. The baseline and the attached run are both rescored over the base's cases with the base's expectations. The baseline is the usable result with the newest `date` (not later than today), never chosen by file name. The aggregate of the attached run must be at least the baseline's.
 
 To attach a run: commit the change, run `python3 tools/review_eval.py run --mode live` (use `--repeat 3` for noisy changes), add the written `evals/results/*.json` in a further commit, and push. Editing a template, the policy, guidance or the corpus after the run changes the digest and the run must be repeated; rebasing onto a main that changed one of those files does too.
