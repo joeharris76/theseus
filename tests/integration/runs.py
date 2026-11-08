@@ -168,6 +168,7 @@ class WorkflowRunner:
         expression = _bare(text)
         known: dict[str, str] = {
             "inputs.environment": "review",
+            "needs.guard.outputs.base": "develop",
             "github.token": JOB_TOKEN,
             "github.workspace": str(self.temp),
             "runner.temp": str(self.temp),

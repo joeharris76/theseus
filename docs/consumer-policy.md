@@ -9,7 +9,7 @@ The policy is the existing reviewer policy (`version: 2`, reviewers, buckets, cl
 ```yaml
 bot_login: acme-review        # GitHub App slug that posts verdicts; required, top level
 consumer:
-  gated_base: main            # branch the gate and review apply to
+  gated_base: main            # branch, or list of branches and prefix patterns, the gate and review apply to
   attesters:                  # logins allowed to stand in, adjudicate, reset a backoff, attest an omp bump
     - acme-owner
   soundness_manifest: .github/soundness-paths.txt
@@ -38,7 +38,7 @@ Protocol identities are not consumer settings and do not change: the `review-ver
 
 - Verdict statuses and reviews count only when created by `<bot_login>[bot]` with account type `Bot`.
 - Stand-in attestations, owner instructions, adjudications, backoff resets and omp-bump evidence count only from `consumer.attesters` and only when unedited.
-- The gate posts only for pull requests whose base is `consumer.gated_base`; `plan`, `sweep` and dispatch use the same value.
+- The gate and the review apply only to pull requests whose base matches `consumer.gated_base`, and only when the policy was read from that same base: `plan`, `sweep` and dispatch use the same value, and a pull request into any other base is refused (`UngatedBase`, exit 0 with nothing posted).
 - A policy whose `consumer` section is absent, or whose manifests cannot be read under the trusted root, makes the gate fail (exit 2) rather than guess.
 
 ## Commands

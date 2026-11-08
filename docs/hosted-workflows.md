@@ -15,8 +15,8 @@ The `review-verdict` and `review-gate` contexts, the caller workflow names and f
 A called workflow sees the caller's `github` context: `github.event_name`, `github.event.*`, `github.sha`, `github.ref`, `github.repository`, `github.workflow_ref` (the caller's), `github.token`. `workflow_dispatch` inputs are read as `github.event.inputs.*`; `inputs.*` inside a callee is only its own `workflow_call` inputs. Consequences:
 
 - Triggers, `run-name`, `concurrency` and the job-level `permissions` ceiling belong to the caller. The callees declare no workflow-level `concurrency` and no `run-name`, so a callee can never share a group with its caller. The example callers use groups prefixed `review-verdict-` and `review-gate-`; the two never collide with each other or with CI groups.
-- `github.sha` is the tip of the branch the event ran against. The review runs only when `github.ref` is `refs/heads/<gated_base>`; a pull request against any other base skips the jobs. A `workflow_dispatch` from any other ref is refused by the guard job.
-- The guard job (`contents: read` only, no secrets, no environment) refuses before any secret job starts: a `theseus_ref` that is not a full 40-hex commit, an empty `gated_base`, a caller whose `github.workflow_ref` is not `<repository>/.github/workflows/<caller_workflow>@...`, and a `theseus_ref` that is not the pin recorded in the trusted consumer lock (below).
+- `github.sha` is the tip of the branch the event ran against. The guard resolves the ref the workflow runs from (`github.ref`: the pull request's base for `pull_request_target`, the dispatched branch for `workflow_dispatch`, the default branch for `schedule`, `push` and `issue_comment`) against `gated_base`, and every later job runs only when it is gated; a pull request against any other base skips the jobs. A `workflow_dispatch` from a ref that is not gated is refused by the guard job.
+- The guard job (`contents: read` only, no secrets, no environment) refuses before any secret job starts: a `theseus_ref` that is not a full 40-hex commit, an empty or unsafe `gated_base`, a caller whose `github.workflow_ref` is not `<repository>/.github/workflows/<caller_workflow>@...`, and a `theseus_ref` that is not the pin recorded in the trusted consumer lock (below).
 
 ## Inputs
 
@@ -25,7 +25,7 @@ A called workflow sees the caller's `github` context: `github.event_name`, `gith
 | `environment` | yes | | Name of the caller environment whose secrets the secret-bearing jobs read |
 | `theseus_ref` | yes | | Full commit SHA of the Theseus repository that holds the callee and its bootstrap installer; must equal the SHA on the caller's `uses:` line |
 | `theseus_repository` | no | `joeharris76/theseus` | Repository checked out at `theseus_ref` |
-| `gated_base` | yes | | Branch the review and gate apply to; its tip supplies the trusted policy and lock |
+| `gated_base` | yes | | Branches the review and gate apply to: a newline- or comma-separated list of branch names and prefix patterns (see "Several gated bases"). The tip of the pull request's own base supplies the trusted policy and lock |
 | `policy_path` | no | `.github/review.yml` | Consumer policy, read from the trusted checkout |
 | `trusted_paths` | no | `.github` | Sparse-checkout patterns for the trusted checkout; add the directories of any `consumer` manifest outside `.github`. The example gate caller reruns on every push to the gated branch (no `paths:` filter), so a manifest change outside `.github` re-evaluates standing gate statuses immediately rather than at the next hourly sweep |
 | `caller_workflow` | no | `review-verdict.yml` / `review-gate.yml` | File name of the caller; the guard compares it with `github.workflow_ref`, and the bridge dispatches it |
@@ -48,6 +48,17 @@ The organisation Actions allow-list must permit `joeharris76/theseus/.github/wor
 
 The `prepare` step builds the pull request diff with git and needs git 2.40 or newer on the runner. On an older or unparsable git the plan holds with "the pull request diff could not be built" followed by the required version.
 
+## Several gated bases
+
+`gated_base` (the workflow input, and `consumer.gated_base` in the policy, which may be a single string or a list) names every base the review and gate cover, for example `develop` plus `release/*` for maintenance branches. Rules:
+
+- Entries are literal branch names or a literal prefix followed by a final `*` (one path segment) or `**` (any depth), such as `release/*`. A bare `*`, a wildcard anywhere but the last segment, a duplicate or an empty list is refused. The first entry must be a literal branch name: it is the branch local review and the omp watcher default to.
+- The trusted policy, lock and gate pin come from the tip of the pull request's own base. A run on `release/0.5.x` therefore reads `release/0.5.x`'s `review.yml` and `theseus-lock.json`; `consumer`, `attesters` and the soundness manifest are never taken from another gated branch. `REVIEW_TRUSTED_BASE` carries that base into every Python phase, and `theseus gate` and `theseus drive plan` refuse a pull request whose base differs from it.
+- A pull request into an unlisted base is refused: the jobs are skipped by the guard, and `theseus gate` reports `UngatedBase` without posting.
+- Events that GitHub runs only from the default branch (`schedule`, `push`, `workflow_run`, `issue_comment`) cover the other bases by dispatching `caller_workflow` on the pull request's own base branch: the `bridge` job and the hourly `sweep` of `gate.yml` do this for every open gated pull request, and `theseus drive sweep` does it for retries. Each dispatched run then uses that branch's own caller workflow, pin and lock, so a maintenance branch keeps working on its own pin until it is promoted.
+- Comment commands (`/review`, adjudications, stand-in attestations) are evaluated by the workflow of the default branch against the default branch's policy and so apply only to its own pull requests; for a pull request into another gated base the gate picks the comment up at the next dispatch or hourly sweep, and a review is started by dispatching the caller from that branch.
+- Maintenance branches carry their own copy of the callers: list the branches in the caller's `pull_request_target` and `push` triggers if their workflow files should react, and allow those branches to deploy to the environment named by `environment`. No token minting is widened by this setting: the App token is still minted only by jobs that run from a gated ref.
+
 ## Trust chain: two pins, two processes
 
 Neither workflow installs `latest` or reads a lock from a pull request head.
@@ -56,7 +67,7 @@ Neither workflow installs `latest` or reads a lock from a pull request head.
 
 A pull request can edit the caller files, so the pin has two halves and the callee can defend only one.
 
-**What the guard enforces at runtime.** The guard job binds `theseus_ref` to the reviewed lock. It sparse-checks-out `.github/theseus-lock.json` from the trusted ref (`review.yml`: `github.sha`, the base tip for a pull request event; `gate.yml`: the current tip of `gated_base`), reads it from that commit's object into a temporary file, and refuses with exit 2 unless `theseus_ref == workflow_sha == source_commit`. A missing, unparsable or incomplete lock is refused too. A lock on the pull request head is never read. The guard outputs the commit it read as `trusted_commit`, and the `gate` and `sweep` jobs of `gate.yml` check out exactly that commit. `gate.yml`'s guard skips pull requests against other bases, like `review.yml`'s. Every other job has `needs: guard`, so none starts when the check fails. The lock location is fixed at `.github/theseus-lock.json`.
+**What the guard enforces at runtime.** The guard job binds `theseus_ref` to the reviewed lock. It sparse-checks-out `.github/theseus-lock.json` from the trusted ref (`review.yml`: `github.sha`, the base tip for a pull request event; `gate.yml`: the current tip of the ref the workflow runs from, which is the pull request's own base), reads it from that commit's object into a temporary file, and refuses with exit 2 unless `theseus_ref == workflow_sha == source_commit`. A missing, unparsable or incomplete lock is refused too. A lock on the pull request head is never read. The guard outputs the commit it read as `trusted_commit`, and the `gate` and `sweep` jobs of `gate.yml` check out exactly that commit. When the ref is not a gated base the guard still succeeds, reads no lock and outputs `gated=false`, so no other job starts; `gate.yml` and `review.yml` behave the same. Every other job has `needs: guard`, so none starts when the check fails. The lock location is fixed at `.github/theseus-lock.json`.
 
 **What the guard cannot enforce.** A workflow cannot see or verify the `uses: ...@<sha>` that called it, and `github.workflow_sha` describes the caller, not the callee. A pull request that changes `uses:@<sha>` to an unreviewed Theseus commit while leaving `theseus_ref` and the lock alone passes the guard, and GitHub runs the unreviewed workflow code. The consumer must close that gap itself:
 
@@ -86,7 +97,7 @@ The runtime guard and the CI check together give the binding. Neither alone does
 
 If the gate pin cannot be resolved (no lock at the tip, a hash mismatch, a blocked source) the step is allowed to fail so the verdict is still published, `THESEUS_GATE_COMMAND` is then empty, and `theseus` refuses an empty value instead of falling back to its own interpreter.
 
-The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip of `gated_base`, read at the time the job starts. It never checks out candidate code.
+The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip of the pull request's own base, read at the time the job starts. It never checks out candidate code.
 
 ## What to require, and what the job exit means
 
@@ -165,7 +176,7 @@ Candidate code never meets a credential: the pull request head is checked out wi
 
 ## The `workflow_run` bridge
 
-The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-request]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `review-request.yml` therefore must keep `name: review-request`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` on `gated_base` for the open pull request whose head matches. The bridge runs no candidate code and holds no secrets.
+The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-request]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `review-request.yml` therefore must keep `name: review-request`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` for every open pull request whose head matches and whose base is gated, on that pull request's own base branch. The bridge checks out only the pinned `bases.py` matcher at `theseus_ref`, runs no candidate code and holds no secrets.
 
 ## Local pre-submission review
 
