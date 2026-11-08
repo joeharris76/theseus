@@ -69,7 +69,7 @@
       "benchbox/core/equivalence/checker.py": [
         [
           1,
-          3
+          10000000
         ]
       ]
     },
