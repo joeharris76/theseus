@@ -1647,7 +1647,7 @@ def _rendered_brief_bytes(plan: Mapping[str, Any], plan_dir: Path, *, marked: bo
     for template in TEMPLATES:
         classification = Classification(
             size_bucket=SIZE_BUCKETS[0],
-            capability="deep",
+            capability="routine",
             template=template,
             confidence=1.0,
             gate_flags=("x",),

@@ -317,6 +317,17 @@ def test_unseen_hints_name_only_the_hunks_that_were_not_seen() -> None:
     }
 
 
+@pytest.mark.parametrize("path", ["a.py", ".review-promotion/old/a.py"])
+def test_worst_case_retry_hint_bounds_include_whole_file_reads(path: str) -> None:
+    diff = "diff --git a/a.py b/a.py\nBinary files a/a.py and b/a.py differ\n"
+    whole = [path] if path.startswith(".review-promotion/") else []
+    bounds = coverage.retry_hint_bounds([path], diff, "", whole)
+    hints = coverage.unseen_hints(
+        [(path, "the file itself", 1, 99)], {STAGED_DIFF_NAME: diff, coverage.UPSTREAM_DIFF: ""}
+    )
+    assert bounds[path] >= len(hints[path].encode("utf-8"))
+
+
 def test_unseen_hints_mark_a_hunk_with_a_long_line_raw_and_bound_the_list() -> None:
     long_line = "x" * 800
     text = "\n".join(["short"] * 9 + [long_line] + ["short"] * 20)

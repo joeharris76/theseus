@@ -251,6 +251,7 @@ def retry_hint_bounds(
     bounds = {}
     for path, target in targets.items():
         if not target.hunks or target.diff is None:
+            bounds[path] = len("(unseen: read the whole file)")
             continue
         widths = sorted(
             (len(f"{target.diff}:raw:{hunk.block_start}-{hunk.block_end}".encode()) for hunk in target.hunks),
