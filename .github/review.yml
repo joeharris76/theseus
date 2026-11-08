@@ -118,6 +118,8 @@ classifier:
     - .github/theseus-lock.json
     - .github/soundness-paths.txt
     - tests/unit/test_theseus_pin.py
+    - tools/review_eval.py
+    - evals/*
   logic_paths: []
   data_paths: []
 promotion:

@@ -1,0 +1,25 @@
+name: review-gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions: {}
+
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  gate:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      startsWith(github.event.comment.body, 'Stand-in review') ||
+      startsWith(github.event.comment.body, 'Review adjudication:') ||
+      (github.event.action == 'edited' && contains(github.event.changes.body.from, 'Stand-in review')) ||
+      (github.event.action == 'deleted' && contains(github.event.comment.body, 'Stand-in review'))
+    uses: example/theseus/.github/workflows/gate.yml@0000000000000000000000000000000000000000
+    with:
+      gated_base: develop
