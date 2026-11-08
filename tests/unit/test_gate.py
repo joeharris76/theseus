@@ -375,10 +375,8 @@ def status_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]
 
 def test_post_status_writes_the_gate_context_to_the_head(status_api: list[dict[str, Any]]) -> None:
     gate.post_status("token", "o/r", HEAD, gate.PASS, "review: pass")
-    assert [(item["path"], item["auth"]) for item in status_api] == [
-        (f"/repos/o/r/statuses/{HEAD}", "Bearer token")
-    ] * 2
-    assert [item["body"]["context"] for item in status_api] == ["oracle-gate", "review-gate"]
+    assert [(item["path"], item["auth"]) for item in status_api] == [(f"/repos/o/r/statuses/{HEAD}", "Bearer token")]
+    assert [item["body"]["context"] for item in status_api] == ["review-gate"]
     assert {item["body"]["state"] for item in status_api} == {"success"}
 
 

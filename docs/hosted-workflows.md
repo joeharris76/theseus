@@ -8,7 +8,7 @@ Theseus ships two reusable workflows, `.github/workflows/review.yml` and `.githu
 | `review-gate.yml` | `review-gate` | `gate.yml` | `review-gate` status from the App |
 | `review-request.yml` | `review-request` | none (a no-op job) | its completion is the bridge trigger |
 
-The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. During the 0.2.x transition each status is also posted under its 0.1.x context; see "Migrating from 0.1.x".
+The `review-verdict` and `review-gate` contexts, the caller workflow names and file names, and the `review-verdict-*` artifact names are protocol identities. The reviewer finds retry state by the caller workflow path `.github/workflows/review-verdict.yml` and the gate dispatch targets `review-gate.yml`, so the caller files keep those names. This source tree posts only these contexts; the compatibility contexts used through 0.2.6 are never written again, so a ruleset that still requires one must be changed before installing this tree (see "Migrating from 0.1.x").
 
 ## Caller context
 
@@ -102,7 +102,7 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 ## What to require, and what the job exit means
 
-Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`, or `oracle-gate` for the oracle spelling), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
+Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
 
 `theseus gate` exits with:
 
@@ -113,7 +113,7 @@ Branch protection and rulesets MUST require the App-posted commit status context
 | 2 | Error: the gate could not decide or could not post. | Red. |
 | any other non-zero | Crash or spawn failure. | Red. |
 
-The required `review-gate` (or legacy `oracle-gate`) context MUST be restricted to the review App as its source (ruleset `integration_id` / "expected source"). Without that, any workflow holding `statuses: write` can post a same-named `success` and satisfy the requirement.
+The required `review-gate` context MUST be restricted to the review App as its source (ruleset `integration_id` / "expected source"). Without that, any workflow holding `statuses: write` can post a same-named `success` and satisfy the requirement.
 
 The job treats exit 3 as waiting only when the gate's result file (`REVIEW_GATE_RESULT_FILE`) also records 3, exactly as the sweep does; an unreported 3, or a failed summary write, fails the job.
 
@@ -191,13 +191,13 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 
 ## Migrating from 0.1.x
 
-0.2.0 renames every `oracle` name to `review` and collapses doubled words. It is a transitional release: Theseus writes only the new names, except that each status is also posted under its 0.1.x context, and it still reads the 0.1.x forms of everything persisted or typed by humans. A later release deletes both the mirrored contexts and the reading of the old forms (`src/theseus_reviewer/legacy.py`).
+0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus now writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
 
-| 0.1.x | 0.2.0 |
+| 0.1.x | After compatibility removal |
 |---|---|
-| status context `oracle-verdict` | `review-verdict` (`oracle-verdict` is still posted with the same state and description) |
-| policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; the mirror is keyed on the new name, so a policy left at `oracle-verdict` never writes `review-verdict` |
-| status context `oracle-gate` | `review-gate` (`oracle-gate` is still posted with the same state and description) |
+| status context `oracle-verdict` | `review-verdict` (`oracle-verdict` is no longer posted) |
+| policy `status_context: oracle-verdict` | consumers must set `status_context: review-verdict`; a policy left at `oracle-verdict` posts under that name, and the gate, which reads only `review-verdict`, never sees it |
+| status context `oracle-gate` | `review-gate` (`oracle-gate` is no longer posted) |
 | callee secret `ORACLE_APP_ID` | `REVIEW_APP_ID` |
 | callee secret `ORACLE_APP_PRIVATE_KEY` | `REVIEW_APP_PRIVATE_KEY` |
 | callee secret `ORACLE_GATEWAY_TOKEN` | `REVIEW_GATEWAY_TOKEN` |
@@ -211,12 +211,12 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 | the local state root override `THESEUS_LOCAL_STATE` | unchanged; neither version reads a `THESEUS_LOCAL_*_DIR` variable |
 | local cache `~/.cache/theseus/local-oracle`, gateway directory `~/.omp/oracle-gateway` | `~/.cache/theseus/local-review`, `~/.omp/review-gateway` |
 | gateway clients `oracle-ci`, `oracle-<name>` | `review-ci`, `review-<name>` |
-| artifacts `oracle-verdict-state-*`, `oracle-verdict-attempt-*`, `oracle-attempts`, `oracle-verdict-capture` | `review-verdict-state-*`, `review-verdict-attempt-*`, `review-attempts`, `review-verdict-capture` (state is read under either name) |
-| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (both forms are read) |
-| `Stand-in oracle review: APPROVE <sha>` | `Stand-in review: APPROVE <sha>` (both are read) |
-| `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (both are read) |
-| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (both are read) |
-| owner command `/oracle-review` | `/review` (both trigger a run) |
+| artifacts `oracle-verdict-state-*`, `oracle-verdict-attempt-*`, `oracle-attempts`, `oracle-verdict-capture` | `review-verdict-state-*`, `review-verdict-attempt-*`, `review-attempts`, `review-verdict-capture` (state under the old names is not read) |
+| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (the old forms are not read) |
+| `Stand-in oracle review: APPROVE <sha>` | `Stand-in review: APPROVE <sha>` (the old form is not read) |
+| `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (the old form is not read) |
+| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (the old form is not read) |
+| owner command `/oracle-review` | `/review` (the old command does nothing) |
 
 The caller's secrets block must map the new names onto the secrets it already holds, by name:
 
@@ -228,4 +228,4 @@ secrets:
   REVIEW_GATEWAY_URL: ${{ secrets.ORACLE_GATEWAY_URL }}
 ```
 
-The callee `if:` conditions and the example callers' concurrency groups match owner commands and attester comments by exact, case-insensitive prefix (`/review`, `Review adjudication:`, `Stand-in review: APPROVE` and their 0.1.x spellings), so only a real command shares the `pr-<n>` group and a quoted or mid-body mention cannot cancel a pending run. The reviewer then parses the exact forms and refuses any other comment.
+The callee `if:` conditions and the example callers' concurrency groups match owner commands and attester comments by exact, case-insensitive prefix (`/review`, `Review adjudication:`, `Stand-in review: APPROVE`), so only a real command shares the `pr-<n>` group and a quoted or mid-body mention cannot cancel a pending run. The reviewer then parses the exact forms and refuses any other comment.

@@ -280,7 +280,7 @@ from pathlib import Path
 
 state = Path({state!r})
 number = len(list(state.glob("prompt-*.txt"))) + 1
-(state / f"prompt-{{number}}.txt").write_text(sys.argv[-1], encoding="utf-8")
+(state / f"prompt-{{number}}.txt").write_text(sys.stdin.read(), encoding="utf-8")
 for index, path in enumerate({reads!r}[number - 1]):
     call = {{"type": "toolCall", "id": f"r{{index}}", "name": "read", "arguments": {{"path": path}}}}
     print(json.dumps({{"type": "message_end", "message": {{"role": "assistant", "content": [call]}}}}))

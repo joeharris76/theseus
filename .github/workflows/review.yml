@@ -304,7 +304,7 @@ jobs:
       needs.guard.outputs.gated == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base)) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/oracle-review') || startsWith(github.event.comment.body, 'Review adjudication:') || startsWith(github.event.comment.body, 'Oracle adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, 'Review adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ubuntu-latest
     timeout-minutes: 255
     environment: ${{ inputs.environment }}

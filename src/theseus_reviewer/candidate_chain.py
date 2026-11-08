@@ -17,6 +17,7 @@ from ._vendor import yaml
 from .candidate_canaries import Canary
 from .candidate_env import quiet_env
 from .candidate_stub import LOOPBACK, CanaryServer, UpstreamStub, UpstreamTurn, error_turn, text_turn, tool_turn
+from .policy import BRIEF_MAX_BYTES
 
 CLIENT_SECONDS = 180
 START_SECONDS = 60
@@ -45,6 +46,9 @@ LONG_SOURCE = "".join(
     for index in range(40)
 )
 PROMPT = "Review the change."
+TRANSPORT_HEAD = "transport-token-head-7f3a"
+TRANSPORT_TAIL = "transport-token-tail-91c2"
+TRANSPORT_PROMPT = f"{TRANSPORT_HEAD} {'x' * BRIEF_MAX_BYTES} {TRANSPORT_TAIL} Review the change."
 VERDICT = {
     "status": "complete",
     "incomplete_reason": "",
@@ -75,6 +79,7 @@ class Scenario:
     chains: bool = True
     valid_token: bool = True
     canaries: tuple[Canary, ...] = ()
+    prompt: str = PROMPT
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,7 @@ class ClientRun:
     workspace_changed: bool
     survivors: tuple[int, ...]
     started: tuple[str, ...] = ()
+    argv: tuple[str, ...] = ()
 
 
 def _review_script(context: Context) -> list[UpstreamTurn]:
@@ -137,6 +143,10 @@ def _read_lines_script(context: Context) -> list[UpstreamTurn]:
     ]
 
 
+def _probe_script(context: Context) -> list[UpstreamTurn]:
+    return [text_turn(json.dumps(VERDICT))]
+
+
 SCENARIOS = (
     Scenario("review", _review_script),
     Scenario("read-lines", _read_lines_script),
@@ -146,11 +156,8 @@ SCENARIOS = (
     Scenario("quota-terminal", _quota_script, chains=False),
     Scenario("upstream-auth", _auth_script),
     Scenario("bad-token", _review_script, valid_token=False),
+    Scenario("prompt-transport", _probe_script, prompt=TRANSPORT_PROMPT),
 )
-
-
-def _probe_script(context: Context) -> list[UpstreamTurn]:
-    return [text_turn(json.dumps(VERDICT))]
 
 
 PROBES = tuple(
@@ -340,7 +347,7 @@ class LoopbackChain:
             effort="",
             workspace=self.workspace,
             scratch=scratch,
-            prompt=PROMPT,
+            prompt=scenario.prompt,
             binary=self.binary,
             overlay_text=scenario.overlay,
         )
@@ -376,6 +383,7 @@ class LoopbackChain:
             _digest(self.workspace) != before,
             survivors,
             tuple(sorted(item.name for item in markers.glob("mcp-*"))) if markers.is_dir() else (),
+            invocation.argv,
         )
 
     def _clear_workspace(self) -> None:
