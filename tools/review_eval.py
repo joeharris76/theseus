@@ -681,15 +681,6 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
     ]
     if not changed:
         return Verdict(True, ("no reviewer configuration or recorded result change; nothing to score",))
-    if not any(path.startswith(f"{RESULTS_DIR}/") for path in all_changed):
-        return Verdict(
-            True,
-            (
-                f"reviewer configuration changed: {', '.join(changed)}",
-                "no trusted candidate executor: the score rule is inactive for configuration changes; "
-                "owner whole-diff review applies",
-            ),
-        )
     listing = [f"reviewer configuration or recorded results changed: {', '.join(changed)}"]
     day = today or datetime.now(UTC).strftime("%Y-%m-%d")
     base_results = read_results(base_tree)
@@ -701,6 +692,16 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
         },
         day,
     )
+    results_changed = any(path.startswith(f"{RESULTS_DIR}/") for path in all_changed)
+    if baseline is None and not results_changed:
+        return Verdict(
+            True,
+            (
+                f"reviewer configuration changed: {', '.join(changed)}",
+                "no authenticated baseline and no trusted candidate executor: the score rule is inactive for "
+                "configuration changes; owner whole-diff review applies",
+            ),
+        )
     if baseline is None and any(not path.startswith(f"{RESULTS_DIR}/") for path in all_changed):
         return Verdict(
             False,

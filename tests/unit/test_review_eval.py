@@ -310,7 +310,8 @@ def test_a_configuration_only_change_is_inactive_and_passes_explicitly(repositor
     verdict = _check(repository, base)
 
     assert verdict.ok
-    assert "no trusted candidate executor: the score rule is inactive" in verdict.lines[-1]
+    assert "no authenticated baseline and no trusted candidate executor" in verdict.lines[-1]
+    assert "the score rule is inactive" in verdict.lines[-1]
     assert "owner whole-diff review applies" in verdict.lines[-1]
 
 
@@ -330,6 +331,16 @@ def _with_baseline(repository: Path) -> str:
     baseline["date"] = "2026-11-01"
     _attach(repository, "baseline", baseline)
     return _commit(repository, "baseline")
+
+
+@pytest.mark.parametrize("relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md"])
+def test_a_configuration_only_change_fails_closed_once_a_baseline_exists(repository: Path, relative: str) -> None:
+    base = _with_baseline(repository)
+    _change(repository, relative, POLICY + "# changed\n" if relative.endswith("review.yml") else "changed\n")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
 
 
 @pytest.mark.parametrize("relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md"])

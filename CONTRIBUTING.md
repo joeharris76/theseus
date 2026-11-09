@@ -27,7 +27,7 @@ uv build
 - Tests are offline and fixture-driven; no test may need a live App, gateway or network secret.
 - Pin GitHub Actions to full commit SHAs with the tag in a trailing comment.
 - Commit messages describe the durable reason for the change.
-- Changes to `evals/results/` must be unmodified authenticated artifacts of a successful scheduled run, appended one at a time; see [docs/review-evals.md](docs/review-evals.md). The score rule is inactive for engine, scorer, corpus, workflow, dependency, policy, omp config and guidance changes until an authenticated baseline and a trusted candidate executor exist; the owner's whole-diff review applies to them.
+- Changes to `evals/results/` must be unmodified authenticated artifacts of a successful scheduled run, appended one at a time; see [docs/review-evals.md](docs/review-evals.md). While no authenticated baseline exists, the score rule is inactive for engine, scorer, corpus, workflow, dependency, policy, omp config and guidance changes and the owner's whole-diff review applies to them. Committing the first authenticated baseline activates the rule for every such change, which then needs digest-matched authenticated evidence that does not score lower; do not record a baseline until a trusted candidate executor exists.
 
 ## Reporting vulnerabilities
 
