@@ -81,15 +81,11 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + TRUNCATED
 
 
-def _origin_tag(scope: protocol.AdvisoryScope | None, finding: Finding) -> str:
-    return " (pre-existing)" if scope is not None and scope.verified(finding) else ""
-
-
-def _finding_line(finding: Finding, defect_id: str | None = None, cap: int = MAX_DETAIL, tag: str = "") -> str:
+def _finding_line(finding: Finding, defect_id: str | None = None, cap: int = MAX_DETAIL) -> str:
     detail = f"\n  {_cut(finding.detail, cap)}" if finding.detail else ""
     span = f"{finding.line}-{finding.end_line}" if finding.end_line else str(finding.line)
     named = f"{defect_id}: " if defect_id else ""
-    return f"- **{finding.severity}** `{display_path(finding.file)}:{span}`: {named}{finding.title}{tag}{detail}"
+    return f"- **{finding.severity}** `{display_path(finding.file)}:{span}`: {named}{finding.title}{detail}"
 
 
 def _threads_to_open(
@@ -336,7 +332,7 @@ def _absences(attempts: list[Attempt], step: Step) -> list[str]:
 
 
 def _review_comment(
-    finding: Finding, commentable: Mapping[str, frozenset[int]], defect_marker: str = "", tag: str = ""
+    finding: Finding, commentable: Mapping[str, frozenset[int]], defect_marker: str = ""
 ) -> dict[str, Any]:
     span = comment_span(finding, commentable)
     anchor: dict[str, Any] = {"line": finding.line, "side": "RIGHT"}
@@ -345,7 +341,7 @@ def _review_comment(
     return {
         "path": finding.file,
         **anchor,
-        "body": f"**{finding.severity}**: {finding.title}{tag}\n\n{finding.detail}".rstrip()
+        "body": f"**{finding.severity}**: {finding.title}\n\n{finding.detail}".rstrip()
         + (f"\n\n{defect_marker}" if defect_marker else "")
         + f"\n\n{dedup.marker(finding)}",
     }
@@ -358,13 +354,12 @@ def _review_payload(
     commentable: Mapping[str, frozenset[int]],
     markers: Mapping[Finding, str] | None = None,
 ) -> dict[str, Any]:
-    scope = protocol.advisory_scope(plan)
     return {
         "commit_id": plan["head_sha"],
         "event": "COMMENT",
         "body": body,
         "comments": [
-            _review_comment(finding, commentable, (markers or {}).get(finding, ""), _origin_tag(scope, finding))
+            _review_comment(finding, commentable, (markers or {}).get(finding, ""))
             for finding in placement.inline
         ],
     }
@@ -538,7 +533,6 @@ def finalize(
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
     fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
     placement = place(fresh, commentable)
-    scope = protocol.advisory_scope(plan)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
         if judgement is not None
@@ -583,14 +577,8 @@ def finalize(
 
     def render(cap: int | None, evidence_cap: int | None = None) -> str:
         active = MAX_DETAIL if cap is None else cap
-        findings_lines = [
-            _finding_line(finding, ids.get(finding), active, _origin_tag(scope, finding))
-            for finding in placement.inline
-        ]
-        other_lines = [
-            _finding_line(finding, ids.get(finding), active, _origin_tag(scope, finding))
-            for finding in placement.summary
-        ]
+        findings_lines = [_finding_line(finding, ids.get(finding), active) for finding in placement.inline]
+        other_lines = [_finding_line(finding, ids.get(finding), active) for finding in placement.summary]
         lines = [*_header(plan, state)]
         if unrecorded:
             lines += [MARKER_LIMIT_NOTE, ""]
@@ -639,7 +627,7 @@ def finalize(
         lines += _section(
             "Pre-existing, not blocking",
             [
-                _finding_line(finding, advisory_ids.get(finding), active, _origin_tag(scope, finding))
+                _finding_line(finding, advisory_ids.get(finding), active)
                 for finding in (judgement.advisory if judgement is not None else ())
             ],
         )

@@ -177,7 +177,7 @@ A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. 
 
 ## Pre-existing findings
 
-The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). The review honours `pre-existing` only when the model says so and the trusted base-to-head diff adds no line in the finding's span and the file is not new in the change. With `protocol.pre_existing: advisory`, a verified pre-existing Medium or Low finding is recorded under `advisory` in the review record, listed under `Pre-existing, not blocking` and does not block; Critical and High always block. With `block` (the default) every finding blocks and a verified pre-existing one only carries a `(pre-existing)` tag.
+The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). This is a reviewer claim, not verified evidence that the defective behavior existed at the base commit. An unchanged finding span cannot prove that: new callers, initialization or inputs elsewhere can introduce a defect at an unchanged operation. Until trusted base-behavior evidence can be verified, all findings remain blocking and count toward the defect limit, including Medium and Low findings with `protocol.pre_existing: advisory`. The setting remains accepted, but currently behaves like `block` (the default); no new advisory entries or verified `(pre-existing)` tags are emitted. Existing review records retain their historical advisory entries.
 
 ## Author statement
 

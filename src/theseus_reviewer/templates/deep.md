@@ -62,7 +62,7 @@ When one defect class recurs at several places, list it once: name the class in 
 the detail (path:line). It counts as one defect. Never list the same defect again under a new title.
 Set origin to pre-existing only when the defect itself already existed at the base commit; a defect this change
 causes, including by deleting or moving code, is introduced. When in doubt, or when the defect spans several
-locations, set origin to introduced. The review checks origin against the diff.
+locations, set origin to introduced. Origin is a claim, not verified base-behavior evidence; all findings still block.
 
 Set status to complete when you have read what the review needs and decided. If you could not read the files
 the review needs, set status to incomplete, explain why in incomplete_reason, and set decision to NONE. Never
