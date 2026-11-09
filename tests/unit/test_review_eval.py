@@ -333,6 +333,18 @@ def _with_baseline(repository: Path) -> str:
     return _commit(repository, "baseline")
 
 
+def test_a_recorded_baseline_that_cannot_authenticate_keeps_the_rule_active(repository: Path) -> None:
+    unavailable = _result(repository, "good")
+    unavailable["date"] = "2026-11-01"
+    _attach(repository, "baseline", unavailable, trusted=False)
+    base = _commit(repository, "baseline")
+    _change(repository, TEMPLATE, "changed\n")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "none authenticates as a current baseline" in " ".join(verdict.lines)
+
+
 @pytest.mark.parametrize("relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md"])
 def test_a_configuration_only_change_fails_closed_once_a_baseline_exists(repository: Path, relative: str) -> None:
     base = _with_baseline(repository)
