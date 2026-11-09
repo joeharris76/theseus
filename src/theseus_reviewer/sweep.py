@@ -127,7 +127,7 @@ def reset_spent(
         and run.created_at >= reset_at
         and run.head in (None, head)
         and run.status not in NOT_STARTED
-        and review_started(run.id)
+        and (run.status != COMPLETED or review_started(run.id))
         for run in runs
     )
 

@@ -1141,6 +1141,12 @@ def test_reset_spent_checks_attempt_evidence_only_for_later_matching_started_run
     for waiting in ("queued", "waiting", "pending", "requested"):
         run = _verdict_run(7, status=waiting, conclusion=None, age=timedelta(minutes=10))
         assert not sweep.reset_spent(_parsed(run), reset_at, HEAD, review_started=lambda _: True)
+    running = _verdict_run(7, status="in_progress", conclusion=None, age=timedelta(minutes=10))
+
+    def unreadable(_: int) -> bool:
+        raise github.GitHubError("unsettled")
+
+    assert sweep.reset_spent(_parsed(running), reset_at, HEAD, review_started=unreadable)
 
 
 def _degraded(fake: FakeGitHub) -> FakeGitHub:

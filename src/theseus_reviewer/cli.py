@@ -2122,6 +2122,8 @@ def _retry_reason(
                 review_started=lambda run: github.run_review_started(repo, run, number, pull["base"]["ref"]),
             ):
                 _summary(f"reset not applied for #{number}: the reset was already used by a later run")
+            elif sweep.stateless_failures(head_runs, reset_at) > 0:
+                _summary(f"reset not applied for #{number}: a run since the reset failed without a result")
             else:
                 return "the owner reset its backoff"
         if due:
