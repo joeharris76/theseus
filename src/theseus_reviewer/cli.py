@@ -385,7 +385,14 @@ def _scoped_files(
 
 
 def _backoff_reset(
-    repo: str, pr: int, head_sha: str, run_id: str, manual: bool, previous: retry.State | None, binding: Binding
+    repo: str,
+    pr: int,
+    head_sha: str,
+    run_id: str,
+    manual: bool,
+    previous: retry.State | None,
+    binding: Binding,
+    base: str,
 ) -> datetime | None:
     if not manual or previous is None or previous.head_sha != head_sha:
         return None
@@ -399,8 +406,13 @@ def _backoff_reset(
     try:
         current = int(run_id)
         grouped = sweep.parse_runs(github.verdict_runs(repo, WORKFLOW_FILE, reset_at))
-        resolved = sweep.with_timeouts(grouped.get(pr, ()), lambda run: github.run_timed_out(repo, run), reset_at)
-        spent = sweep.reset_spent(resolved, reset_at, head_sha, exclude=current)
+        spent = sweep.reset_spent(
+            grouped.get(pr, ()),
+            reset_at,
+            head_sha,
+            exclude=current,
+            review_started=lambda run: github.run_review_started(repo, run, pr, base),
+        )
     except (github.GitHubError, KeyError, TypeError, ValueError) as exc:
         _summary(f"review-verdict: the owner's backoff reset could not be confirmed unused: {exc}")
         return None
@@ -743,7 +755,9 @@ def command_plan(args: argparse.Namespace) -> int:
             return _refused_marked(_finish_plan(out_dir, plan), marked, plan)
         previous = None
     now = _now()
-    reset_at = _backoff_reset(repo, pr, plan["head_sha"], plan["run_id"], manual, previous, policy.binding())
+    reset_at = _backoff_reset(
+        repo, pr, plan["head_sha"], plan["run_id"], manual, previous, policy.binding(), plan["base_ref"]
+    )
     rerun = retry.decide_rerun(
         manual=manual,
         new_diff=new_diff,
@@ -2101,10 +2115,13 @@ def _retry_reason(
             return None
         found, head_runs = resolved()
         if usable and reset_at is not None:
-            if sweep.reset_spent(found, reset_at, head):
+            if sweep.reset_spent(
+                found,
+                reset_at,
+                head,
+                review_started=lambda run: github.run_review_started(repo, run, number, pull["base"]["ref"]),
+            ):
                 _summary(f"reset not applied for #{number}: the reset was already used by a later run")
-            elif sweep.stateless_failures(head_runs, reset_at) > 0:
-                _summary(f"reset not applied for #{number}: a run since the reset failed without a result")
             else:
                 return "the owner reset its backoff"
         if due:

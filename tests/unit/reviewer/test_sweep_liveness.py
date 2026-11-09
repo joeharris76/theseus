@@ -254,11 +254,14 @@ def test_a_queued_run_does_not_spend_the_owner_reset(monkeypatch: pytest.MonkeyP
     assert values["decision"] == "review" and "reset by the owner" in plan["decision_reason"]
 
 
-def test_a_cancelled_run_does_not_spend_the_owner_reset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_cancelled_run_that_never_started_an_attempt_does_not_spend_the_owner_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     event = {"action": "created", "issue": {"number": 7, "pull_request": {}}, "comment": {"body": "/review"}}
     fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
     fake.comments = _reset_comments()
     fake.runs = [_verdict_run(7, conclusion="cancelled", age=timedelta(minutes=10))]
+    fake.review_started[fake.runs[0]["id"]] = False
     _, values, plan = _plan(monkeypatch, tmp_path, fake, event_name="issue_comment", event=event)
     assert values["decision"] == "review" and "reset by the owner" in plan["decision_reason"]
 

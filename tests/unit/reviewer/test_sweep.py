@@ -46,8 +46,15 @@ def test_recent_dispatches_count_each_dispatch_inside_the_window_once() -> None:
 
 
 def test_a_run_created_at_the_reset_moment_spends_the_reset() -> None:
-    assert sweep.reset_spent([_run(1, timedelta(hours=1))], NOW - timedelta(hours=1), "abc") is True
-    assert sweep.reset_spent([_run(1, timedelta(hours=1))], NOW - timedelta(minutes=59), "abc") is False
+    started = lambda _: True  # noqa: E731
+    assert (
+        sweep.reset_spent([_run(1, timedelta(hours=1))], NOW - timedelta(hours=1), "abc", review_started=started)
+        is True
+    )
+    assert (
+        sweep.reset_spent([_run(1, timedelta(hours=1))], NOW - timedelta(minutes=59), "abc", review_started=started)
+        is False
+    )
 
 
 def test_the_surfaced_description_names_every_failed_step_or_an_earlier_step() -> None:
