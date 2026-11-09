@@ -20,3 +20,10 @@ def alpha_root() -> Path:
 @pytest.fixture(scope="session")
 def beta_root() -> Path:
     return CONSUMER_BETA
+
+
+@pytest.fixture(autouse=True)
+def no_other_pull_requests_of_the_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    from theseus_reviewer import gate
+
+    monkeypatch.setattr(gate, "fetch_head_pulls", lambda *args: [])

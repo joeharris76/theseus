@@ -432,6 +432,7 @@ class FakeGitHub:
             ("GET", r"/git/trees/([0-9a-f]{40})", lambda request, match: (200, self.tree(match[1]), {})),
             ("GET", r"/tarball/([0-9a-f]{40})", self._repo_tarball),
             ("GET", r"/commits/([0-9a-f]{40})", self._commit),
+            ("GET", r"/commits/([0-9a-f]{40})/pulls", self._head_pulls),
             ("GET", r"/commits/([0-9a-f]{40})/statuses", self._status_list),
             ("GET", r"/commits/([0-9a-f]{40})/status", self._combined_status),
             ("GET", r"/commits/([0-9a-f]{40})/check-runs", self._check_runs),
@@ -527,6 +528,11 @@ class FakeGitHub:
         for pull in pulls:
             self.refresh(pull["number"])
         return self._page(pulls, request)
+
+    def _head_pulls(self, request: Request, match: re.Match[str]) -> Response:
+        for pull in self.pulls.values():
+            self.refresh(pull["number"])
+        return self._page([pull for pull in self.pulls.values() if pull["head"]["sha"] == match[1]], request)
 
     def _create_review(self, request: Request, match: re.Match[str]) -> Response:
         return 200, self.post_review(int(match[1]), request.json(), request.token), {}

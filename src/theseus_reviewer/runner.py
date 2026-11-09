@@ -356,7 +356,6 @@ def _judge(
     run = evidence.trace(reviewer.harness, result.stdout)
     read = evidence.returned(run, workspace)
     verdict = evidence.mark_citations(verdict, workspace, protocol.disputed_claims(plan), read)
-    verdict = protocol.demote_forced_fixed(verdict, plan)
     problem = protocol.contradiction(verdict, plan, workspace=workspace)
     if problem is not None:
         shaped = f"shape={shape_fingerprint(verdict.to_json(), _credentials())}\n{traced}"

@@ -825,9 +825,6 @@ INTRODUCED = "introduced"
 ADVISORY_SEVERITIES = ("Medium", "Low")
 
 
-FORCED_FIXED_MARK = "is marked fixed on a dispute re-review of an unchanged patch"
-
-
 _LOCATION_MARKS = re.compile(
     r"#L\d+|\bL\d+\b|:\s*L?\d+|\blines?\s*\d+|\(\s*\d+\s*\)",
     re.IGNORECASE,
@@ -1097,31 +1094,13 @@ def forced_fixed_problems(verdict: Verdict, plan: Mapping[str, Any]) -> dict[str
     }
 
 
-def demote_forced_fixed(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
-    if not plan.get("last_attempt"):
-        return verdict
-    problems = forced_fixed_problems(verdict, plan)
-    if not problems:
-        return verdict
-    note = "a fixed disposition cannot apply to a dispute re-review of an unchanged patch; recorded as maintained"
-    return replace(
-        verdict,
-        prior_defects=tuple(
-            replace(item, status=NOT_FIXED, evidence=f"{item.evidence} {note}".strip(), demoted=DEMOTED_DISPOSITION)
-            if item.id in problems
-            else item
-            for item in verdict.prior_defects
-        ),
-    )
-
-
 def dispute_problem(verdict: Verdict, plan: Mapping[str, Any]) -> str | None:
     problems = dispute_problems(verdict, plan)
     return problems[min(problems)] if problems else None
 
 
 def keep_disputes_open(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
-    problems = {**forced_fixed_problems(verdict, plan), **dispute_problems(verdict, plan)}
+    problems = dispute_problems(verdict, plan)
     if not problems:
         return verdict
     entries = {item.id: item for item in verdict.prior_defects}
@@ -1143,7 +1122,7 @@ def contradiction(
     workspace: Path | str | None = None,
 ) -> str | None:
     forced_fixed = forced_fixed_problems(verdict, plan)
-    if forced_fixed and verdict.decision == SHIP:
+    if forced_fixed:
         return forced_fixed[min(forced_fixed)]
     if verdict.status != COMPLETE or judge_planned(verdict, plan, workspace=workspace).decision != SHIP:
         return None

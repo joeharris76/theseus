@@ -54,7 +54,7 @@ from . import (
     attempts as attempt_files,
 )
 from ._vendor import yaml
-from .absence import ERROR, INVALID, Absence, published_detail
+from .absence import ERROR, Absence, published_detail
 from .brief import write_private
 from .classifier import ChangedFile, matching, soundness_scope
 from .classify import Classification, classification_note, classify_diff, fallback_classification
@@ -1493,30 +1493,6 @@ def _retry_hints(
     return {**hints, **named}
 
 
-def _with_last_attempt(
-    plan: dict[str, Any],
-    classification: Classification,
-    attempts: Sequence[selection.Attempt],
-    reviewer: Reviewer,
-    slot: int,
-) -> dict[str, Any]:
-    if not plan["protocol"].get("forced"):
-        return plan
-    failed = selection.Attempt(
-        slot,
-        reviewer.name,
-        selection.ABSENT,
-        INVALID,
-        recovery=recovery.Recovery(recovery.RETRY, recovery.FALLBACK),
-    )
-    step = selection.next_step(_selection(plan, classification), [*attempts, failed])
-    stalled = any(
-        item.reviewer == reviewer.name and item.absence == INVALID and protocol.FORCED_FIXED_MARK in item.detail
-        for item in attempts
-    )
-    return {**plan, "last_attempt": stalled or step.kind != selection.REVIEW}
-
-
 def compose_brief(
     plan: Mapping[str, Any],
     plan_dir: Path,
@@ -1722,7 +1698,7 @@ def command_review(args: argparse.Namespace) -> int:
             prompt=prompt,
             scratch=Path(args.scratch),
             now=_now(),
-            plan=_with_last_attempt(plan, classification, attempts, reviewer, args.slot),
+            plan=plan,
         )
     artifact = attempt_files.build_artifact(
         run_id=os.environ["GITHUB_RUN_ID"],

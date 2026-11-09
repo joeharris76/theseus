@@ -176,7 +176,7 @@ def read_pull(repo: str, pr: int, token: str) -> tuple[dict[str, Any], str, str]
     raise PullReadFailed(f"cannot read #{pr} after {PULL_READ_ATTEMPTS} attempts: {last}") from last
 
 
-def _rival_bases(token: str, repo: str, pr: int, base: str, head_sha: str, consumer: Consumer) -> list[str]:
+def _rival_bases(token: str, repo: str, pr: int, base: str, head_sha: str) -> list[str]:
     return sorted(
         {
             other["base"]["ref"]
@@ -185,7 +185,6 @@ def _rival_bases(token: str, repo: str, pr: int, base: str, head_sha: str, consu
             and other["number"] != pr
             and other["head"]["sha"] == head_sha
             and other["base"]["ref"] != base
-            and consumer.is_gated(other["base"]["ref"])
         }
     )
 
@@ -201,9 +200,7 @@ def evaluate(repo: str, pr: int, token: str, config: GateConfig) -> tuple[str, i
             f"{GATE_CONTEXT} is posted only from the policy of the pull request's own base"
         )
     try:
-        rivals = (
-            _rival_bases(token, repo, pr, base, head_sha, config.consumer) if config.consumer.has_several_bases else []
-        )
+        rivals = _rival_bases(token, repo, pr, base, head_sha)
         if rivals:
             raise CheckError(
                 f"{head_sha} is also an open pull request into {', '.join(rivals)}; "
