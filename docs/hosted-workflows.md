@@ -132,6 +132,10 @@ Concurrency stays with the caller. The example `review-gate.yml` still cancels a
 
 A failing subprocess posts no status of its own, so no success is published on its behalf.
 
+`theseus reset-backoff --pr N --head SHA --reason TEXT` records an attester's exact-head reset after an owner instruction. It permits one review through the existing backoff, not a reroll of a decisive verdict. A successful guard-only comment run or a dispatch refused by prepare does not consume it. Trusted attempt/state artifacts or a started attempt-loop step consume it even if the review later fails, times out or is cancelled. Missing or unreadable evidence holds the reset rather than granting another attempt.
+
+When no artifact exists, the Jobs API must prove the trusted `review` job was skipped or all five attempt-loop steps were skipped. Renaming that job, `Run the attempt loop`, or `Resume the attempt loop after attempt N` requires updating `github.run_review_started`; unrecognized or incomplete evidence fails closed.
+
 ## Provider loss and the health job
 
 The attempt phase probes the gateway's served models before choosing a reviewer, so a provider that is gone changes the reviewer's model, never the outcome of the run; see [Provider loss](consumer-policy.md#provider-loss) for the selection rules.
