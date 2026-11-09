@@ -419,6 +419,11 @@ class FakeGitHub:
             ("POST", r"/issues/(\d+)/comments", self._create_comment),
             (
                 "GET",
+                r"/issues/comments/(\d+)",
+                self._issue_comment,
+            ),
+            (
+                "GET",
                 r"/issues/(\d+)/timeline",
                 lambda request, match: self._page(self.timeline[int(match[1])], request),
             ),
@@ -537,6 +542,42 @@ class FakeGitHub:
         }
         self.comments[int(match[1])].append(comment)
         return 201, comment, {}
+
+    def _issue_comment(self, request: Request, match: re.Match[str]) -> Response:
+        cid = int(match[1])
+        with self.lock:
+            for comments in self.comments.values():
+                for comment in comments:
+                    if comment.get("id") == cid:
+                        return 200, comment, {}
+        return 404, {"message": "Not Found"}, {}
+
+    def comment(
+        self,
+        number: int,
+        body: str,
+        token: str = OWNER_TOKEN,
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        with self.lock:
+            ts = created_at
+            if ts is None:
+                ts = now_text()
+                if self.reviews[number]:
+                    last_review_at = self.reviews[number][-1].get("submitted_at")
+                    if last_review_at and ts <= last_review_at:
+                        last_dt = datetime.fromisoformat(last_review_at.replace("Z", "+00:00"))
+                        ts = (last_dt + timedelta(seconds=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            comment = {
+                "id": next(self.ids),
+                "body": body,
+                "user": ACCOUNTS[token],
+                "author_association": "OWNER" if token == OWNER_TOKEN else "NONE",
+                "created_at": ts,
+                "updated_at": ts,
+            }
+            self.comments[number].append(comment)
+            return comment
 
     def _commit(self, request: Request, match: re.Match[str]) -> Response:
         date = self.git("show", "-s", "--format=%cI", match[1]).strip()
