@@ -69,7 +69,7 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
         ]
     )
 
-    run_disp_1 = harness.review(pr, event_name="issue_comment", comment=rerun_cmd_1)
+    run_disp_1 = harness.review(pr, event_name="issue_comment", action="created", comment=rerun_cmd_1)
     assert run_disp_1.plan["protocol"]["forced"] is True
     assert run_disp_1.plan["protocol"]["round"] == 2
     assert [item["id"] for item in run_disp_1.plan["disputes"]] == ["D1"]
@@ -99,7 +99,7 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
         ]
     )
 
-    run_disp_2 = harness.review(pr, event_name="issue_comment", comment=rerun_cmd_2)
+    run_disp_2 = harness.review(pr, event_name="issue_comment", action="created", comment=rerun_cmd_2)
     assert run_disp_2.plan["protocol"]["forced"] is True
     assert run_disp_2.plan["protocol"]["round"] == 3
     assert run_disp_2.plan["protocol"]["maintained"] == {"D1": 1}
@@ -115,7 +115,7 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
     assert "need the owner's ruling" in harness.github.gate_statuses(head)[-1]["description"]
 
     rerun_cmd_3 = harness.github.comment(pr, "/review", token=OWNER_TOKEN)
-    run_refused = harness.review(pr, event_name="issue_comment", comment=rerun_cmd_3)
+    run_refused = harness.review(pr, event_name="issue_comment", action="created", comment=rerun_cmd_3)
     assert run_refused.plan["decision"] == "skip"
     assert "already had 2 dispute re-reviews; D1 escalated to the owner" in run_refused.plan["decision_reason"]
 

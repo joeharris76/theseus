@@ -311,7 +311,7 @@ class Harness:
         pr: int,
         *,
         event_name: str = "pull_request_target",
-        action: str = "synchronize",
+        action: str | None = None,
         inputs: dict[str, str] | None = None,
         comment: dict[str, Any] | None = None,
         **options: Any,
@@ -338,14 +338,16 @@ class Harness:
         temp = self.root / f"run-{run['id']}"
         temp.mkdir()
         record = ReviewRun(run, temp)
-        event: dict[str, Any] = {"action": action}
+        default_action = "created" if event_name == "issue_comment" else "synchronize"
+        event_action = action if action is not None else default_action
+        event: dict[str, Any] = {"action": event_action}
         if trusted:
             event["pull_request"] = {"number": pr, "head": {"sha": head}}
         elif event_name == "workflow_dispatch":
             event = {"inputs": {"pr": str(pr), "head": head, **(inputs or {})}}
         elif event_name == "issue_comment":
             event = {
-                "action": action or "created",
+                "action": event_action,
                 "issue": {"number": pr, "pull_request": {}},
                 "comment": comment or {},
             }
