@@ -23,7 +23,6 @@ KNOWN_OMP_PROVIDERS = frozenset(
 ALLOWED = {
     ("candidate_checks.py", "anthropic/"),
     ("candidate_checks.py", "anthropic/{}"),
-    ("candidate_checks.py", "openai-codex/gpt-6.1-sol"),
 }
 
 
