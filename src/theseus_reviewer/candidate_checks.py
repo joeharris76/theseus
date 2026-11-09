@@ -647,6 +647,8 @@ def served_checks(run: ClientRun) -> list[Check]:
     credentialed = served.get("credentialed", ())
     if QUOTA_PRIMARY not in credentialed:
         disabled.append(f"the credentialed control does not serve {QUOTA_PRIMARY}")
+    if QUOTA_PRIMARY not in served.get("disabled-control", ()):
+        disabled.append(f"the equivalent disabled-provider control does not serve {QUOTA_PRIMARY}")
     if "disabled-provider" not in served:
         disabled.append("the disabled-provider served set was not observed")
     elif served["disabled-provider"]:

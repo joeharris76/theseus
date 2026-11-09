@@ -153,6 +153,7 @@ def _good_runs() -> dict[str, ClientRun]:
             served={
                 "no-credentials": (),
                 "credentialed": (candidate_checks.QUOTA_PRIMARY,),
+                "disabled-control": (candidate_checks.QUOTA_PRIMARY,),
                 "disabled-provider": (),
             },
         ),
@@ -1095,7 +1096,7 @@ def test_a_catalog_listing_that_fails_is_red(tmp_path: Path) -> None:
     assert check.failures == ("the model catalog could not be listed: exit code 1",)
 
 
-def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_services(tmp_path: Path) -> None:
+def _served_binary(tmp_path: Path, mode: str = "", listing: Any = None) -> Path:
     binary = tmp_path / "omp"
     binary.write_text(
         f"#!{sys.executable}\n"
@@ -1103,6 +1104,8 @@ def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_se
         "from pathlib import Path\n"
         "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
         "args = sys.argv[1:]\n"
+        f"mode = {mode!r}\n"
+        f"listing = {listing!r}\n"
         "if args[:2] == ['auth-broker', 'token']:\n"
         "    print('stub-broker-token')\n"
         "elif args[:2] == ['auth-broker', 'migrate']:\n"
@@ -1113,9 +1116,18 @@ def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_se
         "        def do_GET(self):\n"
         "            models = []\n"
         "            disabled = Path.home() / '.omp/agent/config.yml'\n"
-        "            if (Path.cwd().parent / 'credentialed').exists() and not disabled.exists():\n"
+        "            credentialed = (Path.cwd().parent / 'credentialed').exists()\n"
+        "            hidden = disabled.exists() and '- anthropic' in disabled.read_text()\n"
+        "            if credentialed and (not hidden or mode == 'ignores-disabled'):\n"
         "                models = ['anthropic/claude-sonnet-5-5']\n"
-        "            body = json.dumps(dict(data=[dict(id=model) for model in models])).encode()\n"
+        "            if mode == 'config-loses-credentials' and disabled.exists():\n"
+        "                models = []\n"
+        "            data = dict(data=[dict(id=model) for model in models])\n"
+        "            if mode == 'malformed-empty' and not credentialed:\n"
+        "                data = listing\n"
+        "            if mode == 'malformed-disabled' and hidden:\n"
+        "                data = listing\n"
+        "            body = json.dumps(data).encode()\n"
         "            self.send_response(200)\n"
         "            self.end_headers()\n"
         "            self.wfile.write(body)\n"
@@ -1126,6 +1138,11 @@ def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_se
         encoding="utf-8",
     )
     binary.chmod(0o755)
+    return binary
+
+
+def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_services(tmp_path: Path) -> None:
+    binary = _served_binary(tmp_path)
     workdir = tmp_path / "chain"
     with candidate_chain.loopback_chain(binary, workdir, CONFIG_TEXT) as chain:
         assert chain.gateway_url.startswith("http://127.0.0.1:")
@@ -1135,8 +1152,40 @@ def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_se
         assert chain.served == {
             "no-credentials": (),
             "credentialed": (candidate_checks.QUOTA_PRIMARY,),
+            "disabled-control": (candidate_checks.QUOTA_PRIMARY,),
             "disabled-provider": (),
         }
+
+
+@pytest.mark.parametrize("mode", ["config-loses-credentials", "ignores-disabled"])
+def test_disabled_provider_contract_rejects_an_insensitive_fake_executable(tmp_path: Path, mode: str) -> None:
+    binary = _served_binary(tmp_path, mode)
+    with candidate_chain.loopback_chain(binary, tmp_path / "chain", CONFIG_TEXT) as chain:
+        checks = candidate_checks.served_checks(_run("review", "", served=chain.served))
+        assert not checks[1].ok
+
+
+@pytest.mark.parametrize("mode", ["malformed-empty", "malformed-disabled"])
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {},
+        [],
+        {"data": {}},
+        {"data": None},
+        {"data": [None]},
+        {"data": [{"model": "anthropic/claude-sonnet-5-5"}]},
+        {"data": [{"id": 1}]},
+        {"data": [{"id": ""}]},
+    ],
+)
+def test_served_contract_rejects_malformed_negative_observations_from_a_subprocess(
+    tmp_path: Path, mode: str, listing: Any
+) -> None:
+    binary = _served_binary(tmp_path, mode, listing)
+    with pytest.raises(RuntimeError, match="malformed served model list"):
+        with candidate_chain.loopback_chain(binary, tmp_path / "chain", CONFIG_TEXT):
+            pytest.fail("a malformed served model list was accepted")
 
 
 def test_the_prompt_transport_probe_exceeds_what_one_argument_can_hold() -> None:

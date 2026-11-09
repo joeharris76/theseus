@@ -7,6 +7,7 @@ import secrets
 import socket
 import subprocess
 import time
+import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -352,11 +353,20 @@ class LoopbackChain:
         disabled_env = {**gateway_env, **quiet_env(disabled_home)}
         agent = disabled_home / ".omp" / "agent"
         agent.mkdir(parents=True)
-        target = providers.candidates(ROLE_SELECTOR, yaml.safe_load(self.config_text))[0]
-        (agent / "config.yml").write_text(
-            yaml.safe_dump({"disabledProviders": [providers.provider_of(target)]}), encoding="utf-8"
-        )
+        config = agent / "config.yml"
+        config.write_text(yaml.safe_dump({"disabledProviders": []}), encoding="utf-8")
         disabled_port = _free_port()
+        control_gateway = self._spawn(
+            "disabled-control",
+            [omp, "auth-gateway", "serve", "--bind", f"{LOOPBACK}:{disabled_port}", f"--clients={clients}"],
+            disabled_home,
+            disabled_env,
+        )
+        _wait_listening(disabled_port, control_gateway, "disabled-provider control")
+        self.served["disabled-control"] = self._served(f"http://{LOOPBACK}:{disabled_port}")
+        _stop(control_gateway)
+        target = providers.candidates(ROLE_SELECTOR, yaml.safe_load(self.config_text))[0]
+        config.write_text(yaml.safe_dump({"disabledProviders": [providers.provider_of(target)]}), encoding="utf-8")
         disabled_gateway = self._spawn(
             "disabled-gateway",
             [omp, "auth-gateway", "serve", "--bind", f"{LOOPBACK}:{disabled_port}", f"--clients={clients}"],
@@ -367,9 +377,23 @@ class LoopbackChain:
         self.served["disabled-provider"] = self._served(f"http://{LOOPBACK}:{disabled_port}")
 
     def _served(self, url: str = "") -> tuple[str, ...]:
-        return tuple(
-            sorted(providers.probe(url or self.gateway_url, self.client_token, allow_loopback_http=True).models)
+        request = urllib.request.Request(
+            f"{url or self.gateway_url}/v1/models",
+            headers={"Authorization": f"Bearer {self.client_token}", "Accept": "application/json"},
         )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=START_SECONDS) as response:
+            raw = response.read()
+        try:
+            listing = json.loads(raw)
+        except ValueError as exc:
+            raise RuntimeError("the candidate gateway returned a malformed served model list") from exc
+        rows = listing.get("data") if isinstance(listing, dict) else None
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows
+        ):
+            raise RuntimeError("the candidate gateway returned a malformed served model list")
+        return tuple(sorted(providers.parse_models(raw)))
 
     def run(self, scenario: Scenario) -> ClientRun:
         root = self.workdir / scenario.name
