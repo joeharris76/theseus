@@ -366,6 +366,40 @@ def _latest_state(repo: str, pr: int, names: Sequence[str], workflow_paths: Coll
     return None
 
 
+def run_review_started(repo: str, run_id: int, pr: int, base: str) -> bool:
+    run = get_json(f"repos/{repo}/actions/runs/{run_id}")
+    pulls = head_pulls(repo, run) if run.get("event") == "pull_request_target" else None
+    if not trusted_run(run, repo, pr, base, pulls=pulls):
+        raise GitHubError(f"run {run_id} is not a trusted reviewer run")
+    artifacts = get_json(f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
+    names = {state_artifact_name(pr), attempt_state_artifact_name(pr), "review-verdict-attempt-1"}
+    if any(item.get("name") in names for item in artifacts.get("artifacts", [])):
+        return True
+    listing = get_json(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
+    jobs = listing.get("jobs")
+    if not isinstance(jobs, list) or listing.get("total_count") != len(jobs):
+        raise GitHubError(f"run {run_id} has no complete reviewer job evidence")
+    reviewers = [job for job in jobs if str(job.get("name", "")).split(" / ")[-1] == "review"]
+    if len(reviewers) != 1:
+        raise GitHubError(f"run {run_id} does not identify one reviewer job")
+    job = reviewers[0]
+    if job.get("status") != "completed":
+        raise GitHubError(f"run {run_id} has an unsettled reviewer job")
+    if job.get("conclusion") == "skipped":
+        return False
+    expected = {"Run the attempt loop", *(f"Resume the attempt loop after attempt {n}" for n in range(1, 5))}
+    steps = [step for step in job.get("steps", []) if step.get("name") in expected]
+    if any(step.get("status") == "completed" and step.get("conclusion") not in (None, "skipped") for step in steps):
+        return True
+    if (
+        len(steps) == len(expected)
+        and {step.get("name") for step in steps} == expected
+        and all(step.get("status") == "completed" and step.get("conclusion") == "skipped" for step in steps)
+    ):
+        return False
+    raise GitHubError(f"run {run_id} has ambiguous reviewer attempt evidence")
+
+
 RUN_LIST_ATTEMPTS = 2
 RUN_LIST_PAUSE_SECONDS = 10
 IN_FLIGHT_STATUSES = ("pending", "waiting", "requested", "queued", "in_progress")

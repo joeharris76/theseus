@@ -132,6 +132,9 @@
     "changed_paths": [
       "benchbox/core/equivalence/checker.py"
     ],
+    "classifier_fallback": null,
+    "classifier_fallback_min_bucket": null,
+    "classifier_size_floor": null,
     "classifier_unavailable_bucket": null,
     "coverage": 1,
     "created_at": "<volatile>",

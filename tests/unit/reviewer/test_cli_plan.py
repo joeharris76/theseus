@@ -121,6 +121,7 @@ class FakeGitHub:
         self.state_error: Exception | None = None
         self.timed_out: set[int] = set()
         self.timeout_lookups: list[int] = []
+        self.review_started: dict[int, bool] = {}
         self.busy_fallback: set[int] = set()
         self.fallback_error: Exception | None = None
         self.built: list[tuple[str, str, str]] = []
@@ -141,6 +142,13 @@ class FakeGitHub:
         monkeypatch.setattr(github, "review_edit_states", self._edit_states)
         monkeypatch.setattr(github, "post_status", self._post)
         monkeypatch.setattr(github, "run_timed_out", self._timed_out)
+        monkeypatch.setattr(
+            github,
+            "run_review_started",
+            lambda repo, run, pr, base: self.review_started.get(
+                run, next(item for item in self.runs if item["id"] == run).get("conclusion") != "skipped"
+            ),
+        )
         monkeypatch.setattr(github, "reviews", self._reviews)
         monkeypatch.setattr(github, "merge_base", lambda repo, base, head: self.merge_base)
         monkeypatch.setattr(github, "tree_blobs", self._tree)
@@ -1037,6 +1045,26 @@ def test_a_skipped_run_after_the_reset_does_not_spend_it(monkeypatch: pytest.Mon
     assert "reset by the owner" in plan["decision_reason"]
 
 
+@pytest.mark.parametrize("event_name", ["issue_comment", "workflow_dispatch"])
+@pytest.mark.parametrize("started", [False, True])
+def test_successful_skip_only_runs_cannot_steal_the_owner_reset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, event_name: str, started: bool
+) -> None:
+    fake = FakeGitHub(_pull(), SOUNDNESS, _backed_off())
+    fake.comments = _reset_comments()
+    fake.runs = [
+        _verdict_run(7, conclusion="success", event=event_name, age=timedelta(minutes=10), head=None),
+    ]
+    fake.review_started[fake.runs[0]["id"]] = started
+    event = {"inputs": {"pr": "7", "head": HEAD}}
+    _, values, plan = _plan(monkeypatch, tmp_path, fake, event_name="workflow_dispatch", event=event)
+    if started:
+        assert values["decision"] == "skip" and "backoff" in plan["decision_reason"]
+    else:
+        assert values["decision"] == "review"
+        assert "reset by the owner" in plan["decision_reason"]
+
+
 def _decisive_state(outcome: str = "success") -> State:
     return State(7, HEAD, outcome, datetime.now(UTC) - timedelta(minutes=10))
 
@@ -1100,27 +1128,25 @@ def test_the_surfaced_description_keeps_the_shared_prefix_intact() -> None:
     assert sweep.surface_description(["x" * 500]).startswith(github.SWEEP_FAILURE_SURFACE_PREFIX)
 
 
-def test_reset_spent_counts_only_runs_that_could_have_used_the_reset() -> None:
+def test_reset_spent_checks_attempt_evidence_only_for_later_matching_started_runs() -> None:
     reset_at = datetime.now(UTC) - timedelta(minutes=30)
     before = _verdict_run(7, conclusion="failure", age=timedelta(hours=2))
-    after = _verdict_run(7, conclusion="failure", age=timedelta(minutes=10))
-    skipped = _verdict_run(7, conclusion="skipped", age=timedelta(minutes=10))
-    cancelled = _verdict_run(7, conclusion="cancelled", age=timedelta(minutes=10))
+    after = _verdict_run(7, conclusion="cancelled", age=timedelta(minutes=10))
     other = _verdict_run(7, conclusion="failure", age=timedelta(minutes=10), head=OTHER_HEAD)
-    unattributed = _verdict_run(7, conclusion="failure", age=timedelta(minutes=10), head=None)
-    assert not sweep.reset_spent(_parsed(), reset_at, HEAD)
-    assert not sweep.reset_spent(_parsed(before), reset_at, HEAD)
-    assert not sweep.reset_spent(_parsed(skipped), reset_at, HEAD)
-    assert not sweep.reset_spent(_parsed(cancelled), reset_at, HEAD)
-    assert not sweep.reset_spent(_parsed(other), reset_at, HEAD)
-    assert sweep.reset_spent(_parsed(unattributed), reset_at, HEAD)
-    assert sweep.reset_spent(_parsed(after), reset_at, HEAD)
-    assert not sweep.reset_spent(_parsed(after), reset_at, HEAD, exclude=after["id"])
-    in_flight = _verdict_run(7, status="in_progress", conclusion=None, age=timedelta(minutes=10))
-    assert sweep.reset_spent(_parsed(in_flight), reset_at, HEAD)
+    for run in (before, other):
+        assert not sweep.reset_spent(_parsed(run), reset_at, HEAD, review_started=lambda _: True)
+    assert not sweep.reset_spent(_parsed(after), reset_at, HEAD, review_started=lambda _: False)
+    assert sweep.reset_spent(_parsed(after), reset_at, HEAD, review_started=lambda _: True)
+    assert not sweep.reset_spent(_parsed(after), reset_at, HEAD, exclude=after["id"], review_started=lambda _: True)
     for waiting in ("queued", "waiting", "pending", "requested"):
-        not_started = _verdict_run(7, status=waiting, conclusion=None, age=timedelta(minutes=10))
-        assert not sweep.reset_spent(_parsed(not_started), reset_at, HEAD)
+        run = _verdict_run(7, status=waiting, conclusion=None, age=timedelta(minutes=10))
+        assert not sweep.reset_spent(_parsed(run), reset_at, HEAD, review_started=lambda _: True)
+    running = _verdict_run(7, status="in_progress", conclusion=None, age=timedelta(minutes=10))
+
+    def unreadable(_: int) -> bool:
+        raise github.GitHubError("unsettled")
+
+    assert sweep.reset_spent(_parsed(running), reset_at, HEAD, review_started=unreadable)
 
 
 def _degraded(fake: FakeGitHub) -> FakeGitHub:

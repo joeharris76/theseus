@@ -132,6 +132,10 @@ Concurrency stays with the caller. The example `review-gate.yml` still cancels a
 
 A failing subprocess posts no status of its own, so no success is published on its behalf.
 
+`theseus reset-backoff --pr N --head SHA --reason TEXT` records an attester's exact-head reset after an owner instruction. It permits one review through the existing backoff, not a reroll of a decisive verdict. A successful guard-only comment run or a dispatch refused by prepare does not consume it. Trusted attempt/state artifacts or a started attempt-loop step consume it even if the review later fails, times out or is cancelled. Missing or unreadable evidence holds the reset rather than granting another attempt.
+
+When no artifact exists, the Jobs API must prove the trusted `review` job was skipped or all five attempt-loop steps were skipped. Renaming that job, `Run the attempt loop`, or `Resume the attempt loop after attempt N` requires updating `github.run_review_started`; unrecognized or incomplete evidence fails closed.
+
 ## Provider loss and the health job
 
 The attempt phase probes the gateway's served models before choosing a reviewer, so a provider that is gone changes the reviewer's model, never the outcome of the run; see [Provider loss](consumer-policy.md#provider-loss) for the selection rules.
@@ -167,6 +171,7 @@ An environment's branch policy is checked against the default branch for `pull_r
 | Secret | Used by |
 |---|---|
 | `TYPESAFE_API_KEY` | `prepare`, `recover`, `finalize`, the scans |
+| `OPENAI_API_KEY` (optional) | `prepare`, `finalize`, the scans; the classifier fallback only |
 | `REVIEW_GATEWAY_TOKEN`, `REVIEW_GATEWAY_URL` | the attempt steps and `finalize` only |
 | `TS_OAUTH_CI_CLIENT_ID`, `TS_OAUTH_CI_SECRET` | the tailnet join, the scans, `finalize` |
 | `REVIEW_APP_ID`, `REVIEW_APP_PRIVATE_KEY` | the token-mint steps only |
