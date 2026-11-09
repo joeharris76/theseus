@@ -115,3 +115,44 @@ def test_a_manual_retry_whose_guard_fails_still_consumes_the_retry(harness: Harn
     harness.script_omp([UNAVAILABLE])
     second = harness.review(90, event_name="workflow_dispatch")
     assert second.steps["prepare"].outputs["decision"] == "skip"
+
+
+def test_owner_reset_survives_skip_only_runs_and_admits_exactly_one_review(harness: Harness) -> None:
+    head, prior = _pending_review(harness, 91, "feat/reset-skips")
+    harness.github.age(prior, 30)
+    harness.github.comment(91, f"Owner instruction: reset the backoff on {head}", created_at=ago(20))
+    harness.github.comment(
+        91, f"Review backoff reset: {head}\nReason: retry the unavailable reviewer", created_at=ago(19)
+    )
+    for event, minutes in (("issue_comment", 10), ("workflow_dispatch", 5)):
+        skipped = harness.github.add_run(
+            VERDICT,
+            event=event,
+            pr=91,
+            head_sha=harness.github.git("rev-parse", "develop").strip(),
+            created_at=ago(minutes),
+        )
+        harness.github.complete_run(skipped, "success")
+        steps = [
+            {"name": name, "status": "completed", "conclusion": "skipped"}
+            for name in ["Run the attempt loop", *(f"Resume the attempt loop after attempt {n}" for n in range(1, 5))]
+        ]
+        harness.github.jobs[skipped["id"]] = {
+            "total_count": 1,
+            "jobs": [
+                {
+                    "name": "review",
+                    "status": "completed",
+                    "conclusion": "skipped" if event == "issue_comment" else "success",
+                    "steps": [] if event == "issue_comment" else steps,
+                }
+            ],
+        }
+    harness.script_omp([UNAVAILABLE])
+    first = harness.review(91, event_name="workflow_dispatch")
+    assert first.steps["prepare"].outputs["decision"] == "review", first.steps["prepare"].stdout
+    assert harness.omp_calls() > 0
+    harness.script_omp([UNAVAILABLE])
+    second = harness.review(91, event_name="workflow_dispatch")
+    assert second.steps["prepare"].outputs["decision"] == "skip", second.steps["prepare"].stdout
+    assert harness.omp_calls() == 0

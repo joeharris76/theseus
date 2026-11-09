@@ -1264,3 +1264,74 @@ def test_a_failed_gh_run_download_raises(tmp_path: Path) -> None:
     )
     assert proc.returncode == 3, proc.stderr
     assert "could not download state from run 5: HTTP 404" in proc.stdout
+
+
+def _review_evidence(monkeypatch: pytest.MonkeyPatch, job: dict[str, Any], *, artifact: bool = False) -> None:
+    def api(path: str) -> Any:
+        if "/compare/" in path:
+            return {"status": "ahead"}
+        if "/artifacts?" in path:
+            return {"artifacts": [{"name": "review-verdict-attempt-1"}] if artifact else []}
+        if "/jobs?" in path:
+            return {"total_count": 1, "jobs": [job]}
+        return _run(event="workflow_dispatch")
+
+    monkeypatch.setattr(github, "get_json", api)
+
+
+def _attempt_steps(conclusion: str = "skipped") -> list[dict[str, Any]]:
+    names = ["Run the attempt loop", *(f"Resume the attempt loop after attempt {n}" for n in range(1, 5))]
+    return [{"name": name, "status": "completed", "conclusion": conclusion} for name in names]
+
+
+@pytest.mark.parametrize("guard_only", [False, True])
+def test_trusted_skip_only_runs_have_no_review_attempt(monkeypatch: pytest.MonkeyPatch, guard_only: bool) -> None:
+    _review_evidence(
+        monkeypatch,
+        {
+            "name": "review / review",
+            "status": "completed",
+            "conclusion": "skipped" if guard_only else "success",
+            "steps": [] if guard_only else _attempt_steps(),
+        },
+    )
+    assert github.run_review_started(REPO, 123, PR, BASE) is False
+
+
+@pytest.mark.parametrize("conclusion", ["success", "failure", "cancelled", "timed_out"])
+def test_a_started_attempt_spends_reset_even_without_artifacts(
+    monkeypatch: pytest.MonkeyPatch, conclusion: str
+) -> None:
+    steps = _attempt_steps()
+    steps[0]["conclusion"] = conclusion
+    _review_evidence(monkeypatch, {"name": "review", "status": "completed", "conclusion": conclusion, "steps": steps})
+    assert github.run_review_started(REPO, 123, PR, BASE) is True
+
+
+def test_existing_attempt_artifact_spends_reset_without_job_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    _review_evidence(monkeypatch, {}, artifact=True)
+    assert github.run_review_started(REPO, 123, PR, BASE) is True
+
+
+@pytest.mark.parametrize(
+    "job",
+    [
+        {},
+        {"name": "review", "status": "in_progress", "steps": _attempt_steps()},
+        {"name": "review", "status": "completed", "steps": []},
+        {"name": "review", "status": "completed", "steps": _attempt_steps()[:-1]},
+        {"name": "renamed", "status": "completed", "steps": _attempt_steps()},
+    ],
+)
+def test_missing_or_ambiguous_attempt_evidence_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, job: dict[str, Any]
+) -> None:
+    _review_evidence(monkeypatch, job)
+    with pytest.raises(github.GitHubError):
+        github.run_review_started(REPO, 123, PR, BASE)
+
+
+def test_untrusted_attempt_evidence_is_never_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github, "get_json", lambda path: _run(event="pull_request"))
+    with pytest.raises(github.GitHubError, match="not a trusted"):
+        github.run_review_started(REPO, 123, PR, BASE)

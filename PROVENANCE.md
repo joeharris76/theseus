@@ -12,6 +12,7 @@ Theseus was extracted from BenchBox (`BenchBox-dev/BenchBox`) at commit `95c423c
 - `LICENSE` is MIT. It carries the repository copyright and the BenchBox copyright notice of the extracted code (`Copyright (c) 2026 Joe Harris / BenchBox Project`), which the MIT license requires to be retained. The seeded files carry no per-file copyright or third-party license headers (checked with a case-insensitive search for `copyright` and `licen[sc]e` over `src/`).
 - The wheel has no runtime dependencies. Its YAML parser is vendored pure Python: PyYAML 6.0.3, `lib/yaml/*.py` from the upstream sdist `https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz` (sha256 `d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f`, matching PyPI's published digest). The files sit byte-identical under `src/theseus_reviewer/_vendor/yaml/` except that `cyaml.py` (the libyaml binding) is omitted, so no C extension or ambient `yaml` can be loaded. Its MIT license (`Copyright (c) 2017-2021 Ingy döt Net`, `Copyright (c) 2006-2016 Kirill Simonov`) is retained as `src/theseus_reviewer/_vendor/yaml/LICENSE`. `tests/unit/test_vendored_yaml.py` pins the vendored file digest, and ruff excludes `_vendor`.
 - OMP is not bundled or redistributed. It is installed from consumer-pinned, hash-verified sources (`install-omp`).
+- The v0.2.6 row records the frozen source hash of the published `v0.2.6` release tag (`2900aa67639f792bce5a9abbe58f1c84ab3dd597`). A transient commit on `main` during multi-base gating development briefly carried a post-tag hash (`dc24431c...`) before it was restored; rebuilding from the `v0.2.6` tag yields `7476e99f...`.
 
 ## Frozen source hashes
 
@@ -34,4 +35,5 @@ The sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tr
 | v0.2.3 | `fa2a8e535658a0ff51f6f871e66e53389263d6ec5c3ed1671753b4c6cf4d762a` |
 | v0.2.4 | `fa2a8e535658a0ff51f6f871e66e53389263d6ec5c3ed1671753b4c6cf4d762a` |
 | v0.2.5 | `583b86b6f678dcd94206920715fb7796180cb9ffa2fa01f35a71c26551fb0c3b` |
-| v0.2.6 | `dc24431c0cfde312f277c4410ecf210020be4214508a46ff6efb20d3b6ff3a17` |
+| v0.2.6 | `7476e99f422d69c318fe4d6ee02e74df64d1cb0b023e37ae43b5227bc6a18a31` |
+| v0.2.7 | `41ed0c6290765cfe27a3920023dee4d986f35ecd1dd5a6651841f1f1cec79608` |

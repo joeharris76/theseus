@@ -43,6 +43,7 @@ State lives under `~/.cache/theseus/local-review` (`THESEUS_LOCAL_STATE` overrid
 ## Credentials
 
 - Classifier key: `TYPESAFE_API_KEY` from the environment, or on macOS the keychain item of the same name (`security add-generic-password -s TYPESAFE_API_KEY -a "$USER" -w`).
+- Classifier fallback key (optional, used only when the policy sets `classifier.fallback`): `OPENAI_API_KEY` from the environment. It reaches only the prepare, scan and finalize phases.
 - Gateway client: `~/.omp/review-gateway/local-client.token` against `http://127.0.0.1:4000`, or in a cloud session (`THESEUS_EPHEMERAL_CLONE=1` or a set `REVIEW_CLOUD_GATEWAY_TOKEN`) `REVIEW_GATEWAY_URL` plus `REVIEW_CLOUD_GATEWAY_TOKEN`, reaching a tailnet-only gateway through the loopback proxy recorded in the status file.
 - GitHub access: `GH_TOKEN`, `GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN`, used only for the pull-request lookup.
 

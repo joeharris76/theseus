@@ -19,6 +19,7 @@ from .harness import (
     HELD_SECRET,
     JEV_KEY,
     OAUTH_CLIENT_ID,
+    OPENAI_KEY,
     PACKAGE,
     POLICY,
     REPO_ROOT,
@@ -93,6 +94,7 @@ class Options:
     before_guard: Callable[[], None] | None = None
     before_gate: Callable[[], None] | None = None
     app: bool = True
+    openai_key: bool = True
     pins: Pins | None = None
 
 
@@ -173,6 +175,7 @@ class WorkflowRunner:
             "runner.temp": str(self.temp),
             "inputs.policy_path": POLICY,
             "secrets.TYPESAFE_API_KEY": JEV_KEY,
+            "secrets.OPENAI_API_KEY": OPENAI_KEY if self.options.openai_key else "",
             "secrets.TS_OAUTH_CI_SECRET": HELD_SECRET,
             "secrets.TS_OAUTH_CI_CLIENT_ID": OAUTH_CLIENT_ID,
             "secrets.REVIEW_GATEWAY_TOKEN": GATEWAY_TOKEN,
@@ -230,6 +233,7 @@ class WorkflowRunner:
             **self.github_env,
             "GITHUB_WORKSPACE": str(self.temp),
             "TYPESAFE_BASE_URL": self.harness.jev.url,
+            "OPENAI_BASE_URL": self.harness.decisions.url,
             **scoped,
         }
 

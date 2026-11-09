@@ -613,6 +613,7 @@ def test_the_guard_refuses_a_malformed_tailscale_tag(tag: str) -> None:
 
 
 APP_REFUSAL = "Refuse a caller that did not pass the App secrets"
+OPTIONAL_SECRETS = frozenset({"OPENAI_API_KEY"})
 APP_JOBS = [("review.yml", "sweep"), ("review.yml", "review"), ("gate.yml", "gate"), ("gate.yml", "sweep")]
 
 
@@ -633,7 +634,7 @@ def test_a_secret_bearing_job_fails_loudly_first_when_the_app_secrets_are_empty(
     assert result.stdout.startswith("::error::")
     assert "environment review" in result.stdout
     declared = document["on"]["workflow_call"]["secrets"]
-    assert all(secret in result.stdout for secret in declared)
+    assert all(secret in result.stdout for secret in declared if secret not in OPTIONAL_SECRETS)
     assert "inherit" not in result.stdout
     assert "map each secret by name" in result.stdout
     assert "non-empty values" in result.stdout
@@ -651,7 +652,7 @@ def test_each_callee_declares_exactly_the_secrets_it_references_and_all_are_requ
     declared = document["on"]["workflow_call"]["secrets"]
     referenced = set(SECRET.findall((WORKFLOWS / name).read_text(encoding="utf-8")))
     assert set(declared) == referenced
-    assert all(spec["required"] is True for spec in declared.values())
+    assert all(spec["required"] is (name not in OPTIONAL_SECRETS) for name, spec in declared.items())
 
 
 def test_the_callees_declare_the_secrets_the_docs_list() -> None:
@@ -664,6 +665,7 @@ def test_the_callees_declare_the_secrets_the_docs_list() -> None:
         "TS_OAUTH_CI_CLIENT_ID",
         "TS_OAUTH_CI_SECRET",
         "TYPESAFE_API_KEY",
+        "OPENAI_API_KEY",
     }
     assert set(load(WORKFLOWS / "gate.yml")["on"]["workflow_call"]["secrets"]) == {
         "REVIEW_APP_ID",
@@ -680,7 +682,7 @@ def test_an_example_caller_that_maps_the_secrets_by_name_satisfies_the_callee_ex
     (job,) = load(EXAMPLES / example)["jobs"].values()
     declared = load(WORKFLOWS / callee_name)["on"]["workflow_call"]["secrets"]
     assert set(job["secrets"]) == set(declared)
-    assert all(spec["required"] is True for spec in declared.values())
+    assert all(spec["required"] is (name not in OPTIONAL_SECRETS) for name, spec in declared.items())
     assert all(job["secrets"][name] == f"${{{{ secrets.{name} }}}}" for name in declared)
     inputs = load(WORKFLOWS / callee_name)["on"]["workflow_call"]["inputs"]
     required = {name for name, spec in inputs.items() if spec["required"]}

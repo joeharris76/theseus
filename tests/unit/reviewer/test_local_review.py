@@ -45,9 +45,11 @@ TRUSTED_FILES = (
     (INERT_RELATIVE, INERT_TEXT),
     (OMP_CONFIG_RELATIVE, OMP_CONFIG_TEXT),
 )
+OPENAI_KEY = "sk-openai-" + "R4pL7yGd" * 4
 HOST_TOKENS = {"REVIEW_HOST_TOKEN_LOCAL": LOCAL_TOKEN, "REVIEW_HOST_TOKEN_CLOUD": CLOUD_TOKEN}
 WITHHELD_VALUES = {
     "TYPESAFE_API_KEY": TYPESAFE_KEY,
+    "OPENAI_API_KEY": OPENAI_KEY,
     "TS_AUTHKEY": TS_AUTHKEY,
     "OMP_GATEWAY_TOKEN": CLOUD_TOKEN,
     "REVIEW_CLOUD_GATEWAY_TOKEN": CLOUD_TOKEN,
@@ -344,17 +346,18 @@ def test_every_phase_receives_exactly_the_secrets_it_needs(
     (gateway / "cloud-client.token").write_text(CLOUD_TOKEN + "\n", encoding="utf-8")
     run = _run(tmp_path)
     key = {"TYPESAFE_API_KEY"}
+    fallback = {"OPENAI_API_KEY"}
     hosts = set(HOST_TOKENS)
     gateway_pair = {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"}
     monkeypatch.setattr(local, "_handed_over", {"TS_AUTHKEY": TS_AUTHKEY})
 
-    assert _grants(run, "prepare") == key | set(GITHUB_ACCESS) | {"GH_ENTERPRISE_TOKEN"}
-    assert _grants(run, "scan") == key | {"TS_AUTHKEY", "OMP_GATEWAY_TOKEN"} | hosts
+    assert _grants(run, "prepare") == key | fallback | set(GITHUB_ACCESS) | {"GH_ENTERPRISE_TOKEN"}
+    assert _grants(run, "scan") == key | fallback | {"TS_AUTHKEY", "OMP_GATEWAY_TOKEN"} | hosts
     assert _grants(run, "harness") == set()
     assert _grants(run, "isolation") == set()
     assert _grants(run, "attempts") == gateway_pair
     assert _grants(run, "recover") == key
-    assert _grants(run, "finalize") == key | {"TS_AUTHKEY"} | hosts | gateway_pair
+    assert _grants(run, "finalize") == key | fallback | {"TS_AUTHKEY"} | hosts | gateway_pair
 
 
 def test_the_attempt_phase_environment_holds_no_withheld_value(
@@ -366,7 +369,11 @@ def test_the_attempt_phase_environment_holds_no_withheld_value(
 
     environ = run._environ("attempts", run.grants("attempts"))
 
-    held = {name for name, value in environ.items() if value in (TYPESAFE_KEY, TS_AUTHKEY, *GITHUB_ACCESS.values())}
+    held = {
+        name
+        for name, value in environ.items()
+        if value in (TYPESAFE_KEY, OPENAI_KEY, TS_AUTHKEY, *GITHUB_ACCESS.values())
+    }
     assert held == set()
     assert environ["OMP_GATEWAY_TOKEN"] == CLOUD_TOKEN
 
@@ -537,7 +544,8 @@ def test_the_local_environment_reads_its_adapter_values_and_posts_nothing(tmp_pa
     assert env.layout.attempts == tmp_path / "work" / "attempts"
     assert env.scan_roots == (Path("/a"), Path("/b")) and env.scan_excludes == (Path("/a/x"),)
     assert env.pr == "" and env.loopback_http is True
-    assert {"TYPESAFE_API_KEY", "TS_AUTHKEY", *HOST_TOKENS} <= set(env.redacted_secrets)
+    assert {"TYPESAFE_API_KEY", "OPENAI_API_KEY", "TS_AUTHKEY", *HOST_TOKENS} <= set(env.redacted_secrets)
+    assert "OPENAI_API_KEY" in env.scan_secrets
     with pytest.raises(local.driver.CredentialError, match="posts nothing"):
         env.sink()
     with env.session():
@@ -718,7 +726,7 @@ def test_a_secret_left_in_the_environment_is_still_withheld_when_a_handover_arri
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
-        env={**os.environ},
+        env={name: value for name, value in os.environ.items() if name not in local.SCRUBBED_AT_START},
         capture_output=True,
         text=True,
         check=True,

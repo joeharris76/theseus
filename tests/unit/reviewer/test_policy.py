@@ -121,6 +121,34 @@ def test_fully_disabled_policy_needs_no_attempts() -> None:
         (lambda raw: raw["classifier"].pop("logic_paths"), r"classifier logic_paths must be a string list"),
         (lambda raw: raw["classifier"].update(data_paths=[42]), r"classifier data_paths must be a string list"),
         (lambda raw: raw["classifier"].update(exempt_paths="x"), r"classifier exempt_paths must be a string list"),
+        (lambda raw: raw["classifier"].update(surprise=1), r"classifier has unknown keys \['surprise'\]"),
+        (
+            lambda raw: raw["classifier"].update(fallback="omp-chat", unavailable_bucket="max"),
+            r"fallback must be one of",
+        ),
+        (lambda raw: raw["classifier"].update(fallback="decisions"), r"fallback needs classifier unavailable_bucket"),
+        (
+            lambda raw: raw["classifier"].update(fallback_min_bucket="medium"),
+            r"fallback_min_bucket needs classifier fallback",
+        ),
+        (
+            lambda raw: raw["classifier"].update(
+                fallback="decisions", unavailable_bucket="max", fallback_min_bucket="x"
+            ),
+            r"fallback_min_bucket must be one of",
+        ),
+        (lambda raw: raw["classifier"].update(size_floor=1500), r"size_floor must be a mapping"),
+        (lambda raw: raw["classifier"].update(size_floor={}), r"size_floor min_lines must be an integer"),
+        (lambda raw: raw["classifier"].update(size_floor={"min_lines": 0}), r"size_floor min_lines must be an integer"),
+        (
+            lambda raw: raw["classifier"].update(size_floor={"min_lines": True}),
+            r"size_floor min_lines must be an integer",
+        ),
+        (lambda raw: raw["classifier"].update(size_floor={"min_lines": 5, "lines": 1}), r"size_floor has unknown keys"),
+        (
+            lambda raw: raw["classifier"].update(size_floor={"min_lines": 5, "exclude": "uv.lock"}),
+            r"size_floor exclude must be a string list",
+        ),
         (lambda raw: raw.update(mode="audit"), r"mode must be shadow or enforce"),
         (lambda raw: raw.update(status_context=""), r"status_context is required"),
         (lambda raw: raw.update(findings_delivery="pr"), r"findings_delivery must be one of"),
@@ -390,3 +418,18 @@ def test_a_consumer_fixture_prefix_is_normalised_to_one_trailing_slash() -> None
         raw = _raw()
         raw["consumer"]["omp_fixture_prefix"] = prefix
         assert parse_policy(raw).consumer.omp_fixture_prefix == "fixtures/omp/"
+
+
+def test_the_classifier_fallback_and_size_floor_parse() -> None:
+    raw = _raw()
+    raw["classifier"].update(
+        unavailable_bucket="max",
+        fallback="decisions",
+        fallback_min_bucket="medium",
+        size_floor={"min_lines": 1500, "exclude": ["uv.lock"]},
+    )
+    rules = parse_policy(raw).classifier
+    assert (rules.fallback, rules.fallback_min_bucket) == ("decisions", "medium")
+    assert (rules.size_floor_min_lines, rules.size_floor_exclude) == (1500, ("uv.lock",))
+    plain = parse_policy(_raw()).classifier
+    assert (plain.fallback, plain.fallback_min_bucket, plain.size_floor_min_lines) == (None, None, None)

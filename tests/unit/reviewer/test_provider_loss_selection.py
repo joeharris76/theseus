@@ -292,7 +292,7 @@ def test_a_classifier_outage_falls_back_to_the_policy_bucket_with_the_deep_templ
 ) -> None:
     held = _select(monkeypatch, tmp_path, _minimal_plan(bucket), JevError(503, "down"))
     assert held["size_bucket"] == bucket and held["template"] == "deep" and held["capability"] == "deep"
-    assert held["source"] == "fallback" and held["files"] == []
+    assert held["backend"] == "unavailable" and held["files"] == []
 
 
 @pytest.mark.parametrize(("bucket", "expected"), [("small", "large"), ("max", "max")])
@@ -316,18 +316,38 @@ def test_a_policy_without_the_key_keeps_the_pending_behaviour(monkeypatch: pytes
     assert _select(monkeypatch, tmp_path, _minimal_plan(None), JevError(503, "down")) == {}
 
 
-def test_a_malformed_classifier_answer_is_not_a_loss_and_does_not_fall_back(
+def test_a_malformed_classifier_answer_is_an_outage_and_falls_back_to_the_policy_bucket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    assert _select(monkeypatch, tmp_path, _minimal_plan("max"), KeyError("size")) == {}
+    class Malformed(_AnswersSizeThenFails):
+        def ask(self, state: object, questions: dict[str, Any]) -> dict[str, Any]:
+            return {"size": {"choice": "colossal", "probabilities": {"colossal": 1.0}, "confidence": 1.0}}
+
+    monkeypatch.setattr(cli, "JevSession", lambda: Malformed("large"))
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out.txt"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    (tmp_path / "plan.json").write_text(json.dumps(_minimal_plan("max")), encoding="utf-8")
+    args = argparse.Namespace(
+        plan=str(tmp_path / "plan.json"),
+        attempts_dir=str(tmp_path / "attempts"),
+        slot=1,
+        classification=str(tmp_path / "classification.json"),
+        workspace=None,
+        classify_only=True,
+    )
+    assert cli.command_select(args) == 0
+    held = json.loads((tmp_path / "classification.json").read_text(encoding="utf-8"))
+    assert (held["backend"], held["size_bucket"]) == ("unavailable", "max")
+    assert held["degraded_from"] == "TypeSafe answered unusable content"
 
 
-def test_the_fallback_classification_round_trips_with_its_source() -> None:
+def test_the_fallback_classification_round_trips_with_its_backend() -> None:
     held = fallback_classification("large", [])
     from theseus_reviewer.classify import Classification
 
-    assert Classification.from_json(held.to_json()).fallback
-    assert not Classification.from_json({**held.to_json(), "source": "classifier"}).fallback
+    assert Classification.from_json(held.to_json()).backend == "unavailable"
+    assert Classification.from_json({**held.to_json(), "backend": "jev"}).backend == "jev"
 
 
 def _policy(**classifier: Any) -> Any:
@@ -374,10 +394,12 @@ def test_an_outage_status_from_the_classifier_falls_back(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int | None
 ) -> None:
     held = _select(monkeypatch, tmp_path, _minimal_plan("large"), JevError(status, "down"))
-    assert held["size_bucket"] == "large" and held["source"] == "fallback"
+    assert held["size_bucket"] == "large" and held["backend"] == "unavailable"
 
 
 class _AnswersSizeThenFails:
+    model = "jev-1.14.0"
+
     def __init__(self, size: str) -> None:
         self.size = size
 
@@ -393,7 +415,7 @@ class _AnswersSizeThenFails:
         return {
             "size": {"choice": self.size, "probabilities": {self.size: 1.0}, "confidence": 1.0},
             "capability": {"choice": "routine", "probabilities": {"routine": 1.0}, "confidence": 1.0},
-            "template": {"choice": "standard", "probabilities": {"standard": 1.0}, "confidence": 1.0},
+            "template": {"choice": "deep", "probabilities": {"deep": 1.0}, "confidence": 1.0},
         }
 
 
@@ -420,7 +442,7 @@ def test_a_per_file_failure_after_the_size_answer_keeps_the_larger_bucket(
     )
     assert cli.command_select(args) == 0
     held = json.loads((tmp_path / "classification.json").read_text(encoding="utf-8"))
-    assert held["size_bucket"] == expected and held["source"] == "fallback"
+    assert held["size_bucket"] == expected and held["backend"] == "unavailable"
 
 
 def _next(previous: retry.State | None, now: datetime, cause: str, head: str = HEAD, **extra: Any) -> retry.State:
