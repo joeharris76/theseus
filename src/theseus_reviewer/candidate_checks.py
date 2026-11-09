@@ -39,7 +39,6 @@ UPSTREAM_PATH = "/v1/messages"
 UPSTREAM_MODEL = "claude-sonnet-5-5"
 QUOTA_PRIMARY = f"anthropic/{UPSTREAM_MODEL}"
 QUOTA_PROVIDER = QUOTA_PRIMARY.partition("/")[0]
-QUOTA_CHAIN_TARGET = "openai-codex/gpt-6.1-sol"
 REVIEW_REQUESTS = 5
 ARGV_PROMPT_LIMIT = 128 * 1024
 ELISION_FOOTER = "elided; re-read needed ranges"
@@ -64,6 +63,9 @@ CONTRACT_ROWS = {
     12: "auth-gateway serve protocol and client tokens",
     13: "model catalog listing under a placeholder credential",
     14: "prompt transport on standard input",
+    15: "served model set requires provider credentials",
+    16: "disabledProviders hides a credentialed provider from the served set",
+    17: "rewritten reviewer role selects the chosen model",
 }
 RECORDED_REASONS = {
     8: "provider reset-time wording is originated by each provider and is never observable offline; reset parsing stays covered by the calibrated absence tests",
@@ -331,8 +333,9 @@ def walk_failures(stdout: str, *, first: str, then: str) -> list[str]:
     if not errors or errors[0] != (first.split("/")[0], 429):
         failures.append(f"the first failure is {errors[0] if errors else None}, expected a 429 from {first}")
     targets = [f"{item.get('provider')}/{item.get('model')}" for item in messages]
-    if then not in targets:
-        failures.append(f"the fallback chain did not move to {then}; the stream visited {sorted(set(targets))}")
+    following = next((target for target in targets if target != first), None)
+    if following != then:
+        failures.append(f"the fallback chain did not move to {then}; the stream visited {targets}")
     return failures
 
 
@@ -587,12 +590,16 @@ def breach_checks(run: ClientRun) -> list[Check]:
 
 
 def quota_checks(walk: ClientRun, terminal: ClientRun) -> list[Check]:
-    chain_target = QUOTA_CHAIN_TARGET
+    walk_errors = _run_failures(walk, succeeds=False)
+    if len(walk.model_chain) < 2:
+        walk_errors.append("the configured reviewer role has no fallback candidate to probe")
+    else:
+        walk_errors.extend(walk_failures(walk.stdout, first=walk.model_chain[0], then=walk.model_chain[1]))
     return [
         _check(
             "live-quota-fallback-walk",
             (4, 6, 9),
-            _run_failures(walk, succeeds=False) + walk_failures(walk.stdout, first=QUOTA_PRIMARY, then=chain_target),
+            walk_errors,
         ),
         _check(
             "live-quota-classification",
@@ -629,9 +636,47 @@ def auth_checks(upstream: ClientRun, bad_token: ClientRun) -> list[Check]:
     ]
 
 
+def served_checks(run: ClientRun) -> list[Check]:
+    served = run.served or {}
+    empty = []
+    if "no-credentials" not in served:
+        empty.append("the no-credentials served set was not observed")
+    elif served["no-credentials"]:
+        empty.append(f"the gateway serves models without credentials: {list(served['no-credentials'])}")
+    disabled = []
+    credentialed = served.get("credentialed", ())
+    if QUOTA_PRIMARY not in credentialed:
+        disabled.append(f"the credentialed control does not serve {QUOTA_PRIMARY}")
+    if "disabled-provider" not in served:
+        disabled.append("the disabled-provider served set was not observed")
+    elif served["disabled-provider"]:
+        disabled.append(f"the gateway serves models despite disabledProviders: {list(served['disabled-provider'])}")
+    return [
+        _check("live-served-without-credentials", (12, 15), empty),
+        _check("live-served-disabled-provider", (12, 16), disabled),
+    ]
+
+
+def rewritten_role_checks(run: ClientRun) -> list[Check]:
+    failures = _run_failures(run, succeeds=True)
+    expected = run.chosen_model.partition("/")[2]
+    if not expected or (run.model_chain and run.chosen_model == run.model_chain[0]):
+        failures.append("the rewritten-role probe has no distinct chosen model")
+    if not run.upstream:
+        failures.append("no rewritten-role request reached the stub upstream")
+    for request in run.upstream:
+        if request.get("path") != UPSTREAM_PATH or request.get("body", {}).get("model") != expected:
+            failures.append(
+                f"the rewritten role requested {request.get('body', {}).get('model')!r}, expected {expected}"
+            )
+    return [_check("live-rewritten-role", (4, 5, 17), failures)]
+
+
 def live_checks(runs: Mapping[str, ClientRun]) -> list[Check]:
     return [
         *review_checks(runs["review"]),
+        *served_checks(runs["review"]),
+        *rewritten_role_checks(runs["rewritten-role"]),
         *read_line_checks(runs["read-lines"]),
         *control_checks(runs["control"]),
         *transport_checks(runs["prompt-transport"]),

@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import candidate_canaries, cli, commands, processes, runner
+from . import candidate_canaries, cli, commands, processes, providers, runner
 from ._vendor import yaml
 from .candidate_canaries import Canary
 from .candidate_env import quiet_env
@@ -80,6 +80,7 @@ class Scenario:
     valid_token: bool = True
     canaries: tuple[Canary, ...] = ()
     prompt: str = PROMPT
+    rewrite_role: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,9 @@ class ClientRun:
     survivors: tuple[int, ...]
     started: tuple[str, ...] = ()
     argv: tuple[str, ...] = ()
+    served: Mapping[str, tuple[str, ...]] | None = None
+    model_chain: tuple[str, ...] = ()
+    chosen_model: str = ""
 
 
 def _review_script(context: Context) -> list[UpstreamTurn]:
@@ -157,6 +161,7 @@ SCENARIOS = (
     Scenario("upstream-auth", _auth_script),
     Scenario("bad-token", _review_script, valid_token=False),
     Scenario("prompt-transport", _probe_script, prompt=TRANSPORT_PROMPT),
+    Scenario("rewritten-role", _probe_script, rewrite_role=True),
 )
 
 
@@ -250,6 +255,7 @@ class LoopbackChain:
         self.canary = CanaryServer()
         self.gateway_url = ""
         self.client_token = secrets.token_urlsafe(GATEWAY_BEARER_BYTES)
+        self.served: dict[str, tuple[str, ...]] = {}
         self._processes: list[subprocess.Popen[bytes]] = []
         self._planted: list[Path] = []
         self._stack = contextlib.ExitStack()
@@ -301,11 +307,6 @@ class LoopbackChain:
             "OMP_AUTH_BROKER_URL": f"http://{LOOPBACK}:{broker_port}",
             "OMP_AUTH_BROKER_TOKEN": token,
         }
-        _run(
-            [omp, "auth-broker", "migrate", "--from-local", "--include-env"],
-            cwd=gateway_home,
-            env={**gateway_env, "ANTHROPIC_API_KEY": PROVIDER_KEY},
-        )
         token_file = self.workdir / "client-token"
         token_file.write_text(self.client_token, encoding="utf-8")
         clients = self.workdir / "gateway-clients.json"
@@ -323,6 +324,21 @@ class LoopbackChain:
                     str(config_file),
                 ]
             )
+        empty_gateway = self._spawn(
+            "empty-gateway",
+            [omp, "auth-gateway", "serve", "--bind", f"{LOOPBACK}:{gateway_port}", f"--clients={clients}"],
+            gateway_home,
+            gateway_env,
+        )
+        _wait_listening(gateway_port, empty_gateway, "empty auth-gateway")
+        self.gateway_url = f"http://{LOOPBACK}:{gateway_port}"
+        self.served["no-credentials"] = self._served()
+        _stop(empty_gateway)
+        _run(
+            [omp, "auth-broker", "migrate", "--from-local", "--include-env"],
+            cwd=gateway_home,
+            env={**gateway_env, "ANTHROPIC_API_KEY": PROVIDER_KEY},
+        )
         gateway_process = self._spawn(
             "gateway",
             [omp, "auth-gateway", "serve", "--bind", f"{LOOPBACK}:{gateway_port}", f"--clients={clients}"],
@@ -331,12 +347,46 @@ class LoopbackChain:
         )
         _wait_listening(gateway_port, gateway_process, "auth-gateway")
         self.gateway_url = f"http://{LOOPBACK}:{gateway_port}"
+        self.served["credentialed"] = self._served()
+        disabled_home = self.workdir / "disabled-gateway"
+        disabled_env = {**gateway_env, **quiet_env(disabled_home)}
+        agent = disabled_home / ".omp" / "agent"
+        agent.mkdir(parents=True)
+        target = providers.candidates(ROLE_SELECTOR, yaml.safe_load(self.config_text))[0]
+        (agent / "config.yml").write_text(
+            yaml.safe_dump({"disabledProviders": [providers.provider_of(target)]}), encoding="utf-8"
+        )
+        disabled_port = _free_port()
+        disabled_gateway = self._spawn(
+            "disabled-gateway",
+            [omp, "auth-gateway", "serve", "--bind", f"{LOOPBACK}:{disabled_port}", f"--clients={clients}"],
+            disabled_home,
+            disabled_env,
+        )
+        _wait_listening(disabled_port, disabled_gateway, "disabled auth-gateway")
+        self.served["disabled-provider"] = self._served(f"http://{LOOPBACK}:{disabled_port}")
+
+    def _served(self, url: str = "") -> tuple[str, ...]:
+        return tuple(
+            sorted(providers.probe(url or self.gateway_url, self.client_token, allow_loopback_http=True).models)
+        )
 
     def run(self, scenario: Scenario) -> ClientRun:
         root = self.workdir / scenario.name
         home, scratch = root / "home", root / "scratch"
         home.mkdir(parents=True)
         cli.write_reviewer_home(home, self.gateway_url, self.config_text, allow_loopback_http=True)
+        chosen_model = ""
+        if scenario.rewrite_role:
+            config = home / ".omp" / "agent" / "config.yml"
+            settings = yaml.safe_load(config.read_text(encoding="utf-8"))
+            nominal = settings["modelRoles"]["default"]
+            chosen_model = settings["modelRoles"]["review"]
+            resolution = providers.Resolution(chosen_model, nominal, rewrite=True)
+            config.write_text(
+                yaml.safe_dump(providers.effective_config(settings, "default", resolution, (nominal, chosen_model))),
+                encoding="utf-8",
+            )
         if not scenario.chains:
             config = home / ".omp" / "agent" / "config.yml"
             settings = yaml.safe_load(config.read_text(encoding="utf-8"))
@@ -384,6 +434,12 @@ class LoopbackChain:
             survivors,
             tuple(sorted(item.name for item in markers.glob("mcp-*"))) if markers.is_dir() else (),
             invocation.argv,
+            dict(self.served),
+            tuple(
+                providers.strip_effort(item)
+                for item in providers.candidates(ROLE_SELECTOR, yaml.safe_load(self.config_text))
+            ),
+            providers.strip_effort(chosen_model),
         )
 
     def _clear_workspace(self) -> None:
