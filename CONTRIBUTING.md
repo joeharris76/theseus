@@ -27,7 +27,7 @@ uv build
 - Tests are offline and fixture-driven; no test may need a live App, gateway or network secret.
 - Pin GitHub Actions to full commit SHAs with the tag in a trailing comment.
 - Commit messages describe the durable reason for the change.
-- Changes to any engine file under `src/theseus_reviewer/`, the scorer, corpus, eval workflows, dependencies, policy, omp config, consumer guidance or `evals/results/` require authenticated live execution evidence that does not score lower than an authenticated baseline; see [docs/review-evals.md](docs/review-evals.md). Missing evidence fails closed. Initial baseline bootstrap is restricted to an unchanged-configuration, results-only pull request backed by a successful scheduled run's immutable artifact.
+- Changes to `evals/results/` must be unmodified authenticated artifacts of a successful scheduled run, appended one at a time; see [docs/review-evals.md](docs/review-evals.md). The score rule is inactive for engine, scorer, corpus, workflow, dependency, policy, omp config and guidance changes until an authenticated baseline and a trusted candidate executor exist; the owner's whole-diff review applies to them.
 
 ## Reporting vulnerabilities
 

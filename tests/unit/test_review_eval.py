@@ -303,9 +303,22 @@ def test_a_diff_without_reviewer_configuration_needs_no_score(repository: Path) 
 @pytest.mark.parametrize(
     "relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md", "src/theseus_reviewer/render.py"]
 )
-def test_no_live_baseline_blocks_configuration_changes(repository: Path, relative: str) -> None:
+def test_a_configuration_only_change_is_inactive_and_passes_explicitly(repository: Path, relative: str) -> None:
     base = _git(repository, "rev-parse", "HEAD")
     _change(repository, relative, POLICY + "# changed\n" if relative.endswith("review.yml") else "changed\n")
+
+    verdict = _check(repository, base)
+
+    assert verdict.ok
+    assert "no trusted candidate executor: the score rule is inactive" in verdict.lines[-1]
+    assert "owner whole-diff review applies" in verdict.lines[-1]
+
+
+def test_a_results_change_without_an_authenticated_baseline_is_blocked(repository: Path) -> None:
+    base = _git(repository, "rev-parse", "HEAD")
+    _change(repository, TEMPLATE, "changed\n")
+    _attach(repository, "head", _result(repository, "good"), trusted=False)
+    _commit(repository, "attach")
 
     verdict = _check(repository, base)
 
@@ -320,9 +333,11 @@ def _with_baseline(repository: Path) -> str:
 
 
 @pytest.mark.parametrize("relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md"])
-def test_a_template_policy_or_guidance_change_must_attach_a_run(repository: Path, relative: str) -> None:
+def test_a_configuration_change_with_an_unauthenticated_result_is_blocked(repository: Path, relative: str) -> None:
     base = _with_baseline(repository)
     _change(repository, relative, POLICY + "# changed\n" if relative.endswith("review.yml") else "changed\n")
+    _attach(repository, "head", _result(repository, "good"), trusted=False)
+    _commit(repository, "attach")
 
     verdict = _check(repository, base)
 
