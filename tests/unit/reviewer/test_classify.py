@@ -210,6 +210,16 @@ def test_the_size_floor_counts_only_non_data_non_excluded_lines() -> None:
     assert apply_floors("small", data_only, [], rules, min_bucket=False)[0] == "small"
 
 
+def test_the_size_floor_counts_renames_unless_both_sides_are_excluded() -> None:
+    rules = FloorRules(size_min_lines=1500, size_exclude=("data/*",))
+    renamed_into_data = [("data/dest.json", 1600, 0, "renamed", "src/source.py")]
+    bucket, floors = apply_floors("small", renamed_into_data, [], rules, min_bucket=False)
+    assert bucket == "large" and floors["raised_by"] == ["size"]
+    renamed_within_data = [("data/dest.json", 1600, 0, "renamed", "data/source.json")]
+    bucket, floors = apply_floors("small", renamed_within_data, [], rules, min_bucket=False)
+    assert bucket == "small" and floors["raised_by"] == []
+
+
 def test_the_gate_floor_and_min_bucket_apply_after_the_size_rules() -> None:
     rules = FloorRules(min_bucket="medium")
     assert apply_floors("trivial", [], ["g"], rules, min_bucket=True)[0] == "large"

@@ -167,6 +167,12 @@ def test_decisions_floors_and_size_floor_apply_to_its_answer(
     held = cli._classify_plan({**plan, "classifier_fallback_min_bucket": "medium"})
     assert held.size_bucket == "medium" and held.floors["raised_by"] == ["min_bucket"]
 
+    _jev(monkeypatch, JevError(503, "down"))
+    plan["reviewed_files"] = [
+        {"path": "data/x.json", "previous_path": "src/x.py", "additions": 1600, "deletions": 0, "status": "renamed"}
+    ]
+    assert cli._classify_plan(plan).size_bucket == "large"
+
 
 def test_a_gate_path_gets_large_and_the_gate_template_from_decisions(
     monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions
@@ -191,16 +197,23 @@ def test_a_refusal_or_malformed_change_level_answer_ends_at_the_unavailable_buck
     assert len(fake.requests) == 1
 
 
-@pytest.mark.parametrize("mode", ["refusal", "level", "score-range", "short", "status:429"])
-def test_a_failing_per_file_batch_fails_the_whole_decisions_classification(
-    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, mode: str
+def test_a_failing_per_file_batch_preserves_the_larger_answered_size_bucket(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions
 ) -> None:
     _jev(monkeypatch, JevError(503, "down"))
-    fake.choices.update(template="deep")
-    fake.script = ["ok", mode]
-    held = cli._classify_plan(_plan())
-    assert (held.backend, held.size_bucket) == ("unavailable", "max")
+    fake.choices.update(size="huge", template="deep")
+    fake.script = ["ok", "refusal"]
+    held = cli._classify_plan(_plan(classifier_unavailable_bucket="small"))
+    assert (held.backend, held.size_bucket, held.template) == ("unavailable", "huge", "deep")
+    assert held.files == ()
     assert len(fake.requests) == 2
+
+    _jev(monkeypatch, JevError(503, "down"))
+    fake.choices.update(size="small", template="deep")
+    fake.script = ["ok", "status:429"]
+    held = cli._classify_plan(_plan(classifier_unavailable_bucket="large"))
+    assert (held.backend, held.size_bucket, held.template) == ("unavailable", "large", "deep")
+    assert held.files == ()
 
 
 @pytest.mark.parametrize("status", [429, 500, 503])

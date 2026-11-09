@@ -33,6 +33,7 @@ class DecisionsError(Exception):
         self.message = message
         self.detail = detail
         self.missing_key = missing_key
+        self.partial: Any = None
 
     @property
     def is_auth(self) -> bool:

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .classifier import matching
-from .decisions import DecisionsSession
+from .decisions import DecisionsError, DecisionsSession
 from .jev import TOTAL_TIMEOUT_SECONDS, JevError, JevSession
 from .policy import SIZE_BUCKETS
 
@@ -190,15 +190,15 @@ def pr_state(
     pr: int | None,
     base_sha: str,
     head_sha: str,
-    stats: Sequence[tuple[str, int, int, str]],
+    stats: Sequence[tuple[Any, ...]],
     gate_flags: Sequence[str],
 ) -> dict[str, Any]:
     subject = f"PR #{pr}" if pr is not None else "Unopened local change"
     top = sorted(stats, key=lambda item: -(item[1] + item[2]))[:12]
-    lines = "; ".join(f"{path} +{added}/-{deleted}" for path, added, deleted, _ in top)
+    lines = "; ".join(f"{item[0]} +{item[1]}/-{item[2]}" for item in top)
     gate = " Gate signals: touches review/merge machinery." if gate_flags else " Gate signals: none."
-    total_added = sum(added for _, added, _, _ in stats)
-    total_deleted = sum(deleted for _, _, deleted, _ in stats)
+    total_added = sum(item[1] for item in stats)
+    total_deleted = sum(item[2] for item in stats)
     return {
         "text": (
             f"{subject} in {repo}: {len(stats)} files, +{total_added}/-{total_deleted}, base {base_sha} head "
@@ -269,8 +269,15 @@ def apply_rules(
     return bucket, capability, template, size_confidence
 
 
-def changed_lines(stats: Sequence[tuple[str, int, int, str]], exclude: Sequence[str]) -> int:
-    return sum(added + deleted for path, added, deleted, _ in stats if not matching([path], exclude))
+def changed_lines(stats: Sequence[tuple[Any, ...]], exclude: Sequence[str]) -> int:
+    total = 0
+    for item in stats:
+        path, added, deleted = item[0], item[1], item[2]
+        prev = item[4] if len(item) > 4 and item[4] else None
+        paths = (path,) if not prev else (path, prev)
+        if not (bool(exclude) and all(matching([p], exclude) for p in paths)):
+            total += added + deleted
+    return total
 
 
 def apply_floors(
@@ -376,11 +383,12 @@ def classify_diff(
     except MALFORMED as exc:
         raise _malformed(exc) from exc
     rows = []
-    for path, added, deleted, status in _ranked(stats):
+    for item in _ranked(stats):
+        path, added, deleted, status = item[0], item[1], item[2], item[3]
         try:
             if clock() - started > deadline_seconds:
                 raise JevError(None, "classification deadline exceeded", reason="classification deadline exceeded")
-            siblings = [(other, a, d) for other, a, d, _ in stats if other != path]
+            siblings = [(other[0], other[1], other[2]) for other in stats if other[0] != path]
             file_answers = session.ask(file_state(path, added, deleted, status, siblings), FILE_QUESTIONS)
             try:
                 rows.append(_row(path, file_answers))
@@ -397,15 +405,16 @@ def decisions_batch(
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], list[str]]:
     ranked = _ranked(stats)
     areas: dict[str, list[int]] = {}
-    for path, added, deleted, _ in stats:
+    for item in stats:
+        path, added, deleted = item[0], item[1], item[2]
         cell = areas.setdefault(path.split("/")[0] if "/" in path else "(root)", [0, 0])
         cell[0] += added
         cell[1] += deleted
     state = {
         "total_files": len(stats),
         "files": [
-            {"index": index, "path": path[:PATH_CAP], "added": added, "deleted": deleted, "status": status}
-            for index, (path, added, deleted, status) in enumerate(ranked, 1)
+            {"index": index, "path": item[0][:PATH_CAP], "added": item[1], "deleted": item[2], "status": item[3]}
+            for index, item in enumerate(ranked, 1)
         ],
         "areas": [
             {"area": name, "added": cell[0], "deleted": cell[1]}
@@ -423,7 +432,7 @@ def decisions_batch(
             **FILE_SCORE_QUESTION,
             "instructions": prefix + FILE_SCORE_QUESTION["instructions"],
         }
-    return state, questions, [path for path, *_ in ranked]
+    return state, questions, [item[0] for item in ranked]
 
 
 def decisions_rows(session: DecisionsSession, stats: Sequence[tuple[str, int, int, str]]) -> tuple[FileRow, ...]:
@@ -450,7 +459,11 @@ def classify_decisions(
     state = pr_state(repo, pr, base_sha, head_sha, stats, gate_flags)
     answers = session.ask(state, PR_QUESTIONS)
     decided = _decide(answers, stats, gate_flags, rules, backend=BACKEND_DECISIONS, model=session.model)
-    rows = decisions_rows(session, stats)
+    try:
+        rows = decisions_rows(session, stats)
+    except DecisionsError as exc:
+        exc.partial = decided
+        raise
     return replace(decided, files=rows, model=session.model, usage=dict(session.usage), degraded_from=degraded_from)
 
 

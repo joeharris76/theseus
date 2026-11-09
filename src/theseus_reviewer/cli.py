@@ -1416,9 +1416,15 @@ def _floor_rules(plan: Mapping[str, Any]) -> FloorRules:
     )
 
 
-def _plan_stats(plan: Mapping[str, Any]) -> list[tuple[str, int, int, str]]:
+def _plan_stats(plan: Mapping[str, Any]) -> list[tuple[str, int, int, str, str | None]]:
     return [
-        (item["path"], int(item["additions"]), int(item["deletions"]), item.get("status") or "modified")
+        (
+            item["path"],
+            int(item["additions"]),
+            int(item["deletions"]),
+            item.get("status") or "modified",
+            item.get("previous_path"),
+        )
         for item in plan.get("reviewed_files", [])
     ]
 
@@ -1467,10 +1473,12 @@ def _decisions_fallback(plan: Mapping[str, Any], facts: dict[str, Any], jev_erro
         _summary(f"classifier fallback failed: {exc}")
         if partial is not None and not exc.missing_key:
             return replace(partial, degraded_from=f"{cause}; {exc.message}")
+        answered = exc.partial
+        answered_bucket = None if (answered is None or exc.missing_key) else answered.size_bucket
         return fallback_classification(
             plan["classifier_unavailable_bucket"],
             facts["gate_flags"],
-            None if partial is None else partial.size_bucket,
+            answered_bucket,
             stats=facts["stats"],
             rules=facts["rules"],
             degraded_from=f"{cause}; {exc.message}",
