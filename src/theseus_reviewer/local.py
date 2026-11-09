@@ -270,8 +270,20 @@ class LocalEnvironment:
     loopback_http: bool = True
     rebuttals: str = ""
     adjudicate: str = ""
-    scan_secrets: tuple[str, ...] = ("TYPESAFE_API_KEY", "TS_AUTHKEY", "OMP_GATEWAY_TOKEN", *HOST_TOKEN_FILES)
-    redacted_secrets: tuple[str, ...] = ("TYPESAFE_API_KEY", "TS_AUTHKEY", "OMP_GATEWAY_TOKEN", *HOST_TOKEN_FILES)
+    scan_secrets: tuple[str, ...] = (
+        "TYPESAFE_API_KEY",
+        "OPENAI_API_KEY",
+        "TS_AUTHKEY",
+        "OMP_GATEWAY_TOKEN",
+        *HOST_TOKEN_FILES,
+    )
+    redacted_secrets: tuple[str, ...] = (
+        "TYPESAFE_API_KEY",
+        "OPENAI_API_KEY",
+        "TS_AUTHKEY",
+        "OMP_GATEWAY_TOKEN",
+        *HOST_TOKEN_FILES,
+    )
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str], policy: Path) -> LocalEnvironment:
@@ -858,16 +870,25 @@ class Run:
             else {"OMP_GATEWAY_TOKEN": self.access.token, "REVIEW_GATEWAY_URL": self.access.url}
         )
         key = {"TYPESAFE_API_KEY": self.key} if self.key else {}
+        fallback = {"OPENAI_API_KEY": _held("OPENAI_API_KEY")} if _held("OPENAI_API_KEY") else {}
         hosts = host_token_values()
         held = {name: _held(name) for name in ("TS_AUTHKEY",) if _held(name)}
-        if phase == "prepare" or phase == "recover":
+        if phase == "recover":
             return key
+        if phase == "prepare":
+            return {**key, **fallback}
         if phase == "scan":
-            return {**key, **held, **hosts, **{k: v for k, v in gateway.items() if k == "OMP_GATEWAY_TOKEN"}}
+            return {
+                **key,
+                **fallback,
+                **held,
+                **hosts,
+                **{k: v for k, v in gateway.items() if k == "OMP_GATEWAY_TOKEN"},
+            }
         if phase == "attempts":
             return gateway
         if phase == "finalize":
-            return {**key, **held, **hosts, **gateway}
+            return {**key, **fallback, **held, **hosts, **gateway}
         return {}
 
     def phase(self, phase: str, extra: Mapping[str, str] | None = None) -> tuple[int, dict[str, str]]:
@@ -1191,7 +1212,11 @@ def _run_review(
     trusted = Trusted.read(root, args.trusted_ref or args.base_ref, args.policy)
     repository = _repository(root, getattr(args, "repo", ""))
     key = classifier_key()
-    reporter.hide(key, *(_held(name) for name in ("TS_AUTHKEY", *GITHUB_ACCESS_ENV)), *host_token_values().values())
+    reporter.hide(
+        key,
+        *(_held(name) for name in ("TS_AUTHKEY", "OPENAI_API_KEY", *GITHUB_ACCESS_ENV)),
+        *host_token_values().values(),
+    )
     pr = None
     if not member:
         with _github_access():

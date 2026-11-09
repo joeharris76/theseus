@@ -14,6 +14,7 @@ from typing import Any
 
 from theseus_reviewer import omp_pin
 
+from .fake_decisions import FakeDecisions
 from .fake_gateway import FakeGateway
 from .fake_github import APP_TOKEN, GH_HOST, JOB_TOKEN, OWNER_TOKEN, FakeGitHub
 from .fake_jev import FakeJev
@@ -36,6 +37,7 @@ PACKAGE = [sys.executable, "-m", "theseus_reviewer"]
 GATEWAY_TOKEN = "gwtok-" + "Q7mZ4kLp" * 5
 HELD_SECRET = "oauth-secret-" + "W3xT9vNb" * 4
 JEV_KEY = "jevk-" + "T5nB8wXc" * 4
+OPENAI_KEY = "sk-openai-" + "R4pL7yGd" * 4
 OAUTH_CLIENT_ID = "oauth-client-" + "H6dK2sRq" * 3
 APP_PRIVATE_KEY = "app-private-key-" + "M8vC4zJf" * 6
 SHA256_LINE = re.compile(r"sha256: [0-9a-f]{64}")
@@ -93,6 +95,11 @@ class ReviewRun:
         path = self.temp / "review-plan" / "plan.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
+    @property
+    def classification(self) -> dict[str, Any]:
+        path = self.temp / "review-classification" / "classification.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
     def attempts(self) -> list[dict[str, Any]]:
         folder = self.temp / "review-attempts"
         return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(folder.glob("attempt-*.json"))]
@@ -127,6 +134,7 @@ class Harness:
         self._publish_remote()
         self.github = FakeGitHub(SLUG, self.repo).start()
         self.jev = FakeJev().start()
+        self.decisions = FakeDecisions().start()
         self.gateway = FakeGateway(GATEWAY_TOKEN).start()
 
     @property
@@ -147,6 +155,7 @@ class Harness:
     def close(self) -> None:
         self.github.stop()
         self.jev.stop()
+        self.decisions.stop()
         self.gateway.stop()
 
     def _pinned_policy(self) -> str:
@@ -443,6 +452,7 @@ class Harness:
             "GH_TOKEN": OWNER_TOKEN,
             "GH_ENTERPRISE_TOKEN": OWNER_TOKEN,
             "TYPESAFE_BASE_URL": self.jev.url,
+            "OPENAI_BASE_URL": self.decisions.url,
             **({"TYPESAFE_API_KEY": JEV_KEY} if key else {}),
             **(env or {}),
         }

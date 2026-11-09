@@ -133,6 +133,20 @@ def test_the_scan_phase_fails_when_a_secret_value_is_on_disk_and_passes_otherwis
     assert driver.scan(environment, argparse.Namespace()) == 1
 
 
+def test_the_scan_phase_also_catches_the_classifier_fallback_key_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path
+) -> None:
+    root = tmp_path / "scratch"
+    root.mkdir()
+    environment = replace(_environment(tmp_path), scan_roots=(root,))
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret-value")
+
+    assert driver.scan(environment, argparse.Namespace()) == 0
+
+    (root / "leak.txt").write_text("key=openai-secret-value", encoding="utf-8")
+    assert driver.scan(environment, argparse.Namespace()) == 1
+
+
 def test_the_isolation_phase_returns_the_adapter_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(isolation, "main", lambda: 1)
     assert driver.isolate(_environment(tmp_path), argparse.Namespace()) == 1

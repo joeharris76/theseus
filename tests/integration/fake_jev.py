@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -11,6 +12,11 @@ class FakeJev:
         self.answers: list[dict[str, Any] | None] = []
         self.requests: list[dict[str, Any]] = []
         self.classification: tuple[str, str] = ("medium", "standard")
+        self.classified: list[dict[str, Any]] = []
+        self.pr_status: int | None = None
+        self.file_status: int | None = None
+        self.bad_size_label = False
+        self.delay = 0.0
         self._server: ThreadingHTTPServer | None = None
         self._lock = threading.Lock()
 
@@ -21,6 +27,14 @@ class FakeJev:
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if "recovery" not in body["questions"]:
+                    with fake._lock:
+                        fake.classified.append(body)
+                    if fake.delay:
+                        time.sleep(fake.delay)
+                    status = fake.file_status if "impact" in body["questions"] else fake.pr_status
+                    if status is not None:
+                        self._send(status, {"error": {"message": "the judgment service is down"}})
+                        return
                     self._send(200, {"answers": fake._classified(body["questions"])})
                     return
                 with fake._lock:
@@ -48,6 +62,7 @@ class FakeJev:
 
     def _classified(self, questions: dict[str, Any]) -> dict[str, Any]:
         size, template = self.classification
+        size = "colossal" if self.bad_size_label else size
         choices = {
             "size": size,
             "capability": "routine",
@@ -70,6 +85,7 @@ class FakeJev:
         with self._lock:
             self.answers = list(answers)
             self.requests = []
+            self.classified = []
 
     def stop(self) -> None:
         if self._server is not None:

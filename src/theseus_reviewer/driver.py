@@ -17,7 +17,7 @@ from ._vendor import yaml
 from .policy import Consumer, PolicyError, load_policy
 
 STATE_FILE = Path("state") / github.STATE_FILE
-SCAN_SECRETS = ("TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN")
+SCAN_SECRETS = ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN")
 REDACTED_SECRETS = ("JOB_TOKEN",)
 CI = "ci"
 LOCAL = "local"
