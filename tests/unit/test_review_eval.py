@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from zipfile import ZipFile
 
 import pytest
 
@@ -36,6 +38,8 @@ def _load() -> ModuleType:
 
 TOOL = _load()
 CASES = TOOL.load_cases(ROOT)
+AUTHENTICATED_RESULT = TOOL.authenticated_result
+TRUSTED_RESULTS: dict[str, list[dict[str, Any]]] = {}
 
 
 def _finding(path: str, title: str, detail: str = "") -> dict[str, Any]:
@@ -243,19 +247,28 @@ def _result(repository: Path, variant: str, *, mode: str = "live", dirty: bool =
     return TOOL.build_result(CASES, runs, mode=mode, meta=_meta(repository, dirty=dirty))
 
 
-def _attach(repository: Path, label: str, result: dict[str, Any], *, named: str = "") -> str:
+def _attach(
+    repository: Path, label: str, result: dict[str, Any], *, named: str = "", trusted: bool = True
+) -> str:
     result["git_sha"] = (label.encode().hex() + "0" * 12)[:40]
     name = named or f"{result['date']}-{result['git_sha'][:12]}.json"
     target = repository / TOOL.RESULTS_DIR / name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(result), encoding="utf-8")
+    if trusted:
+        TRUSTED_RESULTS.setdefault(str(repository), []).append(json.loads(json.dumps(result)))
     return name
 
 
 @pytest.fixture
-def repository(tmp_path: Path) -> Path:
+def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repository"
     root.mkdir()
+    monkeypatch.setattr(
+        TOOL,
+        "authenticated_result",
+        lambda root, tree, result: result in TRUSTED_RESULTS.get(str(root), []),
+    )
     _git(root, "init", "--quiet", "--initial-branch=main")
     shutil.copytree(ROOT / "evals" / "cases", root / "evals" / "cases")
     for relative, text in {
@@ -282,7 +295,7 @@ def _check(repository: Path, base: str) -> Any:
 
 def test_a_diff_without_reviewer_configuration_needs_no_score(repository: Path) -> None:
     base = _git(repository, "rev-parse", "HEAD")
-    _change(repository, "src/theseus_reviewer/gate.py", "x = 2\n")
+    _change(repository, "unrelated.txt", "x = 2\n")
 
     verdict = _check(repository, base)
 
@@ -292,13 +305,13 @@ def test_a_diff_without_reviewer_configuration_needs_no_score(repository: Path) 
 @pytest.mark.parametrize(
     "relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md", "src/theseus_reviewer/render.py"]
 )
-def test_the_rule_is_inactive_while_no_live_baseline_is_recorded(repository: Path, relative: str) -> None:
+def test_no_live_baseline_blocks_configuration_changes(repository: Path, relative: str) -> None:
     base = _git(repository, "rev-parse", "HEAD")
     _change(repository, relative, POLICY + "# changed\n" if relative.endswith("review.yml") else "changed\n")
 
     verdict = _check(repository, base)
 
-    assert verdict.ok and "inactive" in verdict.lines[-1]
+    assert not verdict.ok and "no authenticated baseline" in verdict.lines[-1]
 
 
 def _with_baseline(repository: Path) -> str:
@@ -386,8 +399,7 @@ def test_the_baseline_is_scored_with_the_base_expectations(repository: Path) -> 
     data = json.loads(expected.read_text(encoding="utf-8"))
     data["expected"]["decisions"] = ["SHIP", "SHIP_WITH_FIXES", "DO_NOT_SHIP"]
     expected.write_text(json.dumps(data), encoding="utf-8")
-    (repository / TEMPLATE).write_text("template two\n", encoding="utf-8")
-    _commit(repository, "loosen the control and change the template")
+    _commit(repository, "loosen only the corpus expectations")
     _attach(repository, "head", _result(repository, "regressed"))
     _commit(repository, "attach")
 
@@ -474,23 +486,22 @@ def test_the_outcome_a_review_cached_becomes_an_observation(tmp_path: Path) -> N
         ("src/theseus_reviewer/commands.py", True),
         ("src/theseus_reviewer/matchers.py", True),
         ("src/theseus_reviewer/soundness_paths.py", True),
-        ("src/theseus_reviewer/gate.py", False),
-        ("src/theseus_reviewer/bootstrap.py", False),
-        ("src/theseus_reviewer/sweep.py", False),
-        ("src/theseus_reviewer/github.py", False),
-        ("src/theseus_reviewer/_vendor/yaml/__init__.py", False),
+        ("src/theseus_reviewer/gate.py", True),
+        ("src/theseus_reviewer/bootstrap.py", True),
+        ("src/theseus_reviewer/sweep.py", True),
+        ("src/theseus_reviewer/github.py", True),
+        ("src/theseus_reviewer/_vendor/yaml/__init__.py", True),
+        ("src/theseus_reviewer/protocol_helpers/judgment.py", True),
+        ("tools/review_eval.py", True),
+        ("evals/cases/control/case.json", True),
+        (".github/workflows/review-eval.yml", True),
+        (".github/workflows/ci.yml", True),
         ("tests/unit/test_gate.py", False),
         (".github/review-omp-config.yml", True),
     ],
 )
-def test_the_engine_triggers_the_rule_except_for_the_listed_plumbing(relative: str, triggers: bool) -> None:
+def test_every_engine_subpackage_and_eval_input_triggers(relative: str, triggers: bool) -> None:
     assert TOOL.is_reviewer_config(relative, set()) is triggers
-
-
-def test_every_excluded_engine_file_exists_and_is_justified() -> None:
-    for name, reason in TOOL.ENGINE_EXCLUDED.items():
-        assert (ROOT / TOOL.ENGINE_PREFIX / name).is_file(), name
-        assert reason
 
 
 def test_the_baseline_is_the_newest_by_date_not_by_path() -> None:
@@ -532,7 +543,7 @@ def test_a_misnamed_future_dated_result_cannot_steer_the_baseline(repository: Pa
     assert not verdict.ok and "exactly one new result" in " ".join(verdict.lines)
 
 
-def test_a_results_only_change_needs_the_same_evidence_or_an_owner_reviewed_baseline(repository: Path) -> None:
+def test_a_results_only_change_requires_authenticated_matching_evidence(repository: Path) -> None:
     base = _with_baseline(repository)
     _git(repository, "switch", "--quiet", "-c", "change")
     stale = _result(repository, "good")
@@ -542,7 +553,7 @@ def test_a_results_only_change_needs_the_same_evidence_or_an_owner_reviewed_base
 
     verdict = _check(repository, base)
 
-    assert not verdict.ok and "owner-reviewed baseline pull request" in " ".join(verdict.lines)
+    assert not verdict.ok and "authenticated live run" in " ".join(verdict.lines)
 
 
 def test_a_results_only_change_with_matching_evidence_and_no_lower_score_passes(repository: Path) -> None:
@@ -609,3 +620,176 @@ def test_every_skeleton_file_is_reviewer_configuration() -> None:
     assert not TOOL.is_reviewer_config(".github/workflows/ci.yml", guidance)
     assert not TOOL.is_reviewer_config(".github/theseus-lock.json", guidance)
     assert not TOOL.is_reviewer_config("docs/other.md", guidance)
+
+
+def test_a_forged_live_result_with_matching_digests_is_rejected(repository: Path) -> None:
+    base = _with_baseline(repository)
+    _change(repository, TEMPLATE, "changed\n")
+    _attach(repository, "forged", _result(repository, "good"), trusted=False)
+    _commit(repository, "forged evidence")
+
+    assert not _check(repository, base).ok
+
+
+def test_trusted_results_only_bootstrap_is_enforced(repository: Path) -> None:
+    base = _git(repository, "rev-parse", "HEAD")
+    _attach(repository, "bootstrap", _result(repository, "good"))
+    _commit(repository, "bootstrap")
+
+    verdict = _check(repository, base)
+
+    assert verdict.ok and "bootstrapped" in verdict.lines[-1]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["src/theseus_reviewer/gate.py", "tools/review_eval.py", f"evals/cases/{CONTROL}/case.json"],
+)
+def test_gate_scorer_and_corpus_changes_alter_the_configuration_digest(repository: Path, relative: str) -> None:
+    before = TOOL.git_state(repository)["config_digest"]
+    target = repository / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("changed\n", encoding="utf-8")
+
+    assert TOOL.git_state(repository)["config_digest"] != before
+    assert TOOL.git_state(repository)["dirty"]
+
+
+@pytest.fixture
+def authenticated_execution(repository: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], dict[str, Any]]:
+    result = {**_result(repository, "good"), "workflow_run_id": "123"}
+    output = io.BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("result.json", json.dumps(result))
+    data = output.getvalue()
+    run = {
+        "workflow_id": 42,
+        "event": "schedule",
+        "head_branch": "main",
+        "head_sha": result["git_sha"],
+        "conclusion": "success",
+        "repository": {"full_name": TOOL.EVAL_REPOSITORY},
+        "head_repository": {"full_name": TOOL.EVAL_REPOSITORY},
+    }
+    artifact = {
+        "id": 12,
+        "name": TOOL.EVAL_ARTIFACT,
+        "expired": False,
+        "digest": f"sha256:{TOOL.hashlib.sha256(data).hexdigest()}",
+    }
+    responses = {
+        f"actions/workflows/{TOOL.EVAL_WORKFLOW}": {"id": 42},
+        "actions/runs/123": run,
+        "actions/runs/123/artifacts?per_page=100": {"total_count": 1, "artifacts": [artifact]},
+    }
+    monkeypatch.setattr(TOOL, "github_json", responses.__getitem__)
+    monkeypatch.setattr(TOOL, "github_bytes", lambda path: data)
+    return result, run
+
+
+def test_authenticated_scheduled_artifact_is_accepted(
+    repository: Path, authenticated_execution: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    result, _ = authenticated_execution
+
+    assert AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("workflow_id", 99),
+        ("event", "pull_request"),
+        ("head_branch", "candidate"),
+        ("head_sha", "0" * 40),
+        ("conclusion", "failure"),
+        ("head_repository", {"full_name": "attacker/theseus"}),
+    ],
+)
+def test_untrusted_execution_cannot_borrow_a_workflow_name(
+    repository: Path,
+    authenticated_execution: tuple[dict[str, Any], dict[str, Any]],
+    field: str,
+    value: Any,
+) -> None:
+    result, run = authenticated_execution
+    run[field] = value
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+def test_forged_observations_cannot_borrow_a_trusted_run(
+    repository: Path, authenticated_execution: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    result, _ = authenticated_execution
+    result["cases"][CONTROL]["runs"][0]["observation"]["summary"] = "forged"
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+def test_main_execution_does_not_authenticate_candidate_source(
+    repository: Path, authenticated_execution: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    result, _ = authenticated_execution
+    _change(repository, TEMPLATE, "candidate\n")
+    result.update(
+        config_digest=TOOL.git_state(repository)["config_digest"],
+        corpus_digest=TOOL.git_state(repository)["corpus_digest"],
+    )
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+def test_matching_public_digests_are_not_execution_authentication(repository: Path) -> None:
+    result = _result(repository, "good")
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+def test_a_forged_result_cannot_bootstrap(repository: Path) -> None:
+    base = _git(repository, "rev-parse", "HEAD")
+    _attach(repository, "forged", _result(repository, "good"), trusted=False)
+    _commit(repository, "forged baseline")
+
+    assert not _check(repository, base).ok
+
+
+def test_corrupted_artifact_download_is_rejected(
+    repository: Path,
+    authenticated_execution: tuple[dict[str, Any], dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, _ = authenticated_execution
+    monkeypatch.setattr(TOOL, "github_bytes", lambda path: b"forged archive")
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+def test_artifact_api_failure_is_closed(
+    repository: Path,
+    authenticated_execution: tuple[dict[str, Any], dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, _ = authenticated_execution
+
+    def unavailable(path: str) -> Any:
+        raise TOOL.URLError("offline")
+
+    monkeypatch.setattr(TOOL, "github_json", unavailable)
+
+    assert not AUTHENTICATED_RESULT(repository, TOOL.committed_tree(repository, "HEAD"), result)
+
+
+@pytest.mark.parametrize("relative", [TEMPLATE, "unrelated.txt", ".github/workflows/ci.yml", "tools/review_eval.py"])
+def test_bootstrap_rejects_any_non_result_change(repository: Path, relative: str) -> None:
+    base = _git(repository, "rev-parse", "HEAD")
+    target = repository / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("changed\n", encoding="utf-8")
+    _commit(repository, "change before bootstrap")
+    _attach(repository, "bootstrap", _result(repository, "good"))
+    _commit(repository, "attach trusted result")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "results-only" in verdict.lines[-1]

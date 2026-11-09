@@ -62,7 +62,7 @@ Credentials are the local-review ones ([local-review.md](local-review.md)): the 
 
 `run` refuses to start when template, policy, guidance or corpus files have uncommitted changes (`--allow-dirty` records the run as dirty, and a dirty run is never accepted as evidence). It exits 1 when a case could not be reviewed, or with `--compare` when the aggregate is below the newest recorded baseline.
 
-A result is `evals/results/<date>-<sha>.json`: the observations, per-case and aggregate scores, the digest of the reviewer configuration files and of the corpus it ran against, the commit, and whether the tree was dirty.
+A result is `evals/results/<date>-<sha>.json`: observations, scores, configuration and corpus digests, source commit, clean-tree state and `workflow_run_id`. These fields alone prove nothing; acceptance requires authenticated execution evidence.
 
 ## Deterministic subset in CI
 
@@ -74,31 +74,33 @@ A result is `evals/results/<date>-<sha>.json`: the observations, per-case and ag
 
 A pull request that changes any of
 
-- any module under `src/theseus_reviewer/` (the templates, `render.py`, `classify.py`, `protocol.py`, `cli.py` and every other module that can shape what a reviewer is asked or how its answer is judged), except the plumbing listed below;
+- every file under `src/theseus_reviewer/`, including gate code, nested judgment packages, templates and vendored dependencies;
 - `.github/review.yml` (policy, models, omp pin), `.github/review-omp-config.yml`, and every other file the scored run carries in its consumer skeleton: anything under `.github/` except `workflows/`, `dependabot.yml` and `theseus-lock.json`, plus any file the policy names (such as the soundness manifest);
 - the consumer guidance file the policy names (`consumer.review_guidance`) or any `.github/review-guidance*`;
+- `evals/cases/`, `tools/review_eval.py`, `pyproject.toml`, `uv.lock`, and the CI and live-eval workflows;
 - anything under `evals/results/`,
 
-must attach a live eval run for exactly the configuration it proposes, and that run must not score lower than the newest recorded baseline.
+must attach authenticated live execution evidence for exactly the source, configuration and corpus it proposes, without lowering the baseline score. The same inputs participate in the configuration digest, so editing the scorer, gate or corpus invalidates old evidence.
 
 CI enforces it in the `review eval corpus and score rule` job. On a pull request it runs the base branch's copy of `tools/review_eval.py` (so the change cannot loosen its own check) and `check-change`:
 
-1. No file above changed: pass. Anything under `_vendor/` is not counted.
-2. No usable live baseline under `evals/results/` on the base: pass, and the rule is inactive until one is recorded.
-3. Otherwise the pull request must add exactly one result file (extra ones are refused, so a spare low result cannot become the next baseline) that is `live`, named `<date>-<first 12 characters of git_sha>.json` after its own contents, not dated in the future, complete (every case reviewed), made on a clean tree, and whose `config_digest` and `corpus_digest` equal those of the pull request's committed files. A run for any other state of the files is ignored. A pull request that edits, renames or removes an existing result fails (renames are not detected away), and one that only adds results needs the same evidence; both need an owner-reviewed baseline pull request.
-4. The baseline and the attached run are both rescored over the base's cases with the base's expectations. The baseline is the usable result with the newest `date` (not later than today), never chosen by file name. The aggregate of the attached run must be at least the baseline's.
+1. No relevant file changed: pass.
+2. Authenticate baseline candidates against GitHub's HTTPS API. A result must identify a successful `schedule` execution of this repository's actual `review-eval.yml` workflow ID, on `main`, from this repository (not a fork). The execution's source SHA must equal the result's commit. Source objects must be available locally; CI fetches the full history.
+3. Download that run's single non-expired `review-eval-result` artifact by its API-issued artifact ID. Verify its SHA-256 archive digest against the API response and require the artifact's `result.json` to equal the recorded result. A claimed workflow name, public configuration digest, owner assertion, local live run or forged observations cannot substitute for this artifact.
+4. Verify the source commit's configuration and corpus against both the result digests and the proposed tree. That binds the actual executed source, including the scorer, workflows and every engine subpackage. Candidate code is never executed to verify evidence.
+5. Existing results are append-only. Exactly one new, usable result is required: live, complete, clean, correctly dated/named, and authenticated as above. Both baseline and new observations are rescored with the base branch's scorer and case expectations, even when the corpus changes.
+6. Without an authenticated baseline, configuration changes fail closed. The only bootstrap is a results-only pull request attaching an authenticated scheduled artifact for the unchanged base configuration and corpus. This is mechanically enforced; review claims and bypass flags cannot bootstrap a changed configuration.
+7. With a baseline, the new score must not be lower. Missing or expired artifacts, unavailable API access, unmatched source, and unauthenticated results all block acceptance.
 
-To attach a run: commit the change, run `python3 tools/review_eval.py run --mode live` (use `--repeat 3` for noisy changes), add the written `evals/results/*.json` in a further commit, and push. Editing a template, the policy, guidance or the corpus after the run changes the digest and the run must be repeated; rebasing onto a main that changed one of those files does too.
+To bootstrap, download the artifact from a successful scheduled run and add its unchanged `result.json` as `evals/results/<date>-<first 12 SHA characters>.json` in a results-only pull request. Required checks and whole-diff owner review still apply. Local runs are diagnostic, not authenticated evidence.
 
-Engine modules excluded because they cannot change what a reviewer is asked or how its output is judged (`ENGINE_EXCLUDED` in the tool, each with its reason): `__init__`, `__main__`, `main` (entry points); `bootstrap` (installer); `gate`, `review_check` (gate status from an existing verdict); `sweep` (retry dispatch); `github` (API client); `omp_pin`, `omp_watch`, `omp_bump`, `omp_bump_gate`, `omp_candidate` and the `candidate_*` modules (omp pin tooling; the pin itself is in the policy and does trigger); `promotion`, `promotion_check`; `isolation`, `processes`, `disk_scan`, `redaction_check`, `credentials`, `selfexec` (sandboxing and secret handling); `gateway_report`, `preflight` (gateway health); `reset`, `absence` (retry state); `audit`, `edits` (audit trail and edited-comment detection). The path matchers (`soundness_paths`, `inert_paths`, `matchers`, `matcher_cli`) and `commands` (which builds the reviewer's omp invocation and tool set) are not excluded: they decide whether and how a change is reviewed. A new module triggers the rule until it is added to that list in a reviewed change.
-
-What the rule does not do: the check cannot tell a real run from a fabricated file. The result carries the full observations so the owner can read what the reviewer said, and `tools/` and `evals/` are gate paths and soundness paths, so the full diff gets the gate template and the owner's review. The rule stops accidents and drift, and gives the owner a score to read.
+**Candidate execution prerequisite:** the scheduled workflow executes only reviewed `main`. It cannot authenticate a configuration-changing pull request. Such changes, including changes to this gate itself, remain blocked until a separately isolated trusted candidate-evaluation executor and its authenticated verifier are implemented and reviewed. Repository policy forbids giving candidate code gateway or other secrets, so neither dispatching this workflow on a candidate nor owner claims are an acceptable replacement. There is no exemption for the patch introducing this rule.
 
 ## Weekly live run
 
 `.github/workflows/review-eval.yml` runs every Monday at 05:41 UTC (`schedule` only, no manual or pull-request trigger; run the command above by hand for an ad-hoc run). It has `contents: read`, no repository write access and no App credentials. It checks out `main`, joins the tailnet, runs `tools/review_eval.py run --mode live --compare` and uploads the result as the `review-eval-result` artifact for 90 days. The job summary shows the per-case table. The job fails when a case cannot be reviewed or the aggregate is below the baseline, so the owner is notified through GitHub.
 
-The workflow cannot commit. To record a baseline, download the artifact from a green run on the commit you want to baseline and add it as `evals/results/<date>-<sha>.json` in a pull request. The recorded result must be a `live`, complete, clean run; the weekly run's commit must match the configuration on `main` for the next change to be compared against it.
+The workflow cannot commit. Its immutable artifact is the authenticated evidence used by the results-only bootstrap above; copying or editing JSON without the successful execution does not establish a baseline. Artifact retention is 90 days; an expired baseline is unusable, so record a fresh authenticated results-only run before expiry.
 
 ### Owner setup
 
@@ -114,7 +116,7 @@ The workflow cannot commit. To record a baseline, download the artifact from a g
 
 3. Confirm the Actions allow-list permits the pinned actions the workflow uses (`actions/checkout`, `astral-sh/setup-uv`, `tailscale/github-action`, `actions/upload-artifact`).
 4. Add `review eval corpus and score rule` to the required status checks of `main` ([repository-settings.md](repository-settings.md)). Without it the rule is advisory.
-5. After the first green weekly run, record its artifact as the baseline (above).
+5. After the first green weekly run, record its artifact through the enforced results-only bootstrap. CI needs `actions: read` to authenticate runs and artifacts; local `check-change` can use `GH_TOKEN` with read-only Actions access. No signing or gateway secret is exposed to pull-request code by this verifier.
 
 The secrets are reachable only from the scheduled run on `main`. The reviewed cases are the repository's own corpus, so no pull request content ever reaches a model through this workflow; the reviewer itself runs with the same secret withholding and isolation as `local-review`.
 

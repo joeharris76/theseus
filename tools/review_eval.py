@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -14,6 +15,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from zipfile import BadZipFile, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_DIR = "evals/cases"
@@ -33,43 +37,19 @@ MAX_FINDINGS = 40
 TEXT_CAP = 1200
 DEFAULT_CASE_TIMEOUT = 5400
 POLICY_PATH = ".github/review.yml"
-CONFIG_FILES = (".github/review.yml", ".github/review-omp-config.yml")
+CONFIG_FILES = (
+    ".github/review.yml",
+    ".github/review-omp-config.yml",
+    ".github/workflows/review-eval.yml",
+    ".github/workflows/ci.yml",
+    "tools/review_eval.py",
+    "pyproject.toml",
+    "uv.lock",
+)
 ENGINE_PREFIX = "src/theseus_reviewer/"
-ENGINE_EXCLUDED = {
-    "__init__.py": "package marker",
-    "__main__.py": "entry point",
-    "bootstrap.py": "installer; runs before any review",
-    "gate.py": "posts the gate status from an existing verdict",
-    "sweep.py": "dispatches retries; selects no reviewer and reads no diff",
-    "github.py": "GitHub API client",
-    "omp_pin.py": "installs and verifies the pinned omp binary; the pin itself lives in the policy",
-    "omp_watch.py": "watches for new omp releases",
-    "omp_bump.py": "omp pin bump tooling",
-    "omp_bump_gate.py": "omp pin bump gate",
-    "omp_candidate.py": "omp candidate canary tooling",
-    "candidate_canaries.py": "omp candidate canary tooling",
-    "candidate_chain.py": "omp candidate canary tooling",
-    "candidate_checks.py": "omp candidate canary tooling",
-    "candidate_env.py": "omp candidate canary tooling",
-    "candidate_stub.py": "omp candidate canary tooling",
-    "promotion.py": "consumer promotion of a Theseus release",
-    "promotion_check.py": "consumer promotion check",
-    "isolation.py": "process isolation checks",
-    "processes.py": "process snapshots",
-    "disk_scan.py": "secret scan of the disk",
-    "redaction_check.py": "secret redaction",
-    "credentials.py": "secret recognition",
-    "selfexec.py": "re-execution helper",
-    "gateway_report.py": "gateway health report",
-    "preflight.py": "gateway preflight",
-    "reset.py": "retry backoff reset",
-    "main.py": "entry point",
-    "audit.py": "audit trail",
-    "edits.py": "detection of edited bot comments",
-    "review_check.py": "gate decision from posted statuses",
-    "absence.py": "classification of absent attempts for retry",
-}
-CONFIG_PREFIXES = ("src/theseus_reviewer/templates/",)
+EVAL_REPOSITORY = "joeharris76/theseus"
+EVAL_WORKFLOW = "review-eval.yml"
+EVAL_ARTIFACT = "review-eval-result"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 GUIDANCE_GLOB = re.compile(r"\.github/review-guidance[^/]*")
 GUIDANCE_KEY = re.compile(r"^\s*review_guidance:\s*[\"']?([^\s\"'#]+)", re.MULTILINE)
@@ -367,14 +347,12 @@ def guidance_paths(tree: Tree) -> set[str]:
 
 
 def is_reviewer_config(path: str, guidance: set[str]) -> bool:
-    if path in CONFIG_FILES or path in guidance:
-        return True
-    if not path.startswith(ENGINE_PREFIX) or path.startswith(f"{ENGINE_PREFIX}_vendor/"):
-        return False
-    if path.startswith(CONFIG_PREFIXES):
-        return True
-    relative = path.removeprefix(ENGINE_PREFIX)
-    return relative.endswith(".py") and "/" not in relative and relative not in ENGINE_EXCLUDED
+    return (
+        path in CONFIG_FILES
+        or path in guidance
+        or path.startswith(ENGINE_PREFIX)
+        or path.startswith(f"{CASES_DIR}/")
+    )
 
 
 def config_entries(tree: Tree) -> dict[str, bytes]:
@@ -625,6 +603,62 @@ def latest_baseline(results: Mapping[str, Any], today: str | None = None) -> tup
     return usable[0] if usable else None
 
 
+def github_json(path: str) -> Any:
+    return json.loads(github_bytes(path))
+
+
+def github_bytes(path: str) -> bytes:
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    request = Request(f"https://api.github.com/repos/{EVAL_REPOSITORY}/{path}", headers=headers)
+    token = os.environ.get("GH_TOKEN", "")
+    if token:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    with urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def authenticated_result(root: Path, tree: Tree, result: Mapping[str, Any]) -> bool:
+    run_id = result.get("workflow_run_id")
+    sha = result.get("git_sha")
+    if not isinstance(run_id, str) or not run_id.isdigit() or not isinstance(sha, str):
+        return False
+    try:
+        workflow = github_json(f"actions/workflows/{EVAL_WORKFLOW}")
+        run = github_json(f"actions/runs/{run_id}")
+        if (
+            run.get("workflow_id") != workflow["id"]
+            or run.get("event") != "schedule"
+            or run.get("head_branch") != "main"
+            or run.get("head_sha") != sha
+            or run.get("conclusion") != "success"
+            or run.get("repository", {}).get("full_name") != EVAL_REPOSITORY
+            or run.get("head_repository", {}).get("full_name") != EVAL_REPOSITORY
+        ):
+            return False
+        source = committed_tree(root, sha)
+        if (
+            result.get("config_digest") != tree_digest(config_entries(source))
+            or result.get("corpus_digest") != tree_digest(corpus_entries(source))
+            or config_entries(source) != config_entries(tree)
+            or corpus_entries(source) != corpus_entries(tree)
+        ):
+            return False
+        listing = github_json(f"actions/runs/{run_id}/artifacts?per_page=100")
+        artifacts = [item for item in listing["artifacts"] if item["name"] == EVAL_ARTIFACT]
+        if listing["total_count"] > 100 or len(artifacts) != 1 or artifacts[0].get("expired") is not False:
+            return False
+        artifact = artifacts[0]
+        archive = github_bytes(f"actions/artifacts/{int(artifact['id'])}/zip")
+        if artifact.get("digest") != f"sha256:{hashlib.sha256(archive).hexdigest()}":
+            return False
+        with ZipFile(io.BytesIO(archive)) as bundle:
+            if bundle.namelist() != ["result.json"]:
+                return False
+            return json.loads(bundle.read("result.json")) == result
+    except (EvalError, HTTPError, URLError, OSError, ValueError, KeyError, TypeError, BadZipFile):
+        return False
+
+
 @dataclass(frozen=True)
 class Verdict:
     ok: bool
@@ -634,11 +668,15 @@ class Verdict:
 def check_change(root: Path, base: str, head: str, today: str | None = None) -> Verdict:
     base_tree, head_tree = committed_tree(root, base), committed_tree(root, head)
     base_guidance, head_guidance = guidance_paths(base_tree), guidance_paths(head_tree)
-    changed = [
+    all_changed = [
         path
         for path in git(root, "diff", "--no-renames", "--name-only", "-z", base, head).decode("utf-8").split("\0")
         if path
-        and (
+    ]
+    changed = [
+        path
+        for path in all_changed
+        if (
             is_reviewer_config(path, base_guidance)
             or is_reviewer_config(path, head_guidance)
             or path.startswith(f"{RESULTS_DIR}/")
@@ -649,13 +687,19 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
     listing = [f"reviewer configuration or recorded results changed: {', '.join(changed)}"]
     day = today or datetime.now(UTC).strftime("%Y-%m-%d")
     base_results = read_results(base_tree)
-    baseline = latest_baseline(base_results, day)
-    if baseline is None:
+    baseline = latest_baseline(
+        {
+            path: data
+            for path, data in base_results.items()
+            if not usable_result(data, path, day) and authenticated_result(root, base_tree, data)
+        },
+        day,
+    )
+    if baseline is None and any(not path.startswith(f"{RESULTS_DIR}/") for path in all_changed):
         return Verdict(
-            True,
-            (*listing, f"no usable live baseline is recorded under {RESULTS_DIR} on the base; the rule is inactive"),
+            False,
+            (*listing, "no authenticated baseline: bootstrap requires a results-only change with a trusted scheduled run"),
         )
-    baseline_path, baseline_result = baseline
     cases = load_cases_from_tree(base_tree)
     rewritten = [path for path in changed if path in base_results]
     if rewritten:
@@ -664,7 +708,7 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
             (
                 *listing,
                 f"recorded results are append-only: {', '.join(rewritten)} changed or was removed; "
-                "an owner-reviewed baseline pull request is needed",
+                "recorded evidence cannot be rewritten",
             ),
         )
     attached = [
@@ -678,7 +722,9 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
         (
             (path, data)
             for path, data in attached
-            if data.get("config_digest") == digest and data.get("corpus_digest") == corpus
+            if data.get("config_digest") == digest
+            and data.get("corpus_digest") == corpus
+            and authenticated_result(root, head_tree, data)
         ),
         key=lambda item: (item[1]["date"], item[0]),
     )
@@ -688,14 +734,20 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
             False,
             (
                 *listing,
-                f"exactly one new result under {RESULTS_DIR}/ is allowed and it must be a usable live run for this "
-                f"exact configuration (config digest {digest[:12]}, corpus digest {corpus[:12]}): "
-                "python tools/review_eval.py run --mode live; a change that only adds or alters recorded results "
-                "needs an owner-reviewed baseline pull request carrying the same evidence",
+                f"exactly one new result under {RESULTS_DIR}/ is allowed and it must be an authenticated live run for this "
+                f"exact configuration (config digest {digest[:12]}, corpus digest {corpus[:12]}); "
+                "evidence must match the immutable artifact of a successful scheduled review-eval run on main",
                 *(f"not accepted: {path}" for path in added if path not in [item for item, _ in matching]),
             ),
         )
     path, result = matching[-1]
+    if baseline is None:
+        try:
+            rescored(result, cases)
+        except EvalError as exc:
+            return Verdict(False, (*listing, str(exc)))
+        return Verdict(True, (*listing, f"authenticated baseline bootstrapped from {path}"))
+    baseline_path, baseline_result = baseline
     try:
         before, after = rescored(baseline_result, cases), rescored(result, cases)
     except EvalError as exc:
@@ -779,7 +831,13 @@ def command_run(arguments: argparse.Namespace) -> int:
             runs[case_id].append(run_live_case(case, skeleton, root, arguments.case_timeout))
     if consumer != root:
         state = {**state, "config_digest": f"foreign:{tree_digest(skeleton)}"}
-    meta = {"date": datetime.now(UTC).strftime("%Y-%m-%d"), "policy": POLICY_PATH, "repeat": arguments.repeat, **state}
+    meta = {
+        "date": datetime.now(UTC).strftime("%Y-%m-%d"),
+        "policy": POLICY_PATH,
+        "repeat": arguments.repeat,
+        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+        **state,
+    }
     result = build_result(cases, runs, mode="live", meta=meta)
     output = (
         Path(arguments.out) if arguments.out else root / RESULTS_DIR / f"{meta['date']}-{state['git_sha'][:12]}.json"
