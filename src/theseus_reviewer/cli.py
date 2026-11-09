@@ -1487,8 +1487,8 @@ def _decisions_fallback(plan: Mapping[str, Any], facts: dict[str, Any], jev_erro
         _summary(f"classifier fallback failed: {exc}")
         if partial is not None and not exc.missing_key:
             return replace(partial, degraded_from=f"{cause}; {exc.message}")
-        answered = exc.partial
-        answered_bucket = None if (answered is None or exc.missing_key) else answered.size_bucket
+        answered = partial if partial is not None else exc.partial
+        answered_bucket = None if answered is None else answered.size_bucket
         return fallback_classification(
             plan["classifier_unavailable_bucket"],
             facts["gate_flags"],

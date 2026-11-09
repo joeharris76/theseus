@@ -146,6 +146,16 @@ def test_a_partial_jev_outage_with_a_failing_decisions_keeps_the_change_answer_w
     assert held.degraded_from == "TypeSafe answered 503; Decisions answered 500"
 
 
+def test_a_partial_jev_answer_survives_a_missing_decisions_key(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY")
+    _jev(monkeypatch, _pr_answers("large", "deep"), JevError(503, "down"))
+    held = cli._classify_plan(_plan(classifier_unavailable_bucket="small"))
+    assert (held.backend, held.size_bucket) == ("unavailable", "large")
+    assert held.files == () and fake.requests == []
+
+
 def test_decisions_floors_and_size_floor_apply_to_its_answer(
     monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions
 ) -> None:
