@@ -13,6 +13,7 @@ from .harness import (
     GATEWAY_TOKEN,
     HELD_SECRET,
     JEV_KEY,
+    OPENAI_KEY,
     Harness,
     ReviewRun,
 )
@@ -27,6 +28,7 @@ pytestmark = [
 FIXED_CHECKER = "def checker(a, b):\n    if a is None or b is None:\n        return False\n    return a == b\n"
 WITHHELD = {
     "TYPESAFE_API_KEY": JEV_KEY,
+    "OPENAI_API_KEY": OPENAI_KEY,
     "APP_TOKEN": APP_TOKEN,
     "APP_PRIVATE_KEY": APP_PRIVATE_KEY,
     "JOB_TOKEN": JOB_TOKEN,
@@ -34,19 +36,20 @@ WITHHELD = {
 }
 HELD_BY_THE_ATTEMPT_STEP = {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"}
 PHASE_SECRETS = {
-    "prepare": {"GH_TOKEN", "PR_NUMBER", "TYPESAFE_API_KEY"},
-    "scan-before": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
+    "prepare": {"GH_TOKEN", "PR_NUMBER", "TYPESAFE_API_KEY", "OPENAI_API_KEY"},
+    "scan-before": {"TYPESAFE_API_KEY", "OPENAI_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "harness": set(),
-    "scan-after-join": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
+    "scan-after-join": {"TYPESAFE_API_KEY", "OPENAI_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "isolation": set(),
     "attempts": {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"},
     "recover-1": {"TYPESAFE_API_KEY"},
     "resume-1": {"OMP_GATEWAY_TOKEN", "REVIEW_GATEWAY_URL"},
-    "scan-after-exit": {"TYPESAFE_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
+    "scan-after-exit": {"TYPESAFE_API_KEY", "OPENAI_API_KEY", "TS_OAUTH_CI_SECRET", "JOB_TOKEN"},
     "finalize": {
         "OMP_INSTALL_STATE",
         "OMP_GATEWAY_TOKEN",
         "TYPESAFE_API_KEY",
+        "OPENAI_API_KEY",
         "REVIEW_GATEWAY_URL",
         "TS_OAUTH_CI_CLIENT_ID",
         "TS_OAUTH_CI_SECRET",

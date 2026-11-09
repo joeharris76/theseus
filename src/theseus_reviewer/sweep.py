@@ -114,13 +114,20 @@ def surface_description(steps: Iterable[str]) -> str:
     return description
 
 
-def reset_spent(runs: Iterable[Run], reset_at: datetime, head: str, exclude: int | None = None) -> bool:
+def reset_spent(
+    runs: Iterable[Run],
+    reset_at: datetime,
+    head: str,
+    exclude: int | None = None,
+    *,
+    review_started: Callable[[int], bool],
+) -> bool:
     return any(
         run.id != exclude
         and run.created_at >= reset_at
         and run.head in (None, head)
         and run.status not in NOT_STARTED
-        and run.conclusion not in NEUTRAL
+        and (run.status != COMPLETED or review_started(run.id))
         for run in runs
     )
 

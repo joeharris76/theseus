@@ -61,6 +61,9 @@ on:
       TYPESAFE_API_KEY:
         description: Key for the classification and review model API
         required: true
+      OPENAI_API_KEY:
+        description: Key for the classifier fallback (OpenAI Decisions); optional
+        required: false
 
 permissions: {}
 
@@ -363,6 +366,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: theseus drive --policy "$POLICY_PATH" prepare
 
       - name: Check out the pull request head for reading only
@@ -381,6 +385,7 @@ jobs:
         working-directory: trusted
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
           JOB_TOKEN: ${{ github.token }}
         run: theseus drive --policy "$POLICY_PATH" scan
@@ -407,6 +412,7 @@ jobs:
         working-directory: trusted
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
           JOB_TOKEN: ${{ github.token }}
         run: theseus drive --policy "$POLICY_PATH" scan
@@ -500,6 +506,7 @@ jobs:
         working-directory: trusted
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}
           JOB_TOKEN: ${{ github.token }}
         run: theseus drive --policy "$POLICY_PATH" scan
@@ -513,6 +520,7 @@ jobs:
           OMP_INSTALL_STATE: ${{ steps.harness.outputs.state }}
           OMP_GATEWAY_TOKEN: ${{ secrets.REVIEW_GATEWAY_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           REVIEW_GATEWAY_URL: ${{ secrets.REVIEW_GATEWAY_URL }}
           TS_OAUTH_CI_CLIENT_ID: ${{ secrets.TS_OAUTH_CI_CLIENT_ID }}
           TS_OAUTH_CI_SECRET: ${{ secrets.TS_OAUTH_CI_SECRET }}

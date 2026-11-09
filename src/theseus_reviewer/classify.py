@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .jev import JevError, JevSession
+from .classifier import matching
+from .decisions import DecisionsError, DecisionsSession
+from .jev import TOTAL_TIMEOUT_SECONDS, JevError, JevSession
 from .policy import SIZE_BUCKETS
 
 CONFIDENCE_BAR = 0.60
 MAX_SCORED_FILES = 40
 GATE_BUCKET_FLOOR = "large"
-CLASSIFIER_SOURCE = "classifier"
-FALLBACK_SOURCE = "fallback"
+SIZE_FLOOR_BUCKET = "large"
+BACKEND_JEV = "jev"
+BACKEND_DECISIONS = "decisions"
+BACKEND_UNAVAILABLE = "unavailable"
 
 SIZE_QUESTION = {
     "type": "choice",
@@ -110,6 +115,13 @@ class FileRow:
 
 
 @dataclass(frozen=True)
+class FloorRules:
+    size_min_lines: int | None = None
+    size_exclude: tuple[str, ...] = ()
+    min_bucket: str | None = None
+
+
+@dataclass(frozen=True)
 class Classification:
     size_bucket: str
     capability: str
@@ -117,11 +129,18 @@ class Classification:
     confidence: float
     gate_flags: tuple[str, ...]
     files: tuple[FileRow, ...]
-    source: str = CLASSIFIER_SOURCE
+    backend: str = BACKEND_JEV
+    model: str = ""
+    answers: Mapping[str, Any] = field(default_factory=dict)
+    floors: Mapping[str, Any] = field(default_factory=dict)
+    degraded_from: str = ""
+    usage: Mapping[str, int] = field(default_factory=dict)
+    file_backend: str = ""
+    file_model: str = ""
 
     @property
-    def fallback(self) -> bool:
-        return self.source == FALLBACK_SOURCE
+    def degraded(self) -> bool:
+        return self.backend != BACKEND_JEV or bool(self.degraded_from)
 
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -131,13 +150,23 @@ class Classification:
             "confidence": self.confidence,
             "gate_flags": list(self.gate_flags),
             "files": [item.to_json() for item in self.files],
+            "backend": self.backend,
         }
-        if self.fallback:
-            data["source"] = self.source
+        optional = {
+            "model": self.model,
+            "answers": dict(self.answers),
+            "floors": dict(self.floors),
+            "degraded_from": self.degraded_from,
+            "usage": dict(self.usage),
+            "file_backend": self.file_backend,
+            "file_model": self.file_model,
+        }
+        data.update({key: value for key, value in optional.items() if value})
         return data
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> Classification:
+        legacy = BACKEND_UNAVAILABLE if data.get("source") == "fallback" else BACKEND_JEV
         return cls(
             size_bucket=data["size_bucket"],
             capability=data["capability"],
@@ -145,7 +174,14 @@ class Classification:
             confidence=float(data["confidence"]),
             gate_flags=tuple(data.get("gate_flags", [])),
             files=tuple(FileRow.from_json(item) for item in data.get("files", [])),
-            source=str(data.get("source") or CLASSIFIER_SOURCE),
+            backend=str(data.get("backend") or legacy),
+            model=str(data.get("model") or ""),
+            answers=dict(data.get("answers") or {}),
+            floors=dict(data.get("floors") or {}),
+            degraded_from=str(data.get("degraded_from") or ""),
+            usage=dict(data.get("usage") or {}),
+            file_backend=str(data.get("file_backend") or ""),
+            file_model=str(data.get("file_model") or ""),
         )
 
 
@@ -154,15 +190,15 @@ def pr_state(
     pr: int | None,
     base_sha: str,
     head_sha: str,
-    stats: Sequence[tuple[str, int, int, str]],
+    stats: Sequence[tuple[Any, ...]],
     gate_flags: Sequence[str],
 ) -> dict[str, Any]:
     subject = f"PR #{pr}" if pr is not None else "Unopened local change"
     top = sorted(stats, key=lambda item: -(item[1] + item[2]))[:12]
-    lines = "; ".join(f"{path} +{added}/-{deleted}" for path, added, deleted, _ in top)
+    lines = "; ".join(f"{item[0]} +{item[1]}/-{item[2]}" for item in top)
     gate = " Gate signals: touches review/merge machinery." if gate_flags else " Gate signals: none."
-    total_added = sum(added for _, added, _, _ in stats)
-    total_deleted = sum(deleted for _, _, deleted, _ in stats)
+    total_added = sum(item[1] for item in stats)
+    total_deleted = sum(item[2] for item in stats)
     return {
         "text": (
             f"{subject} in {repo}: {len(stats)} files, +{total_added}/-{total_deleted}, base {base_sha} head "
@@ -189,16 +225,19 @@ def file_state(
     return {"text": (f"File: {path} (+{added}/-{deleted}, {status}). Sibling areas by churn: {context}.")}
 
 
+PR_QUESTIONS = {"size": SIZE_QUESTION, "capability": CAPABILITY_QUESTION, "template": TEMPLATE_QUESTION}
+FILE_QUESTIONS = {"impact": FILE_IMPACT_QUESTION, "importance": FILE_SCORE_QUESTION}
+MALFORMED = (KeyError, TypeError, ValueError, AttributeError)
+PATH_CAP = 300
+
+
 def _choice(answer: Mapping[str, Any]) -> tuple[str, dict[str, float], float]:
-    probs = {key: float(value) for key, value in answer.get("probabilities", {}).items()}
-    return str(answer.get("choice", "")), probs, float(answer.get("confidence", 0.0))
+    probs = {key: float(value) for key, value in answer["probabilities"].items()}
+    return str(answer["choice"]), probs, float(answer["confidence"])
 
 
 def _score_to_int(answer: Mapping[str, Any]) -> int:
-    try:
-        return min(5, max(1, round(float(answer.get("score", 1)))))
-    except (TypeError, ValueError):
-        return 1
+    return min(5, max(1, round(float(answer["score"])) + 1))
 
 
 def apply_rules(
@@ -221,15 +260,106 @@ def apply_rules(
         raise ValueError(f"unknown capability {capability!r}")
     if capability_probs.get(capability, 0.0) < CONFIDENCE_BAR:
         capability = "routine"
-    template, template_probs, _ = _choice(template_answer)
+    template, _, _ = _choice(template_answer)
     if template not in ("standard", "deep", "gate"):
         raise ValueError(f"unknown template {template!r}")
     if gate_flags:
         template = "gate"
         bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(GATE_BUCKET_FLOOR))]
-    elif template_probs.get(template, 0.0) < CONFIDENCE_BAR:
-        template = "standard"
     return bucket, capability, template, size_confidence
+
+
+def changed_lines(stats: Sequence[tuple[Any, ...]], exclude: Sequence[str]) -> int:
+    total = 0
+    for item in stats:
+        path, added, deleted = item[0], item[1], item[2]
+        prev = item[4] if len(item) > 4 and item[4] else None
+        paths = (path,) if not prev else (path, prev)
+        if not (bool(exclude) and all(matching([p], exclude) for p in paths)):
+            total += added + deleted
+    return total
+
+
+def apply_floors(
+    bucket: str,
+    stats: Sequence[tuple[str, int, int, str]],
+    gate_flags: Sequence[str],
+    rules: FloorRules,
+    *,
+    min_bucket: bool,
+) -> tuple[str, dict[str, Any]]:
+    lines = None if rules.size_min_lines is None else changed_lines(stats, rules.size_exclude)
+    candidates: dict[str, str] = {}
+    if gate_flags:
+        candidates["gate"] = GATE_BUCKET_FLOOR
+    if rules.size_min_lines is not None and lines is not None and lines >= rules.size_min_lines:
+        candidates["size"] = SIZE_FLOOR_BUCKET
+    if min_bucket and rules.min_bucket:
+        candidates["min_bucket"] = rules.min_bucket
+    final = max([SIZE_BUCKETS.index(bucket), *(SIZE_BUCKETS.index(item) for item in candidates.values())])
+    raised = [
+        name for name, item in candidates.items() if SIZE_BUCKETS.index(item) == final > SIZE_BUCKETS.index(bucket)
+    ]
+    floors = {
+        "gate": bool(gate_flags),
+        "size_lines": lines,
+        "size_floor": "size" in candidates,
+        "min_bucket": rules.min_bucket if min_bucket else None,
+        "rules_bucket": bucket,
+        "raised_by": raised,
+    }
+    return SIZE_BUCKETS[final], floors
+
+
+def _decide(
+    answers: Mapping[str, Any],
+    stats: Sequence[tuple[str, int, int, str]],
+    gate_flags: Sequence[str],
+    rules: FloorRules,
+    *,
+    backend: str,
+    model: str,
+) -> Classification:
+    bucket, capability, template, confidence = apply_rules(
+        answers["size"], answers["capability"], answers["template"], gate_flags
+    )
+    bucket, floors = apply_floors(bucket, stats, gate_flags, rules, min_bucket=backend == BACKEND_DECISIONS)
+    return Classification(
+        size_bucket=bucket,
+        capability=capability,
+        template=template,
+        confidence=confidence,
+        gate_flags=tuple(gate_flags),
+        files=(),
+        backend=backend,
+        model=model,
+        answers={name: dict(answers[name]) for name in PR_QUESTIONS},
+        floors=floors,
+    )
+
+
+def _row(path: str, answers: Mapping[str, Any]) -> FileRow:
+    impact, impact_probs, _ = _choice(answers["impact"])
+    if impact not in ("low", "high"):
+        raise ValueError(f"unknown impact {impact!r}")
+    return FileRow(
+        path=path,
+        impact=impact,
+        impact_probability=impact_probs.get(impact, 0.0),
+        score=_score_to_int(answers["importance"]),
+    )
+
+
+def _ranked(stats: Sequence[tuple[str, int, int, str]]) -> list[tuple[str, int, int, str]]:
+    return sorted(stats, key=lambda item: -(item[1] + item[2]))[:MAX_SCORED_FILES]
+
+
+def _malformed(exc: Exception) -> JevError:
+    return JevError(
+        None,
+        f"the judgment service answered unusable content: {type(exc).__name__}",
+        reason="answered unusable content",
+    )
 
 
 def classify_diff(
@@ -241,53 +371,115 @@ def classify_diff(
     head_sha: str,
     stats: Sequence[tuple[str, int, int, str]],
     gate_flags: Sequence[str],
+    rules: FloorRules = FloorRules(),
+    deadline_seconds: float = TOTAL_TIMEOUT_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+) -> Classification:
+    started = clock()
+    state = pr_state(repo, pr, base_sha, head_sha, stats, gate_flags)
+    answers = session.ask(state, PR_QUESTIONS)
+    try:
+        decided = _decide(answers, stats, gate_flags, rules, backend=BACKEND_JEV, model=session.model)
+    except MALFORMED as exc:
+        raise _malformed(exc) from exc
+    rows = []
+    for item in _ranked(stats):
+        path, added, deleted, status = item[0], item[1], item[2], item[3]
+        try:
+            if clock() - started > deadline_seconds:
+                raise JevError(None, "classification deadline exceeded", reason="classification deadline exceeded")
+            siblings = [(other[0], other[1], other[2]) for other in stats if other[0] != path]
+            file_answers = session.ask(file_state(path, added, deleted, status, siblings), FILE_QUESTIONS)
+            try:
+                rows.append(_row(path, file_answers))
+            except MALFORMED as exc:
+                raise _malformed(exc) from exc
+        except JevError as exc:
+            exc.partial = decided
+            raise
+    return replace(decided, files=tuple(rows))
+
+
+def decisions_batch(
+    stats: Sequence[tuple[str, int, int, str]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], list[str]]:
+    ranked = _ranked(stats)
+    areas: dict[str, list[int]] = {}
+    for item in stats:
+        path, added, deleted = item[0], item[1], item[2]
+        cell = areas.setdefault(path.split("/")[0] if "/" in path else "(root)", [0, 0])
+        cell[0] += added
+        cell[1] += deleted
+    state = {
+        "total_files": len(stats),
+        "files": [
+            {"index": index, "path": item[0][:PATH_CAP], "added": item[1], "deleted": item[2], "status": item[3]}
+            for index, item in enumerate(ranked, 1)
+        ],
+        "areas": [
+            {"area": name, "added": cell[0], "deleted": cell[1]}
+            for name, cell in sorted(areas.items(), key=lambda item: -(item[1][0] + item[1][1]))[:5]
+        ],
+    }
+    questions: dict[str, dict[str, Any]] = {}
+    for index in range(1, len(ranked) + 1):
+        prefix = f"Consider only the file with index {index} in the files list. "
+        questions[f"impact.{index}"] = {
+            **FILE_IMPACT_QUESTION,
+            "instructions": prefix + FILE_IMPACT_QUESTION["instructions"],
+        }
+        questions[f"importance.{index}"] = {
+            **FILE_SCORE_QUESTION,
+            "instructions": prefix + FILE_SCORE_QUESTION["instructions"],
+        }
+    return state, questions, [item[0] for item in ranked]
+
+
+def decisions_rows(session: DecisionsSession, stats: Sequence[tuple[str, int, int, str]]) -> tuple[FileRow, ...]:
+    state, questions, paths = decisions_batch(stats)
+    answers = session.ask(state, questions)
+    return tuple(
+        _row(path, {"impact": answers[f"impact.{index}"], "importance": answers[f"importance.{index}"]})
+        for index, path in enumerate(paths, 1)
+    )
+
+
+def classify_decisions(
+    session: DecisionsSession,
+    *,
+    repo: str,
+    pr: int | None,
+    base_sha: str,
+    head_sha: str,
+    stats: Sequence[tuple[str, int, int, str]],
+    gate_flags: Sequence[str],
+    rules: FloorRules = FloorRules(),
+    degraded_from: str = "",
 ) -> Classification:
     state = pr_state(repo, pr, base_sha, head_sha, stats, gate_flags)
-    answers = session.ask(
-        state, {"size": SIZE_QUESTION, "capability": CAPABILITY_QUESTION, "template": TEMPLATE_QUESTION}
-    )
-    bucket, capability, template, confidence = apply_rules(
-        answers["size"], answers["capability"], answers["template"], gate_flags
-    )
-    rows = []
-    ranked = sorted(stats, key=lambda item: -(item[1] + item[2]))[:MAX_SCORED_FILES]
-    for path, added, deleted, status in ranked:
-        siblings = [(other, a, d) for other, a, d, _ in stats if other != path]
-        try:
-            file_answers = session.ask(
-                file_state(path, added, deleted, status, siblings),
-                {"impact": FILE_IMPACT_QUESTION, "importance": FILE_SCORE_QUESTION},
-            )
-        except JevError as exc:
-            exc.answered_bucket = bucket
-            raise
-        impact, impact_probs, _ = _choice(file_answers["impact"])
-        rows.append(
-            FileRow(
-                path=path,
-                impact=impact if impact in ("low", "high") else "low",
-                impact_probability=impact_probs.get(impact, 0.0),
-                score=_score_to_int(file_answers["importance"]),
-            )
-        )
-    return Classification(
-        size_bucket=bucket,
-        capability=capability,
-        template=template,
-        confidence=confidence,
-        gate_flags=tuple(gate_flags),
-        files=tuple(rows),
-    )
+    answers = session.ask(state, PR_QUESTIONS)
+    decided = _decide(answers, stats, gate_flags, rules, backend=BACKEND_DECISIONS, model=session.model)
+    try:
+        rows = decisions_rows(session, stats)
+    except DecisionsError as exc:
+        exc.partial = decided
+        raise
+    return replace(decided, files=rows, model=session.model, usage=dict(session.usage), degraded_from=degraded_from)
 
 
 def fallback_classification(
-    unavailable_bucket: str, gate_flags: Sequence[str], answered_bucket: str | None = None
+    unavailable_bucket: str,
+    gate_flags: Sequence[str],
+    answered_bucket: str | None = None,
+    *,
+    stats: Sequence[tuple[str, int, int, str]] = (),
+    rules: FloorRules = FloorRules(),
+    degraded_from: str = "",
 ) -> Classification:
     bucket = unavailable_bucket
     if answered_bucket in SIZE_BUCKETS:
         bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(answered_bucket))]
-    if gate_flags:
-        bucket = SIZE_BUCKETS[max(SIZE_BUCKETS.index(bucket), SIZE_BUCKETS.index(GATE_BUCKET_FLOOR))]
+    bucket, floors = apply_floors(bucket, stats, gate_flags, rules, min_bucket=False)
     return Classification(
         size_bucket=bucket,
         capability="deep",
@@ -295,12 +487,30 @@ def fallback_classification(
         confidence=0.0,
         gate_flags=tuple(gate_flags),
         files=(),
-        source=FALLBACK_SOURCE,
+        backend=BACKEND_UNAVAILABLE,
+        floors=floors,
+        degraded_from=degraded_from,
     )
 
 
 def classification_note(classification: Classification) -> str:
-    return (
-        "Classification unavailable (TypeSafe): reviewed from the "
-        f"{classification.size_bucket} bucket with the {classification.template} template."
-    )
+    cause = classification.degraded_from or "TypeSafe"
+    if classification.backend == BACKEND_DECISIONS:
+        raised = ", ".join(classification.floors.get("raised_by") or []) or "none"
+        return (
+            f"Classification: {cause}; classified by OpenAI Decisions {classification.model}: "
+            f"size {classification.size_bucket} (floor: {raised}), template {classification.template}."
+        )
+    if classification.backend == BACKEND_UNAVAILABLE:
+        return (
+            f"Classification unavailable ({cause}): reviewed from the "
+            f"{classification.size_bucket} bucket with the {classification.template} template."
+        )
+    if classification.file_backend:
+        return (
+            f"Classification: TypeSafe answered the change; per-file priority came from OpenAI Decisions "
+            f"{classification.file_model} ({cause})."
+        )
+    if classification.degraded_from:
+        return f"Classification: TypeSafe answered the change; per-file priority is unavailable ({classification.degraded_from})."
+    return ""

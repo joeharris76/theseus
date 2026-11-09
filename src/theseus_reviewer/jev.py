@@ -6,19 +6,29 @@ import os
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .classify import Classification
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
+CALL_TIMEOUT_SECONDS = 60
+TOTAL_TIMEOUT_SECONDS = 300
 
 
 class JevError(Exception):
-    def __init__(self, status: int | None, message: str, *, missing_key: bool = False) -> None:
+    def __init__(self, status: int | None, message: str, *, reason: str = "", missing_key: bool = False) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        self.reason = reason or "unreachable"
         self.missing_key = missing_key
-        self.answered_bucket: str | None = None
+        self.partial: Classification | None = None
+
+    @property
+    def cause(self) -> str:
+        return f"TypeSafe answered {self.status}" if self.status is not None else f"TypeSafe {self.reason}"
 
     @property
     def is_outage(self) -> bool:
@@ -31,7 +41,7 @@ class JevSession:
         model: str = "jev-1.14.0",
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout_seconds: int = 180,
+        timeout_seconds: int = CALL_TIMEOUT_SECONDS,
     ) -> None:
         self.model = model
         self.base_url = (base_url or os.environ.get("TYPESAFE_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
@@ -50,9 +60,9 @@ class JevSession:
         try:
             payload = json.dumps({"model": self.model, "state": state, "questions": dict(questions)}).encode("utf-8")
         except (ValueError, TypeError) as exc:
-            raise JevError(None, f"judgment request is not JSON: {exc}") from exc
+            raise JevError(None, f"judgment request is not JSON: {exc}", reason="request not JSON") from exc
         if len(payload) > MAX_REQUEST_BYTES:
-            raise JevError(None, "judgment request exceeds 32 MiB")
+            raise JevError(None, "judgment request exceeds 32 MiB", reason="request too large")
         request = urllib.request.Request(
             f"{self.base_url}/v1/systemone",
             data=payload,
@@ -69,9 +79,11 @@ class JevSession:
         try:
             content = json.loads(raw)
         except ValueError as exc:
-            raise JevError(None, "the judgment service answered malformed JSON") from exc
+            raise JevError(
+                None, "the judgment service answered malformed JSON", reason="answered malformed JSON"
+            ) from exc
         if not isinstance(content, dict) or not isinstance(content.get("answers"), dict):
-            raise JevError(None, "the judgment service answered without answers")
+            raise JevError(None, "the judgment service answered without answers", reason="answered without answers")
         return content["answers"]
 
 
