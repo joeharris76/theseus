@@ -146,7 +146,17 @@ def _probe_runs() -> dict[str, ClientRun]:
 
 def _good_runs() -> dict[str, ClientRun]:
     return {
-        "review": _run("review", _read("chain_review.jsonl"), upstream=tuple(_request() for _ in range(5))),
+        "review": _run(
+            "review",
+            _read("chain_review.jsonl"),
+            upstream=tuple(_request() for _ in range(5)),
+            served={
+                "no-credentials": (),
+                "credentialed": (candidate_checks.QUOTA_PRIMARY,),
+                "disabled-control": (candidate_checks.QUOTA_PRIMARY,),
+                "disabled-provider": (),
+            },
+        ),
         "read-lines": _run("read-lines", _read("read_lines.jsonl"), upstream=tuple(_request() for _ in range(11))),
         "control": _run(
             "control",
@@ -158,7 +168,13 @@ def _good_runs() -> dict[str, ClientRun]:
         "roster-breach": _run(
             "roster-breach", _read("roster_breach.jsonl"), upstream=tuple(_request() for _ in range(4))
         ),
-        "quota-walk": _run("quota-walk", _read("quota_walk.jsonl"), 1, upstream=(_request(),)),
+        "quota-walk": _run(
+            "quota-walk",
+            _read("quota_walk.jsonl"),
+            1,
+            upstream=(_request(),),
+            model_chain=tuple(providers.strip_effort(item) for item in providers.candidates("@default", CONFIG)),
+        ),
         "quota-terminal": _run("quota-terminal", _read("quota_terminal.jsonl"), 1, upstream=(_request(),)),
         "upstream-auth": _run("upstream-auth", _read("upstream_auth.jsonl"), 1, upstream=(_request(),)),
         "bad-token": _run("bad-token", _read("gateway_rejection.jsonl"), 1),
@@ -167,6 +183,13 @@ def _good_runs() -> dict[str, ClientRun]:
             "",
             upstream=(_request(prompt=TRANSPORT_PROMPT),),
             argv=("omp", "--print"),
+        ),
+        "rewritten-role": _run(
+            "rewritten-role",
+            "",
+            upstream=({"path": "/v1/messages", "body": {"model": "claude-opus-5-5"}},),
+            chosen_model="anthropic/claude-opus-5-5",
+            model_chain=(candidate_checks.QUOTA_PRIMARY,),
         ),
         **_probe_runs(),
     }
@@ -1073,36 +1096,96 @@ def test_a_catalog_listing_that_fails_is_red(tmp_path: Path) -> None:
     assert check.failures == ("the model catalog could not be listed: exit code 1",)
 
 
-def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_services(tmp_path: Path) -> None:
+def _served_binary(tmp_path: Path, mode: str = "", listing: Any = None) -> Path:
     binary = tmp_path / "omp"
     binary.write_text(
         f"#!{sys.executable}\n"
-        "import signal, socket, sys, time\n"
+        "import json, os, signal, sys\n"
+        "from pathlib import Path\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
         "args = sys.argv[1:]\n"
+        f"mode = {mode!r}\n"
+        f"listing = {listing!r}\n"
         "if args[:2] == ['auth-broker', 'token']:\n"
         "    print('stub-broker-token')\n"
         "elif args[:2] == ['auth-broker', 'migrate']:\n"
-        "    pass\n"
+        "    (Path.cwd().parent / 'credentialed').touch()\n"
         "elif len(args) >= 4 and args[1] == 'serve' and args[2] == '--bind':\n"
         "    host, port = args[3].rsplit(':', 1)\n"
-        "    sock = socket.socket()\n"
-        "    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
-        "    sock.bind((host, int(port)))\n"
-        "    sock.listen(5)\n"
-        "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
-        "    while True:\n"
-        "        time.sleep(0.2)\n"
+        "    class Handler(BaseHTTPRequestHandler):\n"
+        "        def do_GET(self):\n"
+        "            models = []\n"
+        "            disabled = Path.home() / '.omp/agent/config.yml'\n"
+        "            credentialed = (Path.cwd().parent / 'credentialed').exists()\n"
+        "            hidden = disabled.exists() and '- anthropic' in disabled.read_text()\n"
+        "            if credentialed and (not hidden or mode == 'ignores-disabled'):\n"
+        "                models = ['anthropic/claude-sonnet-5-5']\n"
+        "            if mode == 'config-loses-credentials' and disabled.exists():\n"
+        "                models = []\n"
+        "            data = dict(data=[dict(id=model) for model in models])\n"
+        "            if mode == 'malformed-empty' and not credentialed:\n"
+        "                data = listing\n"
+        "            if mode == 'malformed-disabled' and hidden:\n"
+        "                data = listing\n"
+        "            body = json.dumps(data).encode()\n"
+        "            self.send_response(200)\n"
+        "            self.end_headers()\n"
+        "            self.wfile.write(body)\n"
+        "        def log_message(self, *_): pass\n"
+        "    HTTPServer((host, int(port)), Handler).serve_forever()\n"
         "else:\n"
         "    sys.exit(2)\n",
         encoding="utf-8",
     )
     binary.chmod(0o755)
+    return binary
+
+
+def test_loopback_chain_builds_gateway_clients_from_the_cli_parser_and_starts_services(tmp_path: Path) -> None:
+    binary = _served_binary(tmp_path)
     workdir = tmp_path / "chain"
     with candidate_chain.loopback_chain(binary, workdir, CONFIG_TEXT) as chain:
         assert chain.gateway_url.startswith("http://127.0.0.1:")
         clients = json.loads((workdir / "gateway-clients.json").read_text(encoding="utf-8"))
         assert cli.GATEWAY_CLIENT in clients
         assert clients[cli.GATEWAY_CLIENT]["models"]
+        assert chain.served == {
+            "no-credentials": (),
+            "credentialed": (candidate_checks.QUOTA_PRIMARY,),
+            "disabled-control": (candidate_checks.QUOTA_PRIMARY,),
+            "disabled-provider": (),
+        }
+
+
+@pytest.mark.parametrize("mode", ["config-loses-credentials", "ignores-disabled"])
+def test_disabled_provider_contract_rejects_an_insensitive_fake_executable(tmp_path: Path, mode: str) -> None:
+    binary = _served_binary(tmp_path, mode)
+    with candidate_chain.loopback_chain(binary, tmp_path / "chain", CONFIG_TEXT) as chain:
+        checks = candidate_checks.served_checks(_run("review", "", served=chain.served))
+        assert not checks[1].ok
+
+
+@pytest.mark.parametrize("mode", ["malformed-empty", "malformed-disabled"])
+@pytest.mark.parametrize(
+    "listing",
+    [
+        {},
+        [],
+        {"data": {}},
+        {"data": None},
+        {"data": [None]},
+        {"data": [{"model": "anthropic/claude-sonnet-5-5"}]},
+        {"data": [{"id": 1}]},
+        {"data": [{"id": ""}]},
+    ],
+)
+def test_served_contract_rejects_malformed_negative_observations_from_a_subprocess(
+    tmp_path: Path, mode: str, listing: Any
+) -> None:
+    binary = _served_binary(tmp_path, mode, listing)
+    with pytest.raises(RuntimeError, match="malformed served model list"):
+        with candidate_chain.loopback_chain(binary, tmp_path / "chain", CONFIG_TEXT):
+            pytest.fail("a malformed served model list was accepted")
 
 
 def test_the_prompt_transport_probe_exceeds_what_one_argument_can_hold() -> None:
@@ -1129,3 +1212,78 @@ def test_the_prompt_transport_check_is_red_when_the_prompt_does_not_arrive_on_st
 ) -> None:
     failures = _failed(candidate_checks.transport_checks(replace(_good_runs()["prompt-transport"], **fields)))
     assert expected in " ".join(failures["live-prompt-transport"])
+
+
+@pytest.mark.parametrize(
+    ("served", "check", "expected"),
+    [
+        (None, "live-served-without-credentials", "not observed"),
+        (
+            {"no-credentials": ("anthropic/claude-sonnet-5-5",)},
+            "live-served-without-credentials",
+            "without credentials",
+        ),
+        (
+            {"no-credentials": (), "credentialed": (), "disabled-provider": ()},
+            "live-served-disabled-provider",
+            "control",
+        ),
+        (
+            {"no-credentials": (), "credentialed": (candidate_checks.QUOTA_PRIMARY,)},
+            "live-served-disabled-provider",
+            "not observed",
+        ),
+        (
+            {
+                "no-credentials": (),
+                "credentialed": (candidate_checks.QUOTA_PRIMARY,),
+                "disabled-provider": (candidate_checks.QUOTA_PRIMARY,),
+            },
+            "live-served-disabled-provider",
+            "despite disabledProviders",
+        ),
+    ],
+)
+def test_served_contracts_fail_closed_on_missing_controls_or_leaked_models(served, check, expected) -> None:
+    failures = _failed(candidate_checks.served_checks(replace(_good_runs()["review"], served=served)))
+    assert expected in " ".join(failures[check])
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"upstream": ()},
+        {"upstream": (_request(),)},
+        {"upstream": ({"path": "/wrong", "body": {"model": "claude-opus-5-5"}},)},
+        {"exit_code": 1},
+        {"timed_out": True},
+        {"survivors": (123,)},
+        {"chosen_model": ""},
+        {"chosen_model": candidate_checks.QUOTA_PRIMARY},
+    ],
+)
+def test_rewritten_role_contract_requires_the_chosen_model_at_the_upstream(fields) -> None:
+    run = replace(_good_runs()["rewritten-role"], **fields)
+    assert not candidate_checks.rewritten_role_checks(run)[0].ok
+
+
+def test_quota_walk_follows_the_configured_next_candidate_instead_of_a_fixed_provider() -> None:
+    run = _good_runs()["quota-walk"]
+    chosen = "google-antigravity/claude-sonnet-5-5"
+    stdout = run.stdout.replace("openai-codex", "google-antigravity").replace("gpt-6.1-sol", "claude-sonnet-5-5")
+    changed = replace(run, stdout=stdout, model_chain=(candidate_checks.QUOTA_PRIMARY, chosen))
+    assert candidate_checks.quota_checks(changed, _good_runs()["quota-terminal"])[0].ok
+    assert not candidate_checks.quota_checks(replace(changed, stdout=run.stdout), _good_runs()["quota-terminal"])[0].ok
+
+
+def test_quota_walk_rejects_a_missing_configured_fallback() -> None:
+    run = replace(_good_runs()["quota-walk"], model_chain=())
+    check = candidate_checks.quota_checks(run, _good_runs()["quota-terminal"])[0]
+    assert check.failures == ("the configured reviewer role has no fallback candidate to probe",)
+
+
+def test_quota_walk_rejects_skipping_the_next_configured_candidate() -> None:
+    run = _good_runs()["quota-walk"]
+    first_walk = run.stdout.replace("openai-codex", "google-antigravity").replace("gpt-6.1-sol", "claude-sonnet-5-5")
+    stdout = first_walk + run.stdout
+    assert candidate_checks.walk_failures(stdout, first=candidate_checks.QUOTA_PRIMARY, then=run.model_chain[1])
