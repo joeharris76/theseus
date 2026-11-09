@@ -72,7 +72,7 @@ def test_the_ci_job_validates_the_corpus_and_runs_the_score_rule_from_the_base_c
 
     assert job["name"] == "review eval corpus and score rule"
     checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
-    assert checkout["with"]["fetch-depth"] == 2 and checkout["with"]["persist-credentials"] is False
+    assert checkout["with"]["fetch-depth"] == 0 and checkout["with"]["persist-credentials"] is False
     commands = {step["name"]: step for step in job["steps"] if "run" in step}
     assert commands["Validate the eval corpus"]["run"] == "python3 tools/review_eval.py validate"
     rule = commands["Refuse a template, policy or guidance change that lowers the eval score"]

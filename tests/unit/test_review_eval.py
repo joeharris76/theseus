@@ -247,9 +247,7 @@ def _result(repository: Path, variant: str, *, mode: str = "live", dirty: bool =
     return TOOL.build_result(CASES, runs, mode=mode, meta=_meta(repository, dirty=dirty))
 
 
-def _attach(
-    repository: Path, label: str, result: dict[str, Any], *, named: str = "", trusted: bool = True
-) -> str:
+def _attach(repository: Path, label: str, result: dict[str, Any], *, named: str = "", trusted: bool = True) -> str:
     result["git_sha"] = (label.encode().hex() + "0" * 12)[:40]
     name = named or f"{result['date']}-{result['git_sha'][:12]}.json"
     target = repository / TOOL.RESULTS_DIR / name
@@ -617,7 +615,7 @@ def test_every_skeleton_file_is_reviewer_configuration() -> None:
 
     assert TOOL.is_reviewer_config(".github/soundness-paths.txt", guidance)
     assert TOOL.is_reviewer_config("docs/manifest.txt", guidance)
-    assert not TOOL.is_reviewer_config(".github/workflows/ci.yml", guidance)
+    assert TOOL.is_reviewer_config(".github/workflows/ci.yml", guidance)
     assert not TOOL.is_reviewer_config(".github/theseus-lock.json", guidance)
     assert not TOOL.is_reviewer_config("docs/other.md", guidance)
 

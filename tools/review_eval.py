@@ -348,10 +348,7 @@ def guidance_paths(tree: Tree) -> set[str]:
 
 def is_reviewer_config(path: str, guidance: set[str]) -> bool:
     return (
-        path in CONFIG_FILES
-        or path in guidance
-        or path.startswith(ENGINE_PREFIX)
-        or path.startswith(f"{CASES_DIR}/")
+        path in CONFIG_FILES or path in guidance or path.startswith(ENGINE_PREFIX) or path.startswith(f"{CASES_DIR}/")
     )
 
 
@@ -698,7 +695,10 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
     if baseline is None and any(not path.startswith(f"{RESULTS_DIR}/") for path in all_changed):
         return Verdict(
             False,
-            (*listing, "no authenticated baseline: bootstrap requires a results-only change with a trusted scheduled run"),
+            (
+                *listing,
+                "no authenticated baseline: bootstrap requires a results-only change with a trusted scheduled run",
+            ),
         )
     cases = load_cases_from_tree(base_tree)
     rewritten = [path for path in changed if path in base_results]

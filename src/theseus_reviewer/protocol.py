@@ -801,8 +801,6 @@ def judge(
     return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
 
 
-
-
 def judge_planned(
     verdict: Verdict,
     plan: Mapping[str, Any],

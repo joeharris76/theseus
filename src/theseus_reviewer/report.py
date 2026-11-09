@@ -359,8 +359,7 @@ def _review_payload(
         "event": "COMMENT",
         "body": body,
         "comments": [
-            _review_comment(finding, commentable, (markers or {}).get(finding, ""))
-            for finding in placement.inline
+            _review_comment(finding, commentable, (markers or {}).get(finding, "")) for finding in placement.inline
         ],
     }
 
