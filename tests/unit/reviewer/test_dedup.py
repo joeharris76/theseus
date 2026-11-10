@@ -49,9 +49,11 @@ def test_split_drops_open_and_repeated_findings() -> None:
     open_one = _finding("Drops a row")
     fresh = _finding("Skips validation", 5)
     duplicate = _finding("skips validation", 9)
-    new, repeated = split((open_one, fresh, duplicate), [fingerprint(PATH, "Drops a row")])
+    twin = _finding("skips validation", 5)
+    new, repeated = split((open_one, fresh, twin), [fingerprint(PATH, "Drops a row")])
     assert new == (fresh,)
-    assert repeated == (open_one, duplicate)
+    assert repeated == (open_one, twin)
+    assert split((fresh, duplicate), []) == ((fresh, duplicate), ())
 
 
 def test_a_marker_inside_the_detail_does_not_set_the_fingerprint() -> None:
@@ -72,3 +74,10 @@ def test_a_more_severe_repeat_is_posted_again() -> None:
 def test_open_fingerprints_keep_the_most_severe_thread() -> None:
     threads = [_open("benchbox-review", "**Low**: Drops a row"), _open("benchbox-review", "**High**: Drops a row")]
     assert open_fingerprints(threads, "benchbox-review") == {fingerprint(PATH, "Drops a row"): "High"}
+
+
+def test_one_class_at_several_lines_of_a_file_keeps_every_location_in_a_round() -> None:
+    first, second, third = (_finding("Unchecked size", line) for line in (3, 40, 90))
+    assert split((first, second, third), {}) == ((first, second, third), ())
+    prior = {fingerprint(PATH, "Unchecked size"): "High"}
+    assert split((first, second), prior) == ((), (first, second))

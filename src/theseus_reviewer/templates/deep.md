@@ -59,7 +59,8 @@ the list and never decides the outcome. Every defect names a repository-relative
 exist in the head commit. When the defect spans several lines, set end_line to the last line of the span;
 otherwise set end_line to null.
 When one defect class recurs at several places, report each location as a separate defect with its own path and
-line. Titles may share the class name and the detail may cross-reference the other locations. Never list the same
+line. Give each location a unique title that names the class and the specific symbol or location (for example
+"Unchecked size: in parse_header"); the detail may cross-reference the other locations. Never list the same
 location again under a new title.
 Set origin to pre-existing only when the defect itself already existed at the base commit; a defect this change
 causes, including by deleting or moving code, is introduced. When in doubt, or when the defect spans several

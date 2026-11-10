@@ -59,11 +59,15 @@ def split(
     known = dict(already_open) if isinstance(already_open, Mapping) else dict.fromkeys(already_open, SEVERITIES[0])
     fresh: list[Finding] = []
     repeated: list[Finding] = []
+    placed: dict[tuple[str, int], str] = {}
     for finding in findings:
         key = fingerprint(finding.file, finding.title)
         posted = known.get(key)
         covered = posted is not None and SEVERITIES.index(posted) <= SEVERITIES.index(finding.severity)
-        (repeated if covered else fresh).append(finding)
-        if not covered:
-            known[key] = finding.severity
+        here = (key, finding.line)
+        twin = placed.get(here)
+        twinned = twin is not None and SEVERITIES.index(twin) <= SEVERITIES.index(finding.severity)
+        (repeated if covered or twinned else fresh).append(finding)
+        if not covered and not twinned:
+            placed[here] = finding.severity
     return tuple(fresh), tuple(repeated)

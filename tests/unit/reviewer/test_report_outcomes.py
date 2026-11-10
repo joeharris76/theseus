@@ -757,3 +757,38 @@ def test_a_protocol_decision_separates_its_text_from_the_record_by_one_blank_lin
         final = report.refused({**_protocol_plan(policy, kind="refused", strikes=3, round=0), "decision": "refused"})
     lines = final.body.split("\n")
     assert lines[-1].startswith(protocol.MARKER_OPEN) and lines[-2] == "" and lines[-3] != ""
+
+
+def _carried(defect_id: str, line: int) -> dict[str, Any]:
+    return {
+        "id": defect_id,
+        "severity": "High",
+        "file": "a.py",
+        "line": line,
+        "end_line": None,
+        "title": "Unchecked size",
+    }
+
+
+def _thread_plan(threaded: list[str]) -> dict[str, Any]:
+    key = dedup.fingerprint("a.py", "Unchecked size")
+    return {"threaded": threaded, "open_findings": {key: "High"}, "head_sha": "h", "protocol": {"previous_head": "h"}}
+
+
+def _judged(*entries: dict[str, Any]) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(decision=protocol.SHIP_WITH_FIXES, carried=list(entries))
+
+
+def test_carried_defects_with_one_fingerprint_each_get_a_thread_or_a_notice() -> None:
+    lines = {"a.py": frozenset({3, 40})}
+    entries = (_carried("D1", 3), _carried("D2", 40))
+    opened, unanchored = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
+    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")] and unanchored == []
+    opened, unanchored = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"] and unanchored == []
+    opened, unanchored = report._threads_to_open(
+        _thread_plan([]), _judged(_carried("D1", 3), _carried("D2", 41)), lines, "review", 1
+    )
+    assert [defect_id for _, defect_id in opened] == [] and unanchored == ["D2"]

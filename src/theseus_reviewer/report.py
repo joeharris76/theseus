@@ -108,6 +108,9 @@ def _threads_to_open(
     unanchored: list[str] = []
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
+    prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
+    sibling_prints = {prints[entry["id"]] for entry in judgement.carried if f"c{cycle}-{entry['id']}" in threaded}
+    claimed: set[str] = set()
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
@@ -129,8 +132,11 @@ def _threads_to_open(
             else "",
             end if isinstance(end, int) and end > line else None,
         )
-        if dedup.fingerprint(finding.file, finding.title) not in known:
-            opened.append((finding, entry["id"]))
+        key = prints[entry["id"]]
+        if key in known and key not in sibling_prints and key not in claimed:
+            claimed.add(key)
+            continue
+        opened.append((finding, entry["id"]))
     return opened, unanchored
 
 
