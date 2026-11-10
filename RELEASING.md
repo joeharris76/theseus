@@ -2,7 +2,7 @@
 
 ## Rules
 
-- A release tag points at a head of `main` that has been merged under the governance in [CONTRIBUTING.md](CONTRIBUTING.md); never at an unreviewed or PR-only commit.
+- A release tag points at a head of `main` that has been merged under the rule in [CONTRIBUTING.md](CONTRIBUTING.md); never at an unreviewed or PR-only commit.
 - Release assets are the wheel and sdist built from that exact commit. Their SHA-256 hashes are published with the release and recorded in the consumer lock; hashing a release label alone is not verification.
 - The consumer lock needs two distinct https URLs for the identical wheel bytes (the installer refuses a lock with fewer): the primary release asset and a retained copy published under a second asset name. A wrong hash from either refuses; a blocked primary falls back only to the retained copy.
 - Release builds run without App, tailnet or gateway credentials. Any publisher credential is available only to a publish step on the tagged `main` commit, never to fork PRs or candidate builds.
@@ -10,7 +10,7 @@
 
 ## Procedure
 
-1. Confirm `main` CI is green at the intended head and the owner has reviewed every diff since the previous tag.
+1. Confirm `main` CI is green at the intended head and every diff since the previous tag merged under the rule in [CONTRIBUTING.md](CONTRIBUTING.md).
 2. Confirm `version` in `pyproject.toml` equals the tag (`0.1.0` for `v0.1.0`); change it only through a reviewed PR. Record the frozen source hash of the release in [PROVENANCE.md](PROVENANCE.md): the sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tracked file under `src/theseus_reviewer/` at the tag.
 3. From a clean checkout of the merge commit: `uv sync --locked && uv run -- pytest && uv build`.
 4. Compute hashes: `cd dist && shasum -a 256 *`. The wheel is deterministic, so rebuilding the same source reproduces its hash.
