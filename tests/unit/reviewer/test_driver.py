@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -9,10 +10,12 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import cli, driver, github, isolation, omp_pin
+from theseus_reviewer import cli, driver, github, isolation, omp_pin, protocol
 from theseus_reviewer.driver import CiEnvironment, GitHubSink
+from theseus_reviewer.policy import load_policy
 
 from .conftest import POLICY_PATH
+from .test_cli_plan import TWO_FILE_DIFF, _record
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -72,6 +75,8 @@ class RecordingSink:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, Any]] = []
         self.refuse = ""
+        self.minimize_failures: list[str] = []
+        self.minimize_error: Exception | None = None
 
     def _record(self, kind: str, repo: str, target: Any) -> None:
         if self.refuse == kind:
@@ -92,6 +97,12 @@ class RecordingSink:
 
     def gate(self, repo: str, pr: int, head: str) -> None:
         self._record("gate", repo, head)
+
+    def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]:
+        self._record("minimize", repo, (pr, head, bot_login))
+        if self.minimize_error is not None:
+            raise self.minimize_error
+        return self.minimize_failures
 
 
 @pytest.fixture
@@ -272,6 +283,120 @@ def test_publish_posts_status_comment_review_then_the_gate_and_never_dispatches_
     else:
         assert code == 2 and sink.calls == []
         assert "skip=" not in written and "state_recorded" not in written
+
+
+RECORDED_REVIEW = {
+    "body": "Decision.\n\n"
+    + protocol.encode_marker({k: v for k, v in _record(TWO_FILE_DIFF, "SHIP").items() if k != "patch_map"}),
+    "comments": [],
+}
+
+
+def _publish_with_minimizing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sink: RecordingSink,
+    *,
+    flag: bool,
+    review: dict[str, Any] | None = RECORDED_REVIEW,
+) -> tuple[int, list[str], str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    environment = _environment(tmp_path)
+    if flag:
+        environment.policy.write_text(
+            environment.policy.read_text(encoding="utf-8") + "\nminimize_superseded: true\n", encoding="utf-8"
+        )
+    _plan(environment.layout, bot_login="acme-review")
+    _final(environment.layout.final, comment=True, review=review is not None)
+    if review is not None:
+        _write(environment.layout.final / "review.json", review)
+    monkeypatch.setattr(cli, "guard_decision", lambda plan: (0, False))
+    code = driver.publish(environment, argparse.Namespace())
+    return code, [item[0] for item in sink.calls], Path(os.environ["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
+
+
+def test_publish_minimises_after_the_gate_when_the_flag_is_on_and_a_record_was_posted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    code, kinds, _ = _publish_with_minimizing(tmp_path, monkeypatch, sink, flag=True)
+
+    assert code == 0
+    assert kinds == ["comment", "review", "status", "gate", "minimize"]
+    assert sink.calls[-1] == ("minimize", REPO, (7, HEAD, "acme-review"))
+
+
+def test_publish_minimises_nothing_when_the_flag_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    code, kinds, _ = _publish_with_minimizing(tmp_path, monkeypatch, sink, flag=False)
+
+    assert code == 0 and "minimize" not in kinds
+
+
+@pytest.mark.parametrize(
+    "review",
+    [None, {"body": "### review-verdict: pending\n\nReviewers not available.", "comments": []}],
+    ids=["no-review-posted", "not-reviewed-post"],
+)
+def test_publish_minimises_nothing_unless_the_posted_review_carries_a_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink, review: dict[str, Any] | None
+) -> None:
+    code, kinds, _ = _publish_with_minimizing(tmp_path, monkeypatch, sink, flag=True, review=review)
+
+    assert code == 0 and "minimize" not in kinds
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        github.GitHubError("Resource not accessible by integration"),
+        RuntimeError("boom"),
+        ["PRR_1: GitHub GraphQL returned errors"],
+    ],
+    ids=["permission-error", "unexpected-error", "per-review-failure"],
+)
+def test_a_minimise_failure_changes_neither_the_exit_code_nor_what_was_posted_nor_the_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outputs: Path,
+    sink: RecordingSink,
+    capsys: pytest.CaptureFixture[str],
+    failure: Any,
+) -> None:
+    baseline = _publish_with_minimizing(tmp_path / "off", monkeypatch, sink, flag=False)
+    sink.calls.clear()
+    outputs.write_text("", encoding="utf-8")
+    if isinstance(failure, Exception):
+        sink.minimize_error = failure
+    else:
+        sink.minimize_failures = failure
+
+    code, kinds, written = _publish_with_minimizing(tmp_path / "on", monkeypatch, sink, flag=True)
+
+    assert (code, kinds[:-1], written) == baseline
+    assert kinds[-1] == "minimize"
+    assert "::warning::" in capsys.readouterr().err
+
+
+def test_publish_still_succeeds_when_the_minimise_step_cannot_read_the_policy_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    environment = _environment(tmp_path)
+    _plan(environment.layout, bot_login="acme-review")
+    _final(environment.layout.final, comment=True, review=True)
+    _write(environment.layout.final / "review.json", RECORDED_REVIEW)
+    monkeypatch.setattr(cli, "guard_decision", lambda plan: (0, False))
+    calls = iter([environment.policy])
+
+    def policy_vanishes(path: Path) -> Any:
+        if next(calls, None) is None:
+            raise OSError("policy vanished")
+        return load_policy(path)
+
+    monkeypatch.setattr(driver, "load_policy", policy_vanishes)
+
+    assert driver.publish(environment, argparse.Namespace()) == 0
+    assert [item[0] for item in sink.calls] == ["comment", "review", "status", "gate"]
 
 
 def test_publish_posts_only_the_status_and_gate_when_no_comment_or_review_was_written(

@@ -318,6 +318,18 @@ def test_a_policy_with_an_unknown_top_level_key_is_rejected_by_name() -> None:
         parse_policy(raw)
 
 
+def test_minimize_superseded_defaults_to_off_and_accepts_a_boolean() -> None:
+    assert parse_policy(_raw()).minimize_superseded is False
+    for value in (True, False):
+        assert parse_policy({**_raw(), "minimize_superseded": value}).minimize_superseded is value
+
+
+@pytest.mark.parametrize("value", ["true", "yes", 1, 0, None, [], {}], ids=repr)
+def test_minimize_superseded_rejects_anything_but_a_boolean(value: Any) -> None:
+    with pytest.raises(PolicyError, match="minimize_superseded must be a boolean"):
+        parse_policy({**_raw(), "minimize_superseded": value})
+
+
 def test_the_brief_size_bound_is_a_fixed_constant() -> None:
     from theseus_reviewer.policy import BRIEF_MAX_BYTES, INLINE_BRIEF_MAX_BYTES
 

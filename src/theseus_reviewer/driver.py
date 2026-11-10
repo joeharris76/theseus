@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import capacity, cli, commands, github, isolation, omp_pin, providers
+from . import capacity, cli, commands, github, isolation, minimize, omp_pin, providers
 from ._vendor import yaml
 from .policy import Consumer, PolicyError, load_policy
 
@@ -71,6 +71,8 @@ class Sink(Protocol):
 
     def gate(self, repo: str, pr: int, head: str) -> None: ...
 
+    def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]: ...
+
 
 class CredentialError(Exception):
     pass
@@ -99,6 +101,9 @@ class GitHubSink:
 
     def gate(self, repo: str, pr: int, head: str) -> None:
         github.post_gate(repo, pr, head, self.app_token, self.policy)
+
+    def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]:
+        return github.minimize_reviews(minimize.superseded(github.reviews(repo, pr), bot_login, head), self.app_token)
 
 
 class Environment(Protocol):
@@ -407,6 +412,26 @@ def _post_gate(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
         cli._output({"gate_failed": "true"})
 
 
+def _minimize_superseded(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
+    """Collapse earlier verdict reviews once a record-bearing review has been posted; cosmetic, so it fails open.
+
+    Runs after the status and the gate are posted and reads nothing back into them: whatever happens here, the
+    verdict, the statuses and the gate result are already final.
+    """
+    review = env.layout.final / "review.json"
+    try:
+        if not review.is_file() or not load_policy(env.policy).minimize_superseded:
+            return
+        if not minimize.carries_record(_read(review).get("body")):
+            return
+        failures = sink.minimize_superseded(env.repo, int(plan["pr"]), plan["head_sha"], plan["bot_login"])
+    except Exception as exc:  # noqa: BLE001 - presentation only: nothing here may change the review outcome
+        print(f"::warning::superseded reviews were not minimised: {exc}", file=sys.stderr)
+        return
+    for failure in failures:
+        print(f"::warning::a superseded review was not minimised: {failure}", file=sys.stderr)
+
+
 def _credentialed_sink(env: Environment) -> Sink | None:
     try:
         return env.sink()
@@ -433,6 +458,7 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
         print(f"review-verdict: error: {exc}", file=sys.stderr)
         return 1
     _post_gate(env, sink, plan)
+    _minimize_superseded(env, sink, plan)
     if has_state:
         cli._output({"state_recorded": "true"})
     return 0

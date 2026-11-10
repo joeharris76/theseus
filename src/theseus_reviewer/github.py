@@ -552,6 +552,65 @@ def post_file(path: str, payload: Path, token: str) -> None:
         raise GitHubError(f"could not post to {path}: {result.stderr.strip()[:500]}")
 
 
+MINIMIZE_MUTATION = """
+mutation($id: ID!) {
+  minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+    minimizedComment { isMinimized minimizedReason }
+  }
+}
+"""
+MINIMIZED_QUERY = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequestReview {
+      id
+      isMinimized
+    }
+  }
+}
+"""
+
+
+def _graphql_as(token: str, query: str, variables: Sequence[tuple[str, str]]) -> Any:
+    argv = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for name, value in variables:
+        argv += ["-f", f"{name}={value}"]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False, env=_token_env(token))
+    if result.returncode != 0:
+        raise GitHubError(f"GitHub GraphQL request failed: {(result.stderr.strip() or result.stdout.strip())[:500]}")
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError as exc:
+        raise GitHubError(f"GitHub GraphQL returned a malformed response: {exc}") from exc
+    if not isinstance(payload, Mapping) or payload.get("errors") or not isinstance(payload.get("data"), Mapping):
+        raise GitHubError(
+            f"GitHub GraphQL returned errors: {payload.get('errors') if isinstance(payload, Mapping) else payload}"
+        )
+    return payload["data"]
+
+
+def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
+    """Minimise reviews as outdated, skipping any already minimised; return one message per failure."""
+    ids = list(dict.fromkeys(node_ids))
+    if not ids:
+        return []
+    already: set[str] = set()
+    for batch in edits.batches(ids):
+        nodes = _graphql_as(token, MINIMIZED_QUERY, [("ids[]", node_id) for node_id in batch]).get("nodes")
+        for node in nodes if isinstance(nodes, list) else ():
+            if isinstance(node, Mapping) and node.get("isMinimized") is True:
+                already.add(str(node.get("id")))
+    failures: list[str] = []
+    for node_id in ids:
+        if node_id in already:
+            continue
+        try:
+            _graphql_as(token, MINIMIZE_MUTATION, [("id", node_id)])
+        except GitHubError as exc:
+            failures.append(f"{node_id}: {exc}")
+    return failures
+
+
 def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:
     post_file(f"repos/{repo}/statuses/{head_sha}", payload, token)
 

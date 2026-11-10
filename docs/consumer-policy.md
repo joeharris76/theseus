@@ -177,6 +177,19 @@ Without `protocol.max_finding_rounds` a pull request can take any number of foll
 - **Class-level findings.** The templates (v3) ask for one defect entry per recurring class, naming every location, and never the same defect again under a new title.
 - **Dispute dispositions.** A reviewer that answers a dispute re-review of an unchanged patch with a verified `fixed` makes the attempt invalid, regardless of its decision or how many attempts remain. It must withdraw the finding while conceding the rebuttal or consistently maintain it. Exhaustion does not rewrite its evidence into a maintained disposition or count the invalid answer toward escalation.
 
+## Minimising superseded reviews
+
+```yaml
+minimize_superseded: true   # boolean, default false; any other value is refused
+```
+
+With the key off (the default) nothing changes. With it on, after Theseus posts a verdict review that carries a protocol record, it collapses the App's earlier record-bearing reviews on that pull request as outdated (GraphQL `minimizeComment`, classifier `OUTDATED`), so a long pull request shows one open verdict and one-line stubs. A reader can expand any of them, and GitHub can reverse the collapse.
+
+- Only the App's own reviews are touched, and only those that carry a protocol record and were followed by a newer record-bearing review on the current head. The newest verdict, "not reviewed" posts (they carry no record), human reviews, attester comments and every inline thread are never minimised, so open findings and disputes stay visible.
+- It is presentation only. A minimised review is not an edit: GitHub sets neither `lastEditedAt` nor `includesCreatedEdit`, the review keeps its body and protocol record, and history, finding deduplication, the receipt check and the edit detectors read it exactly as before. It never causes a "review was edited" hold.
+- It fails open. It runs last in the publish step, after the verdict, the status and the gate are posted. A refused or failed request (including a permission error for the App installation token) is logged as a workflow warning and changes nothing else: the verdict, statuses, gate result, record and exit code are identical to a run with the key off.
+- It needs no new App permission in the code path: the request uses the same App installation token that posts the review. That GitHub accepts a review `minimizeComment` under that token is not stated in GitHub's documentation (the REST permission tables do not cover GraphQL mutations), so enable the key for a consumer only after the first real run there has been checked: the call succeeds, the minimised review still shows `lastEditedAt: null` and `includesCreatedEdit: false`, and no unwanted workflow run follows. GitHub's webhook documentation lists no event for minimising (`pull_request_review` has `submitted`, `edited` and `dismissed`; `issue_comment` has `created`, `edited` and `deleted`), so the gate and request workflows' triggers should not fire. If the token lacks permission, the request fails open and the key does nothing until the consumer's owner decides whether to grant it.
+
 ## Disputing a finding
 
 Every finding on a line inside the diff gets a review thread carrying the finding marker, including a finding carried into a round from an author-supplied local record, which previously had none. A finding that cannot be anchored (its line is outside the diff) has no thread, and the review body says so. Two disputes reach the same re-judgement and escalation:
