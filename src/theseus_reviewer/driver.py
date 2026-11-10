@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import capacity, cli, commands, github, isolation, omp_pin, providers
+from . import capacity, cli, commands, github, isolation, omp_pin, providers, unavailable
 from ._vendor import yaml
 from .policy import Consumer, PolicyError, load_policy
 
@@ -389,13 +389,29 @@ def finalize(env: Environment, args: argparse.Namespace) -> int:
     )
 
 
+def _repeats_notice(env: Environment, plan: Mapping[str, Any], payload: Path) -> bool:
+    body = str(json.loads(payload.read_text(encoding="utf-8")).get("body") or "")
+    if unavailable.MARKER_OPEN not in body:
+        return False
+    try:
+        posts = unavailable.posts_of(
+            github.issue_comments(env.repo, int(plan["pr"])), github.reviews(env.repo, int(plan["pr"]))
+        )
+    except (github.GitHubError, ValueError, TypeError):
+        return False
+    return unavailable.repeats(posts, plan["head_sha"], body, plan["bot_login"])
+
+
 def _post(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
     final = env.layout.final
     pr, head = int(plan["pr"]), plan["head_sha"]
-    if (final / "comment.json").is_file():
-        sink.comment(env.repo, pr, final / "comment.json")
-    if (final / "review.json").is_file():
-        sink.review(env.repo, pr, final / "review.json")
+    for name, send in (("comment.json", sink.comment), ("review.json", sink.review)):
+        if not (final / name).is_file():
+            continue
+        if _repeats_notice(env, plan, final / name):
+            cli._summary(f"review-verdict: head {head} already has this not-reviewed notice; it is not posted again")
+            continue
+        send(env.repo, pr, final / name)
     sink.status(env.repo, head, final / "status.json")
 
 

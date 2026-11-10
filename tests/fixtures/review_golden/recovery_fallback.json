@@ -67,7 +67,7 @@
     "attempt/state.json": null,
     "comment.json": null,
     "review.json": {
-      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: retry (fallback, unavailable)\n- medium (attempt 2): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (fallback, unavailable)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n",
+      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: retry (fallback, unavailable)\n- medium (attempt 2): the reviewer's answer was not a valid review; recovery: stop (fallback, unavailable)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n",
       "comments": [],
       "commit_id": "<sha0>",
       "event": "COMMENT"
@@ -84,7 +84,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)",
+      "description": "pending: the reviewer's process is blocked; the reviewer's answer was not a valid review",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -385,7 +385,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: retry (fallback, unavailable)\n- medium (attempt 2): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (fallback, unavailable)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n",
+        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: retry (fallback, unavailable)\n- medium (attempt 2): the reviewer's answer was not a valid review; recovery: stop (fallback, unavailable)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n",
         "commit_id": "<sha0>",
         "creator": "benchbox-review[bot]"
       }
@@ -394,7 +394,7 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)",
+        "description": "pending: the reviewer's process is blocked; the reviewer's answer was not a valid review",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
@@ -436,5 +436,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #107: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery retry (fallback)\nslot 2: medium invalid, recovery stop (fallback)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: medium\nslot 2: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 3: pending\nslot 3: pending\nslot 3: pending\nreview-verdict #107 <sha0>: pending: pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: retry (fallback, unavailable)\n- medium (attempt 2): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (fallback, unavailable)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
+  "summary": "review-verdict plan for #107: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery retry (fallback)\nslot 2: medium invalid, recovery stop (fallback)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: medium\nslot 2: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 3: pending\nslot 3: pending\nslot 3: pending\nreview-verdict #107 <sha0>: pending: pending: the reviewer's process is blocked; the reviewer's answer was not a valid review\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: retry (fallback, unavailable)\n- medium (attempt 2): the reviewer's answer was not a valid review; recovery: stop (fallback, unavailable)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n\n"
 }
