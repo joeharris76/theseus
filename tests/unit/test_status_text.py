@@ -74,7 +74,9 @@ def _pending_cases() -> list[str]:
         status_text.EDITED,
         status_text.GATEWAY_DOWN,
         status_text.OVERSIZE,
-        status_text.not_reviewed_reason(f"the recorded SHIP WITH FIXES decision on head {SHA} " + "does not match " * 30),
+        status_text.not_reviewed_reason(
+            f"the recorded SHIP WITH FIXES decision on head {SHA} " + "does not match " * 30
+        ),
         status_text.not_reviewed_reason(status_text.EDITED_REASON),
         status_text.not_reviewed_reason(""),
     ]
@@ -90,7 +92,9 @@ def _gate_cases() -> list[str]:
         status_text.gate_pass_standin("x" * 39),
         status_text.gate_refusals("omp pin bump refused", ["reason " * 80, "second"]),
         status_text.gate_refusals("theseus promotion refused", [f"{SHA} " * 20]),
-        status_text.gate_error("cannot load the base review policy: GitHub returned HTTP 404 for https://api.github.com/" + "x" * 300),
+        status_text.gate_error(
+            "cannot load the base review policy: GitHub returned HTTP 404 for https://api.github.com/" + "x" * 300
+        ),
         status_text.gate_error(f"error {SHA} " * 40),
         status_text.GATE_NOT_REVIEWED,
         status_text.GATE_DO_NOT_SHIP,
@@ -177,8 +181,12 @@ def test_the_expected_strings_for_the_documented_cases() -> None:
     )
     assert status_text.refused_decision("DO NOT SHIP", 2, 3, "", limit) == "DO NOT SHIP · rework needed · strike 2 of 3"
     assert status_text.refused(3) == "refused after 3 DO NOT SHIP decisions · open a new pull request"
-    assert status_text.shipped([], status_text.carried_tail(SHA), limit) == "SHIP · carried from 0123456789ab (same patch)"
-    assert status_text.shipped([], status_text.ruling_tail("WITHDRAW", "D2"), limit) == "SHIP · owner ruling: WITHDRAW D2"
+    assert (
+        status_text.shipped([], status_text.carried_tail(SHA), limit) == "SHIP · carried from 0123456789ab (same patch)"
+    )
+    assert (
+        status_text.shipped([], status_text.ruling_tail("WITHDRAW", "D2"), limit) == "SHIP · owner ruling: WITHDRAW D2"
+    )
     assert status_text.unavailable("provider quota") == (
         "Not reviewed yet · reviewers unavailable (provider quota) · retries hourly · /review retries now"
     )
@@ -192,9 +200,12 @@ def test_the_expected_strings_for_the_documented_cases() -> None:
     assert status_text.gate_waiting(SHA) == (
         f"Waiting for review-verdict · owner bypass: 'Stand-in review: APPROVE {SHA}'"
     )
-    assert status_text.gate_error(
-        "cannot load the base review policy: GitHub returned HTTP 404 for https://api.github.com/repos/o/r"
-    ) == "Gate error · cannot load the base review policy (HTTP 404) · see the run log"
+    assert (
+        status_text.gate_error(
+            "cannot load the base review policy: GitHub returned HTTP 404 for https://api.github.com/repos/o/r"
+        )
+        == "Gate error · cannot load the base review policy (HTTP 404) · see the run log"
+    )
 
 
 def test_a_429_payload_never_reaches_a_status_description() -> None:
@@ -206,7 +217,12 @@ def test_a_429_payload_never_reaches_a_status_description() -> None:
     assert report._pending_description("all-absent", [_attempt(1, QUOTA, QUOTA_PAYLOAD)], {}, []) == (
         status_text.unavailable("provider quota")
     )
-    assert report._detail(selection.Step(selection.PENDING, None, (f"large: absent (quota: {QUOTA_PAYLOAD})",)), "all-absent", "") != ""
+    assert (
+        report._detail(
+            selection.Step(selection.PENDING, None, (f"large: absent (quota: {QUOTA_PAYLOAD})",)), "all-absent", ""
+        )
+        != ""
+    )
 
 
 def test_the_standin_grammar_in_the_waiting_status_round_trips_through_its_parser() -> None:
@@ -247,8 +263,16 @@ def _readers(description: str, state: str) -> tuple[Any, ...]:
 CLASSIFICATION_PAIRS = [
     ("large: SHIP [run 42512404919]", "SHIP · no open findings [run 42512404919]", "success"),
     ("large: SHIP (reposted) [run 42512404919]", "SHIP · no open findings (reposted) [run 42512404919]", "success"),
-    ("large: SHIP WITH FIXES, 7 defect(s) to fix", "SHIP WITH FIXES · 7 to fix (5 High, 1 Medium, 1 Low) · see review threads", "failure"),
-    ("large: SHIP WITH FIXES, 7 defect(s) to fix", "SHIP WITH FIXES · 7 to fix (5 High, 1 Medium, 1 Low) · see review threads", "success"),
+    (
+        "large: SHIP WITH FIXES, 7 defect(s) to fix",
+        "SHIP WITH FIXES · 7 to fix (5 High, 1 Medium, 1 Low) · see review threads",
+        "failure",
+    ),
+    (
+        "large: SHIP WITH FIXES, 7 defect(s) to fix",
+        "SHIP WITH FIXES · 7 to fix (5 High, 1 Medium, 1 Low) · see review threads",
+        "success",
+    ),
     (
         "large: SHIP WITH FIXES, 2 defect(s) to fix; escalated D1,D2",
         "SHIP WITH FIXES · 2 to fix · escalated D1,D2 · owner ruling needed",
@@ -265,9 +289,21 @@ CLASSIFICATION_PAIRS = [
         "refused after 3 DO NOT SHIP decisions · open a new pull request",
         "failure",
     ),
-    ("carried from 8f192e3e1e59: SHIP [run 42512404919]", "SHIP · carried from 8f192e3e1e59 (same patch) [run 42512404919]", "success"),
-    ("carried from 8f192e3e1e59: SHIP WITH FIXES", "SHIP WITH FIXES · 2 to fix · carried from 8f192e3e1e59 (same patch)", "failure"),
-    ("owner adjudication: WITHDRAW D2; SHIP [run 42512404919]", "SHIP · owner ruling: WITHDRAW D2 [run 42512404919]", "success"),
+    (
+        "carried from 8f192e3e1e59: SHIP [run 42512404919]",
+        "SHIP · carried from 8f192e3e1e59 (same patch) [run 42512404919]",
+        "success",
+    ),
+    (
+        "carried from 8f192e3e1e59: SHIP WITH FIXES",
+        "SHIP WITH FIXES · 2 to fix · carried from 8f192e3e1e59 (same patch)",
+        "failure",
+    ),
+    (
+        "owner adjudication: WITHDRAW D2; SHIP [run 42512404919]",
+        "SHIP · owner ruling: WITHDRAW D2 [run 42512404919]",
+        "success",
+    ),
     (
         "owner adjudication: MAINTAIN D2; SHIP WITH FIXES, escalated D3",
         "SHIP WITH FIXES · 1 to fix · escalated D3 · owner ruling: MAINTAIN D2",
@@ -277,13 +313,21 @@ CLASSIFICATION_PAIRS = [
     ("only exempt paths changed [run 42512404919]", "only exempt paths changed [run 42512404919]", "success"),
     ("a review was edited", "a review was edited · verdict withheld · push a new head", "pending"),
     ("fork: owner review", "Not reviewed · fork PR · needs an owner stand-in", "pending"),
-    ("result withheld: artifacts failed validation", "Not reviewed · run artifacts failed validation · push a new head", "pending"),
+    (
+        "result withheld: artifacts failed validation",
+        "Not reviewed · run artifacts failed validation · push a new head",
+        "pending",
+    ),
     (
         f"pending: large: absent (quota: {QUOTA_PAYLOAD})"[:140],
         "Not reviewed yet · reviewers unavailable (provider quota) · retries hourly · /review retries now",
         "pending",
     ),
-    ("pending: no reviewer available (gateway unreachable)", "Not reviewed yet · model gateway unreachable · retries hourly · /review retries now", "pending"),
+    (
+        "pending: no reviewer available (gateway unreachable)",
+        "Not reviewed yet · model gateway unreachable · retries hourly · /review retries now",
+        "pending",
+    ),
     (
         "pending: too large for the review; split the pull request or ask the owner for a stand-in",
         "Not reviewed · too large to review · split the PR or ask an owner for a stand-in",
@@ -346,7 +390,9 @@ def test_open_findings_block_and_a_standin_cannot_waive_them_in_either_wording(d
         "updated_at": None,
     }
     status, message = _decide(_statuses(description), comments=[standin])
-    assert status == review_check.WAITING and message == status_text.gate_open_findings(protocol.COMMENT_DISPUTE_GRAMMAR)
+    assert status == review_check.WAITING and message == status_text.gate_open_findings(
+        protocol.COMMENT_DISPUTE_GRAMMAR
+    )
 
 
 @pytest.mark.parametrize(
@@ -420,4 +466,3 @@ def test_the_token_literals_live_only_in_the_shared_module() -> None:
         text = path.read_text(encoding="utf-8")
         for literal in literals:
             assert literal not in text, f"{path.name} repeats {literal!r}"
-
