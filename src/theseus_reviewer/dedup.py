@@ -28,11 +28,11 @@ def marker(finding: Finding) -> str:
 
 
 def parse_title(body: str) -> tuple[str, str] | None:
-    for pattern in _TITLES:
-        match = pattern.search(body)
-        if match is not None:
-            return match.group("severity"), match.group("title").strip()
-    return None
+    matches = [match for pattern in _TITLES if (match := pattern.search(body)) is not None]
+    if not matches:
+        return None
+    first = min(matches, key=lambda match: match.start())
+    return first.group("severity"), first.group("title").strip()
 
 
 def first_line_title(body: str) -> str:

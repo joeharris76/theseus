@@ -122,3 +122,19 @@ def test_an_unrecognised_first_line_keeps_the_fallback(first: str) -> None:
     assert parse_title(f"{first}\n\ndetail") is None
     assert thread_fingerprint(PATH, f"{first}\n\ndetail") is None
     assert first_line_title(f"{first}\n\ndetail") == first
+
+
+def test_the_earliest_title_wins_when_a_decorated_title_precedes_a_plain_looking_line() -> None:
+    from theseus_reviewer.dedup import parse_title
+
+    body = "🟠 **High** · D2 · Drops a row\n\n**Low**: unrelated detail"
+    assert parse_title(body) == ("High", "Drops a row")
+    assert thread_fingerprint(PATH, body) == fingerprint(PATH, "Drops a row")
+
+
+def test_the_earliest_title_wins_when_a_plain_title_precedes_decorated_looking_text() -> None:
+    from theseus_reviewer.dedup import parse_title
+
+    body = "**Medium**: Drops a row\n\n🔵 **Low** · D9 · unrelated detail"
+    assert parse_title(body) == ("Medium", "Drops a row")
+    assert thread_fingerprint(PATH, body) == fingerprint(PATH, "Drops a row")

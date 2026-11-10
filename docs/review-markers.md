@@ -72,7 +72,7 @@ When a thread has no `review-finding` marker (threads from older releases), Thes
 <mark> **<Severity>** · D<n> · <title>
 ```
 
-`<Severity>` is `Critical`, `High`, `Medium` or `Low`; `<mark>` is one of 🔴 🟠 🟡 🔵 ⚪; `D<n>` is a defect id. Both forms yield the same severity and title, and the title alone (without decoration) is what Theseus hashes and shows to the reviewer in a dispute. A first line in neither form is used as written.
+`<Severity>` is `Critical`, `High`, `Medium` or `Low`; `<mark>` is one of 🔴 🟠 🟡 🔵 ⚪; `D<n>` is a defect id. Both forms yield the same severity and title, and the title alone (without decoration) is what Theseus hashes and shows to the reviewer in a dispute. A title in neither form gives no fingerprint (the thread is not recognised as a posted finding), and the dispute brief shows the thread's first line as written. When both forms appear in one body, the earliest one wins.
 
 ## `review-local-record: v1`
 
