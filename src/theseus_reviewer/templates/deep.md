@@ -58,8 +58,9 @@ suggestions, optional improvements and style. Rate each defect Critical, High, M
 the list and never decides the outcome. Every defect names a repository-relative file and a line number that
 exist in the head commit. When the defect spans several lines, set end_line to the last line of the span;
 otherwise set end_line to null.
-When one defect class recurs at several places, list it once: name the class in the title and every location in
-the detail (path:line). It counts as one defect. Never list the same defect again under a new title.
+When one defect class recurs at several places, report each location as a separate defect with its own path and
+line. Titles may share the class name and the detail may cross-reference the other locations. Never list the same
+location again under a new title.
 Set origin to pre-existing only when the defect itself already existed at the base commit; a defect this change
 causes, including by deleting or moving code, is introduced. When in doubt, or when the defect spans several
 locations, set origin to introduced. Origin is a claim, not verified base-behavior evidence; all findings still block.

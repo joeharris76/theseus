@@ -196,7 +196,7 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 
 ## Migrating from 0.1.x
 
-0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus now writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
+0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus writes only the new names. It still reads the old persisted record forms (the `oracle-protocol`, `oracle-defect`, `oracle-finding` and `oracle-local-record` markers, `Oracle adjudication:` and `Oracle backoff reset:`) so a pull request last reviewed before the rename keeps its open defects and strikes; an old status context, artifact, command or stand-in form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
 
 | 0.1.x | After compatibility removal |
 |---|---|
@@ -217,10 +217,10 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 | local cache `~/.cache/theseus/local-oracle`, gateway directory `~/.omp/oracle-gateway` | `~/.cache/theseus/local-review`, `~/.omp/review-gateway` |
 | gateway clients `oracle-ci`, `oracle-<name>` | `review-ci`, `review-<name>` |
 | artifacts `oracle-verdict-state-*`, `oracle-verdict-attempt-*`, `oracle-attempts`, `oracle-verdict-capture` | `review-verdict-state-*`, `review-verdict-attempt-*`, `review-attempts`, `review-verdict-capture` (state under the old names is not read) |
-| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (the old forms are not read) |
+| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (the four markers are still read, never written, so records and findings from earlier reviews keep counting; the old heading is not read) |
 | `Stand-in oracle review: APPROVE <sha>` | `Stand-in review: APPROVE <sha>` (the old form is not read) |
-| `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (the old form is not read) |
-| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (the old form is not read) |
+| `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (the old form is still read, never written) |
+| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (the old form is still read, never written) |
 | owner command `/oracle-review` | `/review` (the old command does nothing) |
 
 The caller's secrets block must map the new names onto the secrets it already holds, by name:

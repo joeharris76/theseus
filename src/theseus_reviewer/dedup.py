@@ -5,11 +5,14 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from . import legacy
 from .policy import SEVERITIES
 from .verdict import Finding
 
 MARKER_OPEN = "<!-- review-finding:"
-_MARKER = re.compile(rf"{re.escape(MARKER_OPEN)} (?P<print>[0-9a-f]{{16}}) -->\s*\Z")
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.FINDING_MARKER_OPEN)}) (?P<print>[0-9a-f]{{16}}) -->\s*\Z"
+)
 _TITLE = re.compile(r"^\*\*(?P<severity>Critical|High|Medium|Low)\*\*: (?P<title>.+)$", re.MULTILINE)
 _NOT_WORD = re.compile(r"[^a-z0-9]+")
 

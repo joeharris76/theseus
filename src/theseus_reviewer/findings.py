@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import adjudication, dedup, protocol, redaction_check, report
+from . import adjudication, dedup, legacy, protocol, redaction_check, report
 from .policy import SEVERITIES
 from .verdict import MAX_LINE, PriorDefect, sanitize
 
@@ -40,7 +40,7 @@ ADJUDICATION_GRAMMAR = (
     "WITHDRAW|MAINTAIN D<n> - <the owner's instruction naming the head, the finding and the decision>"
 )
 _MARKER = re.compile(
-    rf"{re.escape(MARKER_OPEN)} v{RECORD_VERSION} "
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.LOCAL_RECORD_MARKER_OPEN)}) v{RECORD_VERSION} "
     rf"(?P<data>[A-Za-z0-9_-]+) -->"
 )
 _ID = re.compile(r"c([0-9]+)-(D[1-9][0-9]{0,3})")
@@ -363,7 +363,7 @@ def export(record: Mapping[str, Any]) -> str | None:
 
 
 def decode_body(body: str) -> dict[str, Any] | None:
-    if (body or "").count(MARKER_OPEN) != 1:
+    if (body or "").count(MARKER_OPEN) + (body or "").count(legacy.LOCAL_RECORD_MARKER_OPEN) != 1:
         return None
     match = _MARKER.search(body)
     if match is None:
