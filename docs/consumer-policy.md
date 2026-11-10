@@ -196,4 +196,4 @@ With `brief.include_intent: true` the brief opens its fenced change data with th
 
 ## Reading review output
 
-Tooling that reads Theseus reviews or threads must use the markers, not the prose. The grammar and the reading rules are in [review-markers.md](review-markers.md).
+Tooling that reads Theseus reviews or threads must use the markers, not the prose; the one verdict line still read from prose is the `### review-verdict:` heading until the v2 marker is written. The grammar and the reading rules are in [review-markers.md](review-markers.md).

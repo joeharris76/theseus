@@ -186,7 +186,7 @@ The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-reque
 
 ## Reading review output
 
-Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-verdict`, `review-defect`, `review-finding`). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
+Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-defect`, `review-finding`, and a `review-verdict` marker that readers accept but no release writes yet). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
 
 ## Local pre-submission review
 

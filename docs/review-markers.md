@@ -1,6 +1,6 @@
 # Review markers
 
-Theseus posts reviews and review threads whose visible text is presentation and whose HTML-comment markers are the machine interface. A consumer that needs to know a verdict, a finding's identity or a protocol record reads a marker. It does not parse prose. The prose (headings, wording, ordering, emoji, tables, collapsed sections) may change in any release without notice; the grammars below change only by a new version.
+Theseus posts reviews and review threads whose visible text is presentation and whose HTML-comment markers are the machine interface. A consumer that needs to know a verdict, a finding's identity or a protocol record reads a marker. It does not parse prose. One exception applies today: the `review-verdict: v2` marker is accepted by readers but no release writes it yet, so the verdict of a posted review is read from its `review-protocol` record (`decision`, `head_sha`) and, for the gate, the `### review-verdict: <state> for `<40hex>`` heading, which is still the only verdict line written. A release that starts writing the v2 marker will say so here; the heading's wording is stable until then. The prose (headings, wording, ordering, emoji, tables, collapsed sections) may change in any release without notice; the grammars below change only by a new version.
 
 Every marker is an HTML comment, so GitHub does not render it. Model text cannot forge one: the reviewer sanitizes every model-supplied string and rewrites `<!--` and `-->` to `&lt;!--` and `--&gt;` before it reaches a body, so a raw marker in a posted body was written by Theseus. Trust a marker only on a body authored by the review App, unedited (`last_edited_at` null and `includes_created_edit` false). Theseus itself never trusts an edited bot review.
 
@@ -9,7 +9,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 | Marker | Lives on | Meaning |
 |---|---|---|
 | `review-protocol: v1` | review body | the decision record |
-| `review-verdict: v2` | review body | the verdict state for one head |
+| `review-verdict: v2` | review body | the verdict state for one head (read by the gate; not yet written) |
 | `review-unavailable: v1` | review body | reserved: the head was not reviewed because no reviewer was available |
 | `review-defect` | review thread comment | the defect id the thread belongs to |
 | `review-finding` | review thread comment | the finding fingerprint used for deduplication |
@@ -21,7 +21,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 <!-- review-protocol: v1 <data> -->
 ```
 
-`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `NONE`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The format is unchanged.
+`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `REFUSED`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The format is unchanged.
 
 ## `review-verdict: v2`
 
