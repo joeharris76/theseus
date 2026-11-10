@@ -2399,3 +2399,20 @@ def test_an_owner_reset_does_not_re_review_an_unpublished_head_that_already_has_
     fake.comments = _reset_comments()
     assert _surfaced_sweep(monkeypatch, tmp_path, fake) == 0
     assert fake.dispatched == [] and fake.posted == []
+
+
+@pytest.mark.parametrize(
+    "first",
+    ["**High**: Drops a row", "🟠 **High** · D1 · Drops a row", "Plain prose heading"],
+    ids=["current", "decorated", "unrecognised"],
+)
+def test_the_dispute_title_is_the_bare_title_in_the_plan_and_the_brief(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first: str
+) -> None:
+    thread = _disputed_thread()
+    thread["body"] = thread["body"].replace("**High**: Drops a row", first)
+    record = _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", open_defects=[DEFECT], next_id=2)
+    _, _, plan = _plan(monkeypatch, tmp_path, _thread_fake(record, [thread]))
+    expected = first if first == "Plain prose heading" else "Drops a row"
+    assert plan["disputes"][0]["title"] == expected
+    assert f"- D1 {CAPTURE}: {expected}\n" in dispute_listing(plan["disputes"])

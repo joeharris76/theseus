@@ -186,6 +186,10 @@ Candidate code never meets a credential: the pull request head is checked out wi
 
 The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-request]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `review-request.yml` therefore must keep `name: review-request`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` for every open pull request whose head matches and whose base is gated, on that pull request's own base branch. The bridge checks out only the pinned `bases.py` matcher at `theseus_ref`, runs no candidate code and holds no secrets.
 
+## Reading review output
+
+Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-defect`, `review-finding`, and a `review-verdict` marker that readers accept but no release writes yet). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
+
 ## Local pre-submission review
 
 Hosted workflows do not change the local flow: `theseus local-review --policy PATH` (see [consumer-policy.md](consumer-policy.md)) still runs from the author's trusted checkout and keeps its own cache and state.
