@@ -2,9 +2,11 @@
 
 ## Merge policy
 
-Until a separately authenticated Theseus review gate is live, only merges whose full diff has been reviewed by the repository owner (`@joeharris76`) are allowed. A failing or absent gate is never permission to self-approve. Required status checks are necessary, not sufficient.
+Every pull request needs a current-head review-verdict `SHIP` from `theseus-review[bot]` and green required checks before it merges. A failing, absent or stale gate is never permission to self-approve.
 
-Pull requests that change CI, workflows, release tooling, lock or installer logic, or anything that reads credentials need explicit owner review of the whole diff, including generated and vendored files.
+Changes to gate, receipt, dedup or posting code, workflows, policy or the lock additionally need an independent review: a fresh-context agent session that did not author the change, of the exact final head SHA, with the reviewer, head and verdict recorded.
+
+The repository owner (`@joeharris76`) alone performs stand-ins, adjudications, owner instructions and backoff resets.
 
 ## Fork and candidate boundaries
 
