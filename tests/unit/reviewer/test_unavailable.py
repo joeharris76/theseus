@@ -123,8 +123,9 @@ def test_an_unsafe_provider_name_is_left_out_of_the_reason(policy: Policy) -> No
 
 
 def test_a_gateway_that_cannot_be_reached_is_one_reason_in_every_place_it_appears(policy: Policy) -> None:
-    reason = f"small: {providers.UNAVAILABLE_PREFIX} {GATEWAY_PAYLOAD}"
-    plan = {**_comment_plan(policy), "bot_login": BOT, "served_error": GATEWAY_PAYLOAD}
+    served = f"gateway unreachable: {GATEWAY_PAYLOAD}"
+    reason = f"small: {providers.UNAVAILABLE_PREFIX} {served}"
+    plan = {**_comment_plan(policy), "bot_login": BOT, "served_error": served}
     step = Step(selection.PENDING, None, (reason,), unavailable=True)
     final = report.finalize(plan, step, [], [], {}, {})
     assert final.pending_cause == retry.UNAVAILABLE
