@@ -16,9 +16,10 @@ from typing import Any
 
 from . import adjudication, promotion
 from .coverage import Returned
-from .edits import EDITED_REASON, EditStateError, is_edited
+from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .policy import SEVERITIES
+from .status_text import DO_NOT_SHIP_LABEL, EDITED_REASON, OPEN_FINDINGS_LABEL, REFUSED_LABEL, SHIP_LABEL
 from .verdict import (
     COMPLETE,
     DEMOTED_DISPOSITION,
@@ -38,8 +39,13 @@ from .verdict import (
 )
 
 DO_NOT_SHIP_SUMMARY = 1500
-REFUSED = "REFUSED"
-LABELS = {SHIP: "SHIP", SHIP_WITH_FIXES: "SHIP WITH FIXES", DO_NOT_SHIP: "DO NOT SHIP", REFUSED: "REFUSED"}
+REFUSED = REFUSED_LABEL
+LABELS = {
+    SHIP: SHIP_LABEL,
+    SHIP_WITH_FIXES: OPEN_FINDINGS_LABEL,
+    DO_NOT_SHIP: DO_NOT_SHIP_LABEL,
+    REFUSED: REFUSED_LABEL,
+}
 RECORD_DECISIONS = (SHIP, SHIP_WITH_FIXES, DO_NOT_SHIP, REFUSED)
 
 FIRST = "first"
