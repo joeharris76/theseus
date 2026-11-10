@@ -72,3 +72,53 @@ def test_a_more_severe_repeat_is_posted_again() -> None:
 def test_open_fingerprints_keep_the_most_severe_thread() -> None:
     threads = [_open("benchbox-review", "**Low**: Drops a row"), _open("benchbox-review", "**High**: Drops a row")]
     assert open_fingerprints(threads, "benchbox-review") == {fingerprint(PATH, "Drops a row"): "High"}
+
+
+DECORATED = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
+
+
+@pytest.mark.parametrize("severity", ["Critical", "High", "Medium", "Low"])
+def test_both_thread_title_forms_read_to_the_same_severity_and_title(severity: str) -> None:
+    from theseus_reviewer.dedup import first_line_title, parse_title
+
+    plain = f"**{severity}**: Drops a row\n\ndetail"
+    decorated = f"{DECORATED[severity]} **{severity}** · D3 · Drops a row\n\ndetail"
+    assert parse_title(plain) == parse_title(decorated) == (severity, "Drops a row")
+    assert first_line_title(plain) == first_line_title(decorated) == "Drops a row"
+    assert thread_fingerprint(PATH, plain) == thread_fingerprint(PATH, decorated) == fingerprint(PATH, "Drops a row")
+
+
+def test_a_decorated_fixture_has_the_fingerprint_the_writer_marks() -> None:
+    finding = _finding("Drops a row")
+    body = f"⚪ **Low** · D12 · {finding.title}\n\ndetail"
+    assert thread_fingerprint(PATH, body) == marker(finding).split()[2]
+
+
+def test_open_fingerprints_read_the_decorated_title_severity() -> None:
+    thread = {
+        "resolved": False,
+        "author_type": "Bot",
+        "author": "bot[bot]",
+        "path": PATH,
+        "body": "🟡 **Medium** · D1 · Drops a row\n\ndetail",
+    }
+    assert open_fingerprints([thread], "bot") == {fingerprint(PATH, "Drops a row"): "Medium"}
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "Please rename this.",
+        "🟣 **High** · D1 · Drops a row",
+        "🟠 **High**: Drops a row",
+        "**High** · D1 · Drops a row",
+        "🟠 **High** · Drops a row",
+        "🟠 **Severe** · D1 · Drops a row",
+    ],
+)
+def test_an_unrecognised_first_line_keeps_the_fallback(first: str) -> None:
+    from theseus_reviewer.dedup import first_line_title, parse_title
+
+    assert parse_title(f"{first}\n\ndetail") is None
+    assert thread_fingerprint(PATH, f"{first}\n\ndetail") is None
+    assert first_line_title(f"{first}\n\ndetail") == first

@@ -21,6 +21,8 @@ _REVIEW_VERDICT = re.compile(
     rf"### {re.escape(REVIEW_CONTEXT)}: "
     rf"(?P<state>[a-z]+) for `(?P<sha>[0-9a-f]{{40}})`"
 )
+_VERDICT_MARKER = re.compile(rf"<!-- {re.escape(REVIEW_CONTEXT)}: v2 (?P<state>[a-z]+) (?P<sha>[0-9a-f]{{40}}) -->")
+_VERDICT_MARKER_OPEN = re.compile(rf"<\s*!\s*-\s*-\s*{re.escape(REVIEW_CONTEXT)}")
 _RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
 REFUSED_DESCRIPTION_PREFIX = "refused after"
@@ -86,9 +88,17 @@ DECISIVE_VERDICTS = frozenset({"success", "failure"})
 Moment = TypeVar("Moment", str, datetime)
 
 
-def verdict_state(body: str | None, sha: str, pattern: re.Pattern[str]) -> str | None:
-    match = pattern.match(body or "")
-    return match.group("state") if match and match.group("sha") == sha else None
+def verdict_state(body: str | None, sha: str) -> str | None:
+    text = body or ""
+    markers = list(_VERDICT_MARKER.finditer(text))
+    if len(markers) > 1 or len(_VERDICT_MARKER_OPEN.findall(text)) != len(markers):
+        return None
+    heading = _REVIEW_VERDICT.match(text)
+    claims = {(match.group("state"), match.group("sha")) for match in (heading, *markers) if match}
+    if len(claims) != 1:
+        return None
+    state, found = next(iter(claims))
+    return state if found == sha else None
 
 
 def standin_not_before(base_change: Moment | None, verdicts: Iterable[tuple[Moment, str | None]]) -> Moment | None:
@@ -142,7 +152,7 @@ def _receipt_agrees(receipt: dict[str, Any], head_sha: str, status_uuid: str | N
         or "includes_created_edit" not in receipt
         or receipt.get("last_edited_at") is not None
         or receipt.get("includes_created_edit")
-        or verdict_state(receipt.get("body"), head_sha, _REVIEW_VERDICT) != "success"
+        or verdict_state(receipt.get("body"), head_sha) != "success"
     ):
         return False
     receipt_uuid = _receipt_run_uuid(receipt)

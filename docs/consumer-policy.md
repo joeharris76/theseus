@@ -193,3 +193,7 @@ The findings schema has an optional `origin` (`introduced`, the default, or `pre
 ## Author statement
 
 With `brief.include_intent: true` the brief opens its fenced change data with the pull request title, the first 2000 characters of the description (review and local-record markers and HTML comments removed) and up to three same-repository issues the description closes, fixes, resolves or refs (title and 1000 characters of text each). A local review uses the branch's commit messages instead. All of it is untrusted data: sanitized (links, mentions and credentials removed), inside the existing fences, and never part of a template slot; the template only says to judge whether the change does what the statement says.
+
+## Reading review output
+
+Tooling that reads Theseus reviews or threads must use the markers, not the prose. The grammar and the reading rules are in [review-markers.md](review-markers.md).

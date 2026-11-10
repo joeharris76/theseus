@@ -178,7 +178,7 @@ def test_a_standin_attestation_passes_the_gate_only_in_the_review_spelling() -> 
 def test_the_verdict_heading_is_read_only_in_the_review_form() -> None:
     for context, expected in (("review-verdict", "success"), ("oracle-verdict", None)):
         body = f"### {context}: success for `{HEAD}`\n\nDetails."
-        assert review_check.verdict_state(body, HEAD, review_check._REVIEW_VERDICT) == expected
+        assert review_check.verdict_state(body, HEAD) == expected
 
 
 def test_app_statuses_count_only_under_their_own_context() -> None:
