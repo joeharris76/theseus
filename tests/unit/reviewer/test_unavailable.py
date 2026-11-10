@@ -143,7 +143,6 @@ def test_a_gateway_that_cannot_be_reached_is_one_reason_in_every_place_it_appear
         (unavailable.INCOMPLETE, unavailable.SWEEP_RETRIES),
         (unavailable.TOO_LARGE, unavailable.SPLIT),
         (unavailable.ARTIFACTS, unavailable.NEW_HEAD),
-        (unavailable.EDITED, unavailable.NEW_HEAD),
         (unavailable.BLOCKED, unavailable.MANUAL_RETRY),
     ],
 )

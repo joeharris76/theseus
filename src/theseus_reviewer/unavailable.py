@@ -50,7 +50,6 @@ CAPACITY_UNKNOWN = Cause("capacity-unknown", "the reviewer's reading capacity co
 BLOCKED = Cause("blocked", "the reviewer's process is blocked", MANUAL_RETRY)
 NO_REPORT = Cause("no-report", "a selected reviewer did not report", NEW_HEAD)
 ARTIFACTS = Cause("artifacts-invalid", "the run's artifacts failed validation", NEW_HEAD)
-EDITED = Cause("edited-review", "a review on this pull request was edited", NEW_HEAD)
 DISABLED = Cause("reviewer-disabled", "the reviewer is disabled by configuration", SWEEP_RETRIES)
 ATTEMPT_LIMIT = Cause("attempt-limit", "no attempt slot was left in this run", SWEEP_RETRIES)
 GENERIC = Cause("no-reviewer", "no reviewer could run", SWEEP_RETRIES)
@@ -91,7 +90,6 @@ CAUSES = (
     BLOCKED,
     NO_REPORT,
     ARTIFACTS,
-    EDITED,
     DISABLED,
     ATTEMPT_LIMIT,
     GENERIC,
