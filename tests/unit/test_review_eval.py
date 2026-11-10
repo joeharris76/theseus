@@ -345,6 +345,18 @@ def test_a_recorded_baseline_that_cannot_authenticate_keeps_the_rule_active(repo
     assert not verdict.ok and "none authenticates as a current baseline" in " ".join(verdict.lines)
 
 
+def test_an_unusable_recorded_result_keeps_the_rule_active(repository: Path) -> None:
+    stray = repository / TOOL.RESULTS_DIR / "stray.json"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("not json\n", encoding="utf-8")
+    base = _commit(repository, "stray")
+    _change(repository, TEMPLATE, "changed\n")
+
+    verdict = _check(repository, base)
+
+    assert not verdict.ok and "none authenticates as a current baseline" in " ".join(verdict.lines)
+
+
 @pytest.mark.parametrize("relative", [TEMPLATE, ".github/review.yml", ".github/review-guidance.md"])
 def test_a_configuration_only_change_fails_closed_once_a_baseline_exists(repository: Path, relative: str) -> None:
     base = _with_baseline(repository)

@@ -684,11 +684,15 @@ def check_change(root: Path, base: str, head: str, today: str | None = None) -> 
     listing = [f"reviewer configuration or recorded results changed: {', '.join(changed)}"]
     day = today or datetime.now(UTC).strftime("%Y-%m-%d")
     base_results = read_results(base_tree)
-    recorded = {path: data for path, data in base_results.items() if not usable_result(data, path, day)}
     baseline = latest_baseline(
-        {path: data for path, data in recorded.items() if authenticated_result(root, base_tree, data)},
+        {
+            path: data
+            for path, data in base_results.items()
+            if not usable_result(data, path, day) and authenticated_result(root, base_tree, data)
+        },
         day,
     )
+    recorded = base_results
     results_changed = any(path.startswith(f"{RESULTS_DIR}/") for path in all_changed)
     if baseline is None and recorded and not results_changed:
         return Verdict(
