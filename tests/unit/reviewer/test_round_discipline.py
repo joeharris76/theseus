@@ -6,10 +6,9 @@ from typing import Any
 import pytest
 
 from conftest import ALPHA_POLICY
-from theseus_reviewer import cli, coverage, protocol, selection
+from theseus_reviewer import cli, coverage, protocol
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import Policy, PolicyError, parse_policy
-from theseus_reviewer.recovery import RETRY, Recovery
 
 from .test_attempts import CHECKER, HEAD, _classification, _plan, _v
 from .test_evidence_retry import _file_list_plan
@@ -276,70 +275,41 @@ def _forced_plan(policy: Policy, **over: Any) -> dict[str, Any]:
     return {**plan, **over}
 
 
-def _fixed_verdict() -> Any:
-    from theseus_reviewer.verdict import validate
-
-    return validate(
-        {**_v("s"), "prior_defects": [{"id": "D1", "status": "fixed", "evidence": "pkg/kept.py:12 keeps the row"}]}
-    )
-
-
-def test_a_forced_fixed_is_invalid_while_another_attempt_remains(policy: Policy) -> None:
-    plan = _forced_plan(policy)
-    assert protocol.demote_forced_fixed(_fixed_verdict(), plan) == _fixed_verdict()
-    assert protocol.contradiction(_fixed_verdict(), plan) is not None
-
-
-def test_a_forced_fixed_on_the_last_attempt_is_demoted_to_maintained_so_the_round_publishes(
-    policy: Policy, tmp_path: Path
+@pytest.mark.parametrize("last_attempt", [False, True])
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES", "DO_NOT_SHIP"])
+def test_a_forced_fixed_stays_invalid_instead_of_counting_toward_escalation(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, last_attempt: bool, decision: str
 ) -> None:
-    plan = _forced_plan(policy, last_attempt=True)
-    demoted = protocol.demote_forced_fixed(_fixed_verdict(), plan)
-    entry = demoted.prior_defects[0]
-    assert (entry.status, entry.demoted) == ("not_fixed", "disposition")
-    assert "recorded as maintained" in entry.evidence
-    assert protocol.contradiction(demoted, plan) is None
-    judgement = protocol.judge_planned(demoted, plan)
-    assert judgement.decision == protocol.SHIP_WITH_FIXES and [item["id"] for item in judgement.carried] == ["D1"]
-    final = _final(policy, tmp_path, plan, demoted.to_json())
-    record = protocol.decode_marker(final.review["body"])
-    assert record["disputed"] == ["D1"] and [item["id"] for item in record["open_defects"]] == ["D1"]
-    assert "D1 (maintained)" in final.review["body"]
+    from datetime import UTC, datetime
 
+    from theseus_reviewer import runner
+    from theseus_reviewer.commands import Invocation
 
-def test_the_demoted_round_counts_toward_escalation(policy: Policy, tmp_path: Path) -> None:
-    plan = _forced_plan(policy, last_attempt=True)
+    plan = _forced_plan(policy, last_attempt=last_attempt)
     plan["protocol"]["maintained"] = {"D1": 1}
-    demoted = protocol.demote_forced_fixed(_fixed_verdict(), plan)
-    final = _final(policy, tmp_path, plan, demoted.to_json())
-    assert protocol.decode_marker(final.review["body"])["escalated"] == ["D1"]
-
-
-def test_an_unforced_fixed_is_never_demoted(policy: Policy) -> None:
-    plan = _forced_plan(policy, last_attempt=True)
-    plan["protocol"]["forced"] = False
-    assert protocol.demote_forced_fixed(_fixed_verdict(), plan) == _fixed_verdict()
-
-
-def _attempt_marker(policy: Policy, tmp_path: Path, slot: int) -> bool:
-    plan = _forced_plan(policy, chain=[policy.reviewers["small"].to_json()])
-    attempts = []
-    if slot == 2:
-        attempts = [selection.Attempt(1, "small", selection.ABSENT, "incomplete")]
-    return cli._with_last_attempt(plan, _classification("small"), attempts, policy.reviewers["small"], slot)[
-        "last_attempt"
-    ]
-
-
-def test_the_last_attempt_is_derived_from_the_selection_not_from_a_counter(policy: Policy, tmp_path: Path) -> None:
-    assert _attempt_marker(policy, tmp_path, 1) is False
-    assert _attempt_marker(policy, tmp_path, 2) is True
-
-
-def test_an_unforced_plan_gets_no_last_attempt_marker(policy: Policy) -> None:
-    plan = {**_plan(policy, ("small",)), "protocol": {"forced": False}}
-    assert cli._with_last_attempt(plan, _classification("small"), [], policy.reviewers["small"], 1) is plan
-    assert Recovery(RETRY, "fallback").choice == RETRY
+    reviewer = policy.reviewers["small"]
+    payload = {
+        **_v("s"),
+        "decision": decision,
+        "prior_defects": [{"id": "D1", "status": "fixed", "evidence": "pkg/kept.py:12 keeps the row"}],
+    }
+    monkeypatch.setattr(runner, "_git", lambda *a: "")
+    monkeypatch.setattr(runner, "parse_output", lambda *a: payload)
+    monkeypatch.setattr(runner.evidence, "mark_citations", lambda verdict, *a: verdict)
+    monkeypatch.setattr(runner.evidence, "check", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "omp_stream_without_answer", lambda *a: False)
+    outcome = runner._judge(
+        reviewer,
+        Invocation((), tmp_path, None),
+        runner.RunResult(0, "a complete answer", "", False),
+        workspace=tmp_path,
+        staged_before=None,
+        now=datetime.now(UTC),
+        plan=plan,
+    )
+    assert outcome.verdict is None
+    assert outcome.missing is not None and outcome.missing.kind == "invalid"
+    assert "is marked fixed on a dispute re-review" in outcome.missing.detail
 
 
 def _policy_text() -> dict[str, Any]:
@@ -370,16 +340,3 @@ def test_the_new_protocol_keys_default_to_today_and_are_strictly_validated() -> 
         bad["brief"] = brief
         with pytest.raises(PolicyError, match="brief"):
             parse_policy(bad)
-
-
-def test_after_a_forced_fixed_invalid_every_later_attempt_demotes_even_if_attempts_remain(policy: Policy) -> None:
-    plan = _forced_plan(policy, chain=[policy.reviewers["small"].to_json(), policy.reviewers["medium"].to_json()])
-    detail = f"disputed finding D1 {protocol.FORCED_FIXED_MARK}, which cannot fix anything"
-    stalled = [selection.Attempt(1, "small", selection.ABSENT, "invalid", detail)]
-    marked = cli._with_last_attempt(plan, _classification("small"), stalled, policy.reviewers["small"], 2)
-    assert marked["last_attempt"] is True
-    other = [selection.Attempt(1, "small", selection.ABSENT, "invalid", "some other problem")]
-    assert (
-        cli._with_last_attempt(plan, _classification("small"), other, policy.reviewers["small"], 2)["last_attempt"]
-        is False
-    )

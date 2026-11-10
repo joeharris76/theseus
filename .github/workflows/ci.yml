@@ -82,15 +82,20 @@ jobs:
     name: review eval corpus and score rule
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
       - name: Validate the eval corpus
         run: python3 tools/review_eval.py validate
       - name: Refuse a template, policy or guidance change that lowers the eval score
         if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           base="$(git rev-parse 'HEAD^1')"

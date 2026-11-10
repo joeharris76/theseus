@@ -232,35 +232,20 @@ def test_a_forced_fixed_on_a_shipping_verdict_is_invalid_instead_of_published_as
     assert "D1 is marked fixed on a dispute re-review of an unchanged patch" in problem
 
 
-def test_a_forced_fixed_on_a_blocking_verdict_is_kept_open_and_the_verdict_still_blocks(policy: Policy) -> None:
-    plan = _plan_with_dispute(policy, _dispute())
-    plan["protocol"]["forced"] = True
-    verdict = validate(_verdict_dict(_disposition("fixed", evidence_text="the fallback fixes it at pkg/kept.py:12")))
-    assert protocol.judge_planned(verdict, plan).decision == "SHIP_WITH_FIXES"
-    assert protocol.forced_fixed_problems(verdict, plan).keys() == {"D1"}
-    assert protocol.contradiction(verdict, plan) is None
-    kept = protocol.keep_disputes_open(verdict, plan)
-    assert [(item.id, item.status) for item in kept.prior_defects] == [("D1", "not_fixed")]
-    assert "the defect stays open" in kept.prior_defects[0].evidence
-    assert protocol.forced_fixed_problems(kept, plan) == {}
-    assert protocol.judge_planned(kept, plan).decision == "SHIP_WITH_FIXES"
-
-
-@pytest.mark.parametrize("decision", ["SHIP_WITH_FIXES", "DO_NOT_SHIP"])
-def test_a_blocking_verdict_with_a_forced_fixed_and_a_current_defect_keeps_both(policy: Policy, decision: str) -> None:
+@pytest.mark.parametrize("decision", ["SHIP", "SHIP_WITH_FIXES", "DO_NOT_SHIP"])
+def test_a_forced_fixed_is_invalid_whatever_the_decision_and_never_rewritten(policy: Policy, decision: str) -> None:
     plan = _plan_with_dispute(policy, _dispute())
     plan["protocol"]["forced"] = True
     payload = _verdict_dict(_disposition("fixed", evidence_text="the fallback fixes it at pkg/kept.py:12"))
     payload["decision"] = decision
-    payload["defects"] = [
-        {"severity": "High", "file": CHECKER, "line": 2, "title": "New row loss", "detail": "Still drops a row"}
-    ]
+    if decision != "SHIP":
+        payload["defects"] = [
+            {"severity": "High", "file": CHECKER, "line": 2, "title": "New row loss", "detail": "Still drops a row"}
+        ]
     verdict = validate(payload)
-    assert protocol.contradiction(verdict, plan) is None
-    kept = protocol.keep_disputes_open(verdict, plan)
-    assert kept.decision == decision and kept.defects == verdict.defects
-    assert kept.prior_defects[0].status == "not_fixed"
-    assert protocol.judge_planned(kept, plan).decision == decision
+    problem = protocol.contradiction(verdict, plan)
+    assert problem is not None and "D1 is marked fixed on a dispute re-review of an unchanged patch" in problem
+    assert protocol.keep_disputes_open(verdict, plan) is verdict
 
 
 def test_a_forced_withdrawal_and_a_maintain_are_not_forced_fixed_problems(policy: Policy) -> None:

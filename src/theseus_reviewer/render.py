@@ -221,9 +221,9 @@ DELTA_RULE = (
     " line of a changed file still counts."
 )
 ADVISORY_RULE = (
-    "Exception to the rating rule for this repository: a Medium or Low defect with origin pre-existing, which the"
-    " review verifies against the diff, is recorded as advisory and does not block the merge. Rate a pre-existing"
-    " defect that must be fixed before merge High or Critical, and never choose a rating to order the list."
+    "The pre-existing origin is a claim, not proof of base behavior. An unchanged finding span does not prove"
+    " the defect existed at base: new callers, initialization or inputs can introduce it elsewhere."
+    " Findings still block regardless of origin, including with the advisory policy. Rate severity by impact."
 )
 
 

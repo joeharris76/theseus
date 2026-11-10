@@ -25,11 +25,9 @@ from .verdict import (
     DEMOTED_STATUSES,
     DO_NOT_SHIP,
     FIXED,
-    LINK_REMOVED,
     MAX_CLAIM,
     MAX_LINE,
     NOT_FIXED,
-    REDACTED,
     SHIP,
     SHIP_WITH_FIXES,
     WITHDRAWN,
@@ -730,7 +728,6 @@ def judge(
     workspace: Path | str | None = None,
     read: Returned | None = None,
     claimed: frozenset[str] = frozenset(),
-    advisory_scope: AdvisoryScope | None = None,
 ) -> Judgement:
     if verdict.status != COMPLETE:
         raise ValueError("only a complete review can be judged")
@@ -786,20 +783,6 @@ def judge(
     counted = tuple(dict.fromkeys(in_scope))
     merged = len(in_scope) - len(counted)
     uncounted = verdict.listed - len(verdict.defects)
-    advisory = (
-        tuple(
-            item
-            for item in counted
-            if advisory_scope.demotes(item)
-            and advisory_scope.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
-            and not advisory_scope.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
-            and workspace is not None
-            and _is_file(_resolve_tree(item.file, workspace), workspace)
-        )
-        if advisory_scope is not None and not uncounted
-        else ()
-    )
-    counted = tuple(item for item in counted if item not in advisory)
     confirmed_claims = sum(1 for item in carried if item["id"] in claimed)
     total = (
         sum(1 for item in carried if item["id"] not in claimed)
@@ -814,88 +797,8 @@ def judge(
         summary = _clip(verdict.summary, DO_NOT_SHIP_SUMMARY - len(note)) + note
         return Judgement(DO_NOT_SHIP, (), summary, fixed=fixed, withdrawn=withdrawn)
     if carried or counted:
-        return Judgement(
-            SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged, advisory
-        )
-    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn, advisory=advisory)
-
-
-PRE_EXISTING = "pre-existing"
-INTRODUCED = "introduced"
-ADVISORY_SEVERITIES = ("Medium", "Low")
-
-
-FORCED_FIXED_MARK = "is marked fixed on a dispute re-review of an unchanged patch"
-
-
-_LOCATION_MARKS = re.compile(
-    r"#L\d+|\bL\d+\b|:\s*L?\d+|\blines?\s*\d+|\(\s*\d+\s*\)",
-    re.IGNORECASE,
-)
-_FILE_TOKEN = re.compile(r"[\w./-]+\.\w{1,8}")
-
-
-def names_other_location(finding: Finding) -> bool:
-    text = f"{finding.title}\n{finding.detail}"
-    if LINK_REMOVED in text or REDACTED in text or _LOCATION_MARKS.search(text):
-        return True
-    own = {finding.file, finding.file.rsplit("/", 1)[-1]}
-    return any(token.strip(".") not in own for token in _FILE_TOKEN.findall(text))
-
-
-@dataclass(frozen=True)
-class AdvisoryScope:
-    added: Mapping[str, Sequence[Sequence[int]]]
-    new_files: frozenset[str]
-    advisory: bool
-    changed: frozenset[str] = frozenset()
-
-    def _known(self, name: str) -> list[str]:
-        folded = _clean_path(name).casefold()
-        every = (*self.new_files, *self.changed, *self.added)
-        return [path for path in dict.fromkeys(every) if _clean_path(path).casefold() == folded]
-
-    def verified(self, finding: Finding) -> bool:
-        if finding.origin != PRE_EXISTING or names_other_location(finding):
-            return False
-        end = finding.end_line or finding.line
-        for path in self._known(finding.file) or [finding.file]:
-            if path in self.new_files or (path in self.changed and path not in self.added):
-                return False
-            if any(start <= end and finding.line <= last for start, last in self.added.get(path, ())):
-                return False
-        return True
-
-    def aliased(self, targets: Sequence[str], workspace: Path | str | None) -> bool:
-        """Whether a path this change adds or touches is a symlink spelling of, or a directory above, a target."""
-        if workspace is None:
-            return False
-        goals = {_clean_path(target) for target in targets}
-        for path in (*self.new_files, *self.changed, *self.added):
-            own = _clean_path(path)
-            real = _resolve_tree(path, workspace)
-            for goal in goals:
-                if real in ("", ".") and own != goal:
-                    return True
-                if own != goal and (real == goal or goal.startswith(f"{real}/") or goal.startswith(f"{own}/")):
-                    return True
-        return False
-
-    def demotes(self, finding: Finding) -> bool:
-        return self.advisory and finding.severity in ADVISORY_SEVERITIES and self.verified(finding)
-
-
-def advisory_scope(plan: Mapping[str, Any]) -> AdvisoryScope | None:
-    added = plan.get("added_lines")
-    if not isinstance(added, Mapping):
-        return None
-    rules = plan.get("protocol") or {}
-    return AdvisoryScope(
-        added,
-        frozenset(plan.get("new_files") or ()),
-        rules.get("pre_existing") == "advisory" and not plan.get("promotion"),
-        frozenset(plan.get("changed_paths") or ()),
-    )
+        return Judgement(SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged)
+    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
 
 
 def judge_planned(
@@ -916,7 +819,6 @@ def judge_planned(
         workspace=ws,
         read=read,
         claimed=frozenset(rules.get("claimed") or ()),
-        advisory_scope=advisory_scope(plan),
     )
 
 
@@ -1097,31 +999,13 @@ def forced_fixed_problems(verdict: Verdict, plan: Mapping[str, Any]) -> dict[str
     }
 
 
-def demote_forced_fixed(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
-    if not plan.get("last_attempt"):
-        return verdict
-    problems = forced_fixed_problems(verdict, plan)
-    if not problems:
-        return verdict
-    note = "a fixed disposition cannot apply to a dispute re-review of an unchanged patch; recorded as maintained"
-    return replace(
-        verdict,
-        prior_defects=tuple(
-            replace(item, status=NOT_FIXED, evidence=f"{item.evidence} {note}".strip(), demoted=DEMOTED_DISPOSITION)
-            if item.id in problems
-            else item
-            for item in verdict.prior_defects
-        ),
-    )
-
-
 def dispute_problem(verdict: Verdict, plan: Mapping[str, Any]) -> str | None:
     problems = dispute_problems(verdict, plan)
     return problems[min(problems)] if problems else None
 
 
 def keep_disputes_open(verdict: Verdict, plan: Mapping[str, Any]) -> Verdict:
-    problems = {**forced_fixed_problems(verdict, plan), **dispute_problems(verdict, plan)}
+    problems = dispute_problems(verdict, plan)
     if not problems:
         return verdict
     entries = {item.id: item for item in verdict.prior_defects}
@@ -1143,7 +1027,7 @@ def contradiction(
     workspace: Path | str | None = None,
 ) -> str | None:
     forced_fixed = forced_fixed_problems(verdict, plan)
-    if forced_fixed and verdict.decision == SHIP:
+    if forced_fixed:
         return forced_fixed[min(forced_fixed)]
     if verdict.status != COMPLETE or judge_planned(verdict, plan, workspace=workspace).decision != SHIP:
         return None
@@ -1183,7 +1067,3 @@ def defect_entry(defect_id: str, finding: Finding) -> dict[str, Any]:
         "end_line": finding.end_line,
         "title": finding.title,
     }
-
-
-def _is_file(path: str, workspace: Path | str) -> bool:
-    return _exists_exact(path, workspace) and os.path.isfile(os.path.join(os.path.realpath(str(workspace)), path))
