@@ -449,16 +449,16 @@ def test_the_token_literals_live_only_in_the_shared_module() -> None:
 
     root = Path(report.__file__).parent
     literals = (
-        "[run ",
+        '" [run "',
         " (reposted)",
         "SHIP WITH FIXES",
-        "escalated ",
+        "escalated D",
         "only exempt paths changed",
         "refused after",
         "a review was edited",
         "review-verdict failed twice",
         "Stand-in review: APPROVE",
-        "degraded: ",
+        " · degraded: ",
     )
     for path in sorted(root.glob("*.py")):
         if path.name in ("status_text.py", "_vendor"):

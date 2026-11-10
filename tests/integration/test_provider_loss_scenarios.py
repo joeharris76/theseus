@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import providers
+from theseus_reviewer import providers, status_text
 from theseus_reviewer._vendor import yaml
 
 from .harness import ALPHA_ROOT, CHECKER, POLICY, Harness
@@ -105,7 +105,7 @@ def test_an_unknown_or_empty_served_set_fails_closed_as_unavailable_without_spen
 
     status = _status(harness, head)
     assert status["state"] == "pending"
-    assert status["description"].startswith("pending: no reviewer available")
+    assert status["description"].startswith((status_text.GATEWAY_DOWN, status_text.unavailable("provider outage")))
     assert harness.omp_calls() == 0 and run.attempts() == []
     state = harness.github.artifact_json("review-verdict-state-303", "state.json")
     assert state["pending_cause"] == "unavailable" and state["retries"] == []

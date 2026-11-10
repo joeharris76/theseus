@@ -17,6 +17,7 @@ from . import status_text
 from .matchers import Matchers
 from .policy import Binding, PromotionRules
 from .status_text import (
+    EDITED_REASON,
     ESCALATED,
     EXEMPT_SUCCESS_DESCRIPTION,
     OPEN_FINDINGS_LABEL,
@@ -200,8 +201,6 @@ def _latest_decisive(verdicts: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _edit_hold(status: dict[str, Any]) -> bool:
-    from .edits import EDITED_REASON
-
     return status["state"] == "pending" and (status.get("description") or "").startswith(EDITED_REASON)
 
 

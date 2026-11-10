@@ -53,7 +53,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)",
+      "description": "Not reviewed · review stopped, a reviewer process is blocked · see the run log · /review retries",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -363,14 +363,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)",
+        "description": "Not reviewed · review stopped, a reviewer process is blocked · see the run log · /review retries",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "review: the review's latest verdict for <sha0> is pending, not success; fix the findings, or post a stand…",
+        "description": "Waiting · not reviewed yet · see the review-verdict status · owner may post a stand-in",
         "state": "failure",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -404,5 +404,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: pending: stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
+  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: Not reviewed · review stopped, a reviewer process is blocked · see the run log · /review retries\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
 }

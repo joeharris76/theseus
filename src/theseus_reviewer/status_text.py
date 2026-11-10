@@ -89,7 +89,7 @@ GATE_PASS_EXEMPT = SEP.join((GATE_PASS, EXEMPT_SUCCESS_DESCRIPTION))
 
 _URL = re.compile(r"\s*https?://\S+")
 _HTTP_FAILURE = re.compile(r":?\s*GitHub returned HTTP (?P<code>[0-9]{3}) for\s+\S+")
-_SHA = re.compile(r"\b[0-9a-f]{40}\b")
+_SHA = re.compile(r"\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b")
 SHORT_SHA = 12
 
 

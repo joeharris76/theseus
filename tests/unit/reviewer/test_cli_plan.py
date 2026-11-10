@@ -865,7 +865,7 @@ def test_an_isolation_scan_or_redaction_failure_is_surfaced_by_the_sweep(
     assert _surfaced_sweep(monkeypatch, tmp_path, fake) == 0
     assert fake.dispatched == []
     assert len(fake.posted) == 1
-    assert step in fake.posted[0][1]["description"]
+    assert fake.posted[0][1]["description"] == status_text.sweep_failure([step])
 
 
 def test_a_second_failure_with_no_step_listed_still_posts_a_status(

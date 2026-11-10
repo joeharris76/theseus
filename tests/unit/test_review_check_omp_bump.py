@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA, CONSUMER_BETA
-from theseus_reviewer import gate, omp_pin
+from theseus_reviewer import gate, omp_pin, status_text
 from theseus_reviewer import review_check as check
 
 ALPHA = gate.load_gate_config(".github/review.yml", CONSUMER_ALPHA)
@@ -108,12 +108,14 @@ def test_evidence_that_is_wrong_edited_or_not_the_owners_does_not_release_the_bu
 def test_matching_unedited_owner_evidence_releases_the_bump(texts: dict[str, str]) -> None:
     status, message = _gate([_evidence()])
     assert status == check.WAITING
-    assert "omp pin bump refused" not in message and "waiting for the review's verdict" in message
+    assert message == status_text.gate_waiting(HEAD)
 
 
 def test_a_bump_that_changes_other_files_is_held_even_with_evidence(texts: dict[str, str]) -> None:
-    status, message = _gate([_evidence()], [POLICY_PATH, "benchbox/core/x.py"])
-    assert status == check.WAITING and "also changes benchbox/core/x.py" in message
+    files = [POLICY_PATH, "benchbox/core/x.py"]
+    status, message = _gate([_evidence()], files)
+    assert status == check.WAITING and message.startswith("Blocked · omp pin bump refused")
+    assert "also changes benchbox/core/x.py" in message
 
 
 def test_a_pull_request_that_leaves_the_pin_alone_is_not_held(texts: dict[str, str]) -> None:
