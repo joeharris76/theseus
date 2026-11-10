@@ -66,7 +66,7 @@ def _payload_attempts() -> list[Attempt]:
 def _pending(policy: Policy, attempts: list[Attempt], reasons: tuple[str, ...] = (), **plan: Any) -> report.Final:
     return _finalize(
         policy,
-        {**_comment_plan(policy), "bot_login": BOT, **plan},
+        {**_comment_plan(policy), "bot_login": BOT, "routed": ["anthropic", "google-antigravity"], **plan},
         None,
         kind=selection.PENDING,
         reviewer=None,
@@ -98,7 +98,7 @@ def test_captured_provider_payloads_never_reach_any_body_or_status(policy: Polic
     pending = _pending(policy, _payload_attempts(), served_error=GATEWAY_PAYLOAD)
     mixed = _finalize(
         policy,
-        {**_comment_plan(policy), "served_error": GATEWAY_PAYLOAD},
+        {**_comment_plan(policy), "routed": ["anthropic", "google-antigravity"], "served_error": GATEWAY_PAYLOAD},
         _v("s", [_defect("Problem")]),
         kind=selection.FAIL,
         attempts=[
@@ -337,3 +337,32 @@ def test_bookkeeping_reasons_are_dropped_from_the_cause_unless_nothing_else_rema
     only = Step(selection.PENDING, None, ("medium: skipped: no attempt slot left in this run",))
     assert unavailable.causes(only, [], {}) == (unavailable.ATTEMPT_LIMIT,)
     assert unavailable.causes(Step(selection.PENDING), [], {}) == (unavailable.GENERIC,)
+
+
+HOSTILE_PROVIDERS = ["x --> @octocat", "`rm`", "anthropic\n- injected", "a" * 80, "Anthropic"]
+
+
+def test_a_routed_provider_name_is_printed() -> None:
+    plan = {"routed": ["anthropic", "google-antigravity"]}
+    item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, "anthropic")
+    step = Step(selection.PENDING)
+    assert "(anthropic)" in unavailable.lines([item], step, plan)[0]
+    assert "excluded after anthropic failed" in unavailable.excluded_line(item, plan)
+
+
+@pytest.mark.parametrize("name", [*HOSTILE_PROVIDERS, "openai"])
+def test_an_unrouted_provider_name_is_never_printed(name: str) -> None:
+    plan = {"routed": ["anthropic"]}
+    item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, name)
+    out = unavailable.lines([item], Step(selection.PENDING), plan)[0]
+    excluded = unavailable.excluded_line(item, plan)
+    assert name not in out
+    assert name not in excluded
+    assert "excluded after a provider failed" in excluded
+    assert "\n" not in out + excluded
+
+
+def test_no_provider_name_is_printed_when_the_plan_routes_none() -> None:
+    item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, "anthropic")
+    assert "anthropic" not in unavailable.lines([item], Step(selection.PENDING), {})[0]
+    assert "anthropic" not in unavailable.excluded_line(item, {})

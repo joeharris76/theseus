@@ -14,7 +14,6 @@ MARKER_OPEN = "<!-- review-unavailable:"
 MARKER_PATTERN = re.compile(
     rf"{re.escape(MARKER_OPEN)} {MARKER_VERSION} (?P<head>[0-9a-f]{{40}}) (?P<key>[a-z0-9+-]+) -->"
 )
-SAFE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,47}")
 ABSENT_KIND = re.compile(r"absent \((?P<kind>[a-z-]+)\)")
 KEY_SEPARATOR = "+"
 
@@ -108,8 +107,12 @@ def gateway_cause(served_error: str) -> Cause:
     return GATEWAY if served_error.startswith("gateway unreachable") else GATEWAY_ERROR
 
 
-def _named(provider: str) -> str:
-    return f" ({provider})" if SAFE_NAME.fullmatch(provider) else ""
+def _routed(provider: str, plan: Mapping[str, Any]) -> bool:
+    return bool(provider) and provider in (plan.get("routed") or ())
+
+
+def _named(provider: str, plan: Mapping[str, Any]) -> str:
+    return f" ({provider})" if _routed(provider, plan) else ""
 
 
 def _skip_cause(text: str, plan: Mapping[str, Any]) -> Cause:
@@ -174,7 +177,7 @@ def lines(attempts: Sequence[Attempt], step: Step, plan: Mapping[str, Any]) -> l
             continue
         held = f"; {recovery_text(item)}" if item.recovery is not None else ""
         out.append(
-            f"- {item.reviewer} (attempt {item.slot}): {attempt_cause(item).reason}{_named(item.provider)}{held}"
+            f"- {item.reviewer} (attempt {item.slot}): {attempt_cause(item).reason}{_named(item.provider, plan)}{held}"
         )
     for name, cause in _unattempted(step, attempts, plan):
         if cause is not None:
@@ -191,10 +194,9 @@ def recovery_text(item: Attempt) -> str:
     return f"recovery: {held.choice} (fallback, {held.reason})"
 
 
-def excluded_line(item: Attempt) -> str:
-    return (
-        f"- excluded after {item.provider} failed (attempt {item.slot}, {item.reviewer}): {attempt_cause(item).reason}"
-    )
+def excluded_line(item: Attempt, plan: Mapping[str, Any]) -> str:
+    provider = item.provider if _routed(item.provider, plan) else "a provider"
+    return f"- excluded after {provider} failed (attempt {item.slot}, {item.reviewer}): {attempt_cause(item).reason}"
 
 
 def marker(head: str, found: Sequence[Cause]) -> str:

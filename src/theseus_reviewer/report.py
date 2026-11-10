@@ -293,7 +293,7 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
         lines.append(f"- not served by the gateway: {', '.join(unserved)}")
     for attempt in attempts:
         if selection.provider_failed(attempt):
-            lines.append(unavailable.excluded_line(attempt))
+            lines.append(unavailable.excluded_line(attempt, plan))
     if degraded or excluded:
         lines.append(f"- served: {', '.join(sorted(served.providers)) or 'none'}")
     for attempt in attempts:
