@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from theseus_reviewer.dedup import fingerprint, marker, open_fingerprints, split, thread_fingerprint
+from theseus_reviewer.dedup import fingerprint, marker, open_fingerprints, open_thread_counts, split, thread_fingerprint
 from theseus_reviewer.verdict import Finding
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -49,9 +49,11 @@ def test_split_drops_open_and_repeated_findings() -> None:
     open_one = _finding("Drops a row")
     fresh = _finding("Skips validation", 5)
     duplicate = _finding("skips validation", 9)
-    new, repeated = split((open_one, fresh, duplicate), [fingerprint(PATH, "Drops a row")])
+    twin = _finding("skips validation", 5)
+    new, repeated = split((open_one, fresh, twin), [fingerprint(PATH, "Drops a row")])
     assert new == (fresh,)
-    assert repeated == (open_one, duplicate)
+    assert repeated == (open_one, twin)
+    assert split((fresh, duplicate), []) == ((fresh, duplicate), ())
 
 
 def test_a_marker_inside_the_detail_does_not_set_the_fingerprint() -> None:
@@ -72,6 +74,16 @@ def test_a_more_severe_repeat_is_posted_again() -> None:
 def test_open_fingerprints_keep_the_most_severe_thread() -> None:
     threads = [_open("benchbox-review", "**Low**: Drops a row"), _open("benchbox-review", "**High**: Drops a row")]
     assert open_fingerprints(threads, "benchbox-review") == {fingerprint(PATH, "Drops a row"): "High"}
+
+
+def test_one_class_at_several_lines_of_a_file_keeps_every_location_in_a_round() -> None:
+    first, second, third = (_finding("Unchecked size", line) for line in (3, 40, 90))
+    assert split((first, second, third), {}) == ((first, second, third), ())
+    prior = {fingerprint(PATH, "Unchecked size"): "High"}
+    assert split((first, second), prior) == ((), (first, second))
+    counts = {fingerprint(PATH, "Unchecked size"): 1}
+    assert split((first, second), prior, counts) == ((second,), (first,))
+    assert split((first, second, third), prior, {fingerprint(PATH, "Unchecked size"): 2}) == ((third,), (first, second))
 
 
 DECORATED = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
@@ -138,3 +150,30 @@ def test_the_earliest_title_wins_when_a_plain_title_precedes_decorated_looking_t
     body = "**Medium**: Drops a row\n\n🔵 **Low** · D9 · unrelated detail"
     assert parse_title(body) == ("Medium", "Drops a row")
     assert thread_fingerprint(PATH, body) == fingerprint(PATH, "Drops a row")
+
+
+def test_open_thread_counts_count_every_open_thread_of_a_fingerprint() -> None:
+    threads = [
+        _open("benchbox-review", "**High**: Unchecked size"),
+        _open("benchbox-review", "**High**: Unchecked size"),
+        {**_open("benchbox-review", "**High**: Unchecked size"), "resolved": True},
+        _open("benchbox-review", "**High**: Other"),
+        _open("benchbox-review", "**High**: Unchecked size\n\n<!-- review-defect: c1-D1 -->"),
+    ]
+    assert open_thread_counts(threads, "benchbox-review") == {
+        fingerprint(PATH, "Unchecked size"): 2,
+        fingerprint(PATH, "Other"): 1,
+    }
+
+
+def test_a_new_location_gets_its_own_thread_beside_an_open_thread_of_a_marked_defect() -> None:
+    marked = _open(
+        "benchbox-review",
+        f"**High**: Unchecked size\n\n<!-- review-defect: c1-D1 -->\n{marker(_finding('Unchecked size'))}",
+    )
+    key = fingerprint(PATH, "Unchecked size")
+    assert open_fingerprints([marked], "benchbox-review") == {key: "High"}
+    counts = open_thread_counts([marked], "benchbox-review")
+    assert counts == {}
+    new = _finding("Unchecked size", 40)
+    assert split((new,), {key: "High"}, counts) == ((new,), ())

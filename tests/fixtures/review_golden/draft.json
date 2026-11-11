@@ -35,6 +35,7 @@
     "mode": "enforce",
     "omp_config": ".github/review-omp-config.yml",
     "omp_sha256": "<volatile>",
+    "open_counts": {},
     "open_findings": {},
     "pool_blocked_until": {},
     "pr": 82,

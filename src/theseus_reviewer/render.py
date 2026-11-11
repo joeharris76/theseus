@@ -211,8 +211,8 @@ CLAIMED_RULE = (
 STEP_BACK_RULE = (
     "This pull request has had {rounds} review rounds with findings, so this is the one step-back review: read the"
     ' whole change again, not only what changed since the last review. For each class of defect under "Earlier'
-    ' defects", look for every remaining instance anywhere in the change and report all instances of a class in one'
-    " defect entry. Keep every earlier id in prior_defects; an open defect is never dropped by stepping back. If the"
+    ' defects", look for every remaining instance anywhere in the change and report each location of a class as'
+    " its own defect entry with a unique title naming the class and the specific symbol or location. Keep every earlier id in prior_defects; an open defect is never dropped by stepping back. If the"
     " approach itself keeps producing these defects, say so in your summary."
 )
 DELTA_RULE = (

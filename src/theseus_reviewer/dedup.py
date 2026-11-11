@@ -5,11 +5,15 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from . import legacy
 from .policy import SEVERITIES
+from .protocol import thread_finding
 from .verdict import Finding
 
 MARKER_OPEN = "<!-- review-finding:"
-_MARKER = re.compile(rf"{re.escape(MARKER_OPEN)} (?P<print>[0-9a-f]{{16}}) -->\s*\Z")
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.FINDING_MARKER_OPEN)}) (?P<print>[0-9a-f]{{16}}) -->\s*\Z"
+)
 _SEVERITY = "(?P<severity>Critical|High|Medium|Low)"
 _TITLES = (
     re.compile(rf"^\*\*{_SEVERITY}\*\*: (?P<title>.+)$", re.MULTILINE),
@@ -72,17 +76,50 @@ def open_fingerprints(threads: Iterable[Mapping[str, Any]], login: str) -> dict[
     return dict(sorted(prints.items()))
 
 
+def open_thread_counts(threads: Iterable[Mapping[str, Any]], login: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for thread in threads:
+        if (
+            thread.get("resolved")
+            or thread.get("edited")
+            or thread.get("author_type") != "Bot"
+            or (thread.get("author") or "").removesuffix("[bot]") != login
+        ):
+            continue
+        body = thread.get("body") or ""
+        if thread_finding(body) is not None:
+            continue
+        key = thread_fingerprint(thread.get("path"), body)
+        if key is not None:
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def split(
-    findings: Iterable[Finding], already_open: Mapping[str, str] | Iterable[str]
+    findings: Iterable[Finding],
+    already_open: Mapping[str, str] | Iterable[str],
+    counts: Mapping[str, int] | None = None,
+    carried_at: Mapping[tuple[str, int], str] | None = None,
 ) -> tuple[tuple[Finding, ...], tuple[Finding, ...]]:
     known = dict(already_open) if isinstance(already_open, Mapping) else dict.fromkeys(already_open, SEVERITIES[0])
     fresh: list[Finding] = []
     repeated: list[Finding] = []
+    placed: dict[tuple[str, int], str] = {}
+    room = dict(counts or {})
     for finding in findings:
         key = fingerprint(finding.file, finding.title)
         posted = known.get(key)
         covered = posted is not None and SEVERITIES.index(posted) <= SEVERITIES.index(finding.severity)
-        (repeated if covered else fresh).append(finding)
-        if not covered:
-            known[key] = finding.severity
+        held = (carried_at or {}).get((key, finding.line))
+        if held is not None and SEVERITIES.index(held) <= SEVERITIES.index(finding.severity):
+            covered = True
+        elif covered and counts is not None:
+            covered = room.get(key, 0) > 0
+            room[key] = room.get(key, 0) - 1
+        here = (key, finding.line)
+        twin = placed.get(here)
+        twinned = twin is not None and SEVERITIES.index(twin) <= SEVERITIES.index(finding.severity)
+        (repeated if covered or twinned else fresh).append(finding)
+        if not covered and not twinned:
+            placed[here] = finding.severity
     return tuple(fresh), tuple(repeated)

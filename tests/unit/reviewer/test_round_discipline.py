@@ -169,7 +169,7 @@ def _brief(policy: Policy, tmp_path: Path, **protocol_over: Any) -> tuple[str, P
 def test_the_step_back_brief_asks_for_every_remaining_instance_of_each_class(policy: Policy, tmp_path: Path) -> None:
     brief, _ = _brief(policy, tmp_path, step_back=True, finding_rounds=4)
     assert "this is the one step-back review" in brief and "4 review rounds with findings" in brief
-    assert "report all instances of a class in one defect entry" in brief
+    assert "report each location of a class as its own defect entry" in brief
     assert "Earlier defects:" in brief and "never dropped by stepping back" in brief
 
 
@@ -183,7 +183,13 @@ def test_the_class_level_rule_is_in_every_template() -> None:
 
     for name in TEMPLATES:
         text = (TEMPLATE_DIR / f"{name}.md").read_text(encoding="utf-8")
-        assert "list it once: name the class in the title" in text and "(v3)" in text
+        assert (
+            "report each location as a separate defect" in text
+            and "unique title that names the class" in text
+            and "may share" not in text
+            and "list it once" not in text
+            and "(v3)" in text
+        )
 
 
 def _since_inputs(text: str | None) -> Any:

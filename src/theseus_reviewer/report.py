@@ -106,6 +106,13 @@ def _threads_to_open(
     unanchored: list[str] = []
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
+    prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
+    counts = plan.get("open_counts")
+    room = {key: int(count) for key, count in (counts if counts is not None else dict.fromkeys(known, 1)).items()}
+    if counts is None:
+        for entry in judgement.carried:
+            if f"c{cycle}-{entry['id']}" in threaded:
+                room[prints[entry["id"]]] = room.get(prints[entry["id"]], 0) - 1
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
@@ -127,8 +134,11 @@ def _threads_to_open(
             else "",
             end if isinstance(end, int) and end > line else None,
         )
-        if dedup.fingerprint(finding.file, finding.title) not in known:
-            opened.append((finding, entry["id"]))
+        key = prints[entry["id"]]
+        if key in known and room.get(key, 0) > 0:
+            room[key] -= 1
+            continue
+        opened.append((finding, entry["id"]))
     return opened, unanchored
 
 
@@ -579,7 +589,13 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
+    threaded_ids = frozenset(plan.get("threaded") or ())
+    carried_at = {
+        (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
+        for entry in (judgement.carried if judgement is not None else ())
+        if f"c{cycle}-{entry['id']}" in threaded_ids
+    }
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), plan.get("open_counts"), carried_at)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
