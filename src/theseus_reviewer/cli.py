@@ -1947,6 +1947,8 @@ def command_finalize(args: argparse.Namespace) -> int:
         selection_input, loaded, step, errors = decided_attempts(plan, Path(args.attempts_dir), args.classification, ws)
         diff_path = plan_parent / DIFF_FILE
         commentable = commentable_lines(diff_path.read_bytes().decode("utf-8")) if diff_path.is_file() else {}
+        for error in errors:
+            _defer_summary(out_dir, f"artifact validation: {error}")
         final = report.finalize(
             plan,
             step,
