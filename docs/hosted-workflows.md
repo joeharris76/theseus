@@ -104,6 +104,8 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
 
+Status descriptions are at most 140 characters, lead with the decision or state and name no tier. Programs that read them match only these tokens, defined once in `theseus_reviewer.status_text`: a trailing ` [run <id>]`, ` (reposted)` before it, `SHIP WITH FIXES`, `escalated D1,D2`, `only exempt paths changed`, the prefixes `refused after`, `a review was edited` and `review-verdict failed twice without a result at: `, ` · degraded: <providers>`, and for a `review-gate` that is waiting, the prefix `Waiting for review-verdict` (the head appears only inside the quoted stand-in line `Stand-in review: APPROVE <40-hex sha>`). Anything else is prose, and a reader that cannot classify a description treats it as not passing.
+
 `theseus gate` exits with:
 
 | Exit | Meaning | `gate / gate` job |
@@ -143,6 +145,12 @@ The attempt phase probes the gateway's served models before choosing a reviewer,
 - A review that ran on a substitute, or while a routed provider is unserved or excluded, ends its status description with `· degraded: <providers>` and has a `Provider availability` body section.
 - A review that cannot run for availability alone ends pending with cause `unavailable`: no attempt or daily retry is spent, the sweep retries it after the flat `retry.backoff_start_minutes` (at most about 24 a day), and `review-gate` stays pending. Those dispatches are exempt from the sweep's daily dispatch cap, and the state records each one so a later `all-absent` retry still has its full budget after the outage.
 - The `health` job runs on `schedule` only (the caller's existing hourly cron) and needs no permission beyond `contents: read`. It exits 1, and the scheduled run goes red, when the gateway is unreachable, the client token is rejected, or a provider named in the trusted omp config is not served. Push, pull request and dispatch events skip it. It reads the same `REVIEW_GATEWAY_URL` and `REVIEW_GATEWAY_TOKEN` secrets as the attempt steps. The CI health job cannot see the host's owner denylist, so a provider the owner removed on purpose still shows the scheduled run red until the trusted config no longer names it; that is the expected CI-side behaviour for a deliberate removal, and the host monitor is what reports it as a notice rather than an alert.
+
+## The not-reviewed notice
+
+When no reviewer produces a verdict, the pending review (heading `### review-verdict: pending for <sha>`) lists each absence under the bold title `**Reviewers not available**` as a short reason: provider quota, gateway unreachable, provider error, timeout, an answer that was not a valid review, a reviewer that did not read every changed hunk, a change too large to read, or run artifacts that failed validation. Provider text never reaches GitHub; it stays in the run log and the uploaded attempt artifacts. The same reasons fill the `Reviewers not available` and `Provider availability` sections of verdict bodies. A `Next step:` line follows by cause: transient causes say the hourly sweep retries and a maintainer can comment `/review`; a change too large says to split the pull request or ask an owner for a stand-in review; withheld artifacts and a reviewer that never reported say to push a new head.
+
+The notice ends with a hidden marker, `<!-- review-unavailable: v1 <40-hex head sha> <cause-key> -->`. The cause key is the sorted set of cause keys joined by `+` (`quota`, `provider-auth`, `timeout`, `invalid-answer`, `empty-answer`, `incomplete-read`, `provider-error`, `run-failed`, `too-large`, `gateway-unreachable`, `gateway-rejected`, `gateway-error`, `not-served`, `capacity-unknown`, `blocked`, `no-report`, `artifacts-invalid`, `reviewer-disabled`, `attempt-limit`, `no-reviewer`). `drive publish` skips the post when the latest post by the review App for the same head carries the same marker; only markers are compared, never prose. A missing, unreadable or differently keyed previous marker, or a listing that cannot be read, posts again. The status and the retry state are written either way.
 
 ## Permission ceilings
 
@@ -200,7 +208,7 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 
 ## Migrating from 0.1.x
 
-0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus now writes and reads only the new names; a 0.1.x name is ignored, and an old status context, marker, artifact or comment form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
+0.2.0 renamed every `oracle` name to `review` and collapsed doubled words. Released versions 0.2.0 through 0.2.6 were transitional: each status was also posted under its 0.1.x context and the 0.1.x forms of everything persisted or typed by humans were still read. This source tree removes both compatibility paths; that removal is not part of the already released 0.2.5 or 0.2.6. Theseus writes only the new names. It still reads the old persisted record forms (the `oracle-protocol`, `oracle-defect`, `oracle-finding` and `oracle-local-record` markers and `Oracle backoff reset:`) so a pull request last reviewed before the rename keeps its open defects and strikes; an old status context, artifact, command or stand-in form has no effect. Before upgrading from any release through 0.2.6 to a release containing this removal, change every ruleset or branch protection that requires `oracle-gate` or `oracle-verdict` to require `review-gate`: the old contexts keep their last state on open heads and are never updated again, so a ruleset still requiring one is satisfied by a stale success. This is the only place the old names appear.
 
 | 0.1.x | After compatibility removal |
 |---|---|
@@ -221,10 +229,10 @@ Not provable offline: environment-secret resolution inside a called workflow, th
 | local cache `~/.cache/theseus/local-oracle`, gateway directory `~/.omp/oracle-gateway` | `~/.cache/theseus/local-review`, `~/.omp/review-gateway` |
 | gateway clients `oracle-ci`, `oracle-<name>` | `review-ci`, `review-<name>` |
 | artifacts `oracle-verdict-state-*`, `oracle-verdict-attempt-*`, `oracle-attempts`, `oracle-verdict-capture` | `review-verdict-state-*`, `review-verdict-attempt-*`, `review-attempts`, `review-verdict-capture` (state under the old names is not read) |
-| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (the old forms are not read) |
+| markers `oracle-protocol`, `oracle-defect`, `oracle-finding`, `oracle-local-record`; heading `### oracle-verdict:` | `review-protocol`, `review-defect`, `review-finding`, `review-local-record`; `### review-verdict:` (the four markers are still read, never written, so records and findings from earlier reviews keep counting; the old heading is not read) |
 | `Stand-in oracle review: APPROVE <sha>` | `Stand-in review: APPROVE <sha>` (the old form is not read) |
 | `Oracle adjudication: WITHDRAW\|MAINTAIN D<n> - <reason>` | `Review adjudication: ...` (the old form is not read) |
-| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (the old form is not read) |
+| `Oracle backoff reset: <sha>` | `Review backoff reset: <sha>` (the old form is still read, never written) |
 | owner command `/oracle-review` | `/review` (the old command does nothing) |
 
 The caller's secrets block must map the new names onto the secrets it already holds, by name:
