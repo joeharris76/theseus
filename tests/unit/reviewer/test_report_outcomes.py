@@ -792,3 +792,13 @@ def test_carried_defects_with_one_fingerprint_each_get_a_thread_or_a_notice() ->
         _thread_plan([]), _judged(_carried("D1", 3), _carried("D2", 41)), lines, "review", 1
     )
     assert [defect_id for _, defect_id in opened] == [] and unanchored == ["D2"]
+
+
+def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_fingerprint() -> None:
+    lines = {"a.py": frozenset({3, 40})}
+    entries = (_carried("D1", 3), _carried("D2", 40))
+    plan = {**_thread_plan(["c1-D1"]), "open_counts": {dedup.fingerprint("a.py", "Unchecked size"): 2}}
+    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == ([], [])
+    plan["open_counts"] = {dedup.fingerprint("a.py", "Unchecked size"): 1}
+    opened, _ = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"]

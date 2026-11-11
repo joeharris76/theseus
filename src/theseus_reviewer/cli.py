@@ -231,6 +231,7 @@ def _base_plan(policy: Policy, repo: str, pr: int | None, run_id: str) -> dict[s
         "scope": "full",
         "reviewed_head": None,
         "open_findings": {},
+        "open_counts": {},
         "protocol": None,
         "max_attempts": policy.max_attempts,
         "pool_blocked_until": {},
@@ -986,13 +987,14 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     if inputs.deferred is not None:
         reason = "dispute re-review exempt from the retry budget"
         plan["manual"] = False
-    plan["open_findings"], plan["disputes"] = {}, []
+    plan["open_findings"], plan["open_counts"], plan["disputes"] = {}, {}, []
     if inputs.disputes is not None:
         plan["disputes"] = [dict(item) for item in inputs.disputes]
     elif plan["pr"] is not None:
         try:
             threads = github.review_threads(plan["repo"], plan["pr"]) if threads is None else threads
             plan["open_findings"] = dedup.open_fingerprints(threads, policy.bot_login)
+            plan["open_counts"] = dedup.open_thread_counts(threads, policy.bot_login)
             plan["threaded"] = _threaded_findings(threads, policy.bot_login)
             comments = _comment_disputes(plan, policy, found) if comments is None else comments
             plan["disputes"] = [*_disputed_threads(threads, policy.bot_login), *comments]

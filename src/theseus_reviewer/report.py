@@ -109,8 +109,10 @@ def _threads_to_open(
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
     prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
-    sibling_prints = {prints[entry["id"]] for entry in judgement.carried if f"c{cycle}-{entry['id']}" in threaded}
-    claimed: set[str] = set()
+    room = {key: int(count) for key, count in (plan.get("open_counts") or dict.fromkeys(known, 1)).items()}
+    for entry in judgement.carried:
+        if f"c{cycle}-{entry['id']}" in threaded:
+            room[prints[entry["id"]]] = room.get(prints[entry["id"]], 0) - 1
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
@@ -133,8 +135,8 @@ def _threads_to_open(
             end if isinstance(end, int) and end > line else None,
         )
         key = prints[entry["id"]]
-        if key in known and key not in sibling_prints and key not in claimed:
-            claimed.add(key)
+        if key in known and room.get(key, 0) > 0:
+            room[key] -= 1
             continue
         opened.append((finding, entry["id"]))
     return opened, unanchored
@@ -536,7 +538,7 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), plan.get("open_counts") or None)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}

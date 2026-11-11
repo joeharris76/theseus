@@ -81,6 +81,9 @@ def test_one_class_at_several_lines_of_a_file_keeps_every_location_in_a_round() 
     assert split((first, second, third), {}) == ((first, second, third), ())
     prior = {fingerprint(PATH, "Unchecked size"): "High"}
     assert split((first, second), prior) == ((), (first, second))
+    counts = {fingerprint(PATH, "Unchecked size"): 1}
+    assert split((first, second), prior, counts) == ((second,), (first,))
+    assert split((first, second, third), prior, {fingerprint(PATH, "Unchecked size"): 2}) == ((third,), (first, second))
 
 
 DECORATED = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
@@ -147,3 +150,18 @@ def test_the_earliest_title_wins_when_a_plain_title_precedes_decorated_looking_t
     body = "**Medium**: Drops a row\n\n🔵 **Low** · D9 · unrelated detail"
     assert parse_title(body) == ("Medium", "Drops a row")
     assert thread_fingerprint(PATH, body) == fingerprint(PATH, "Drops a row")
+
+
+def test_open_thread_counts_count_every_open_thread_of_a_fingerprint() -> None:
+    from theseus_reviewer.dedup import open_thread_counts
+
+    threads = [
+        _open("benchbox-review", "**High**: Unchecked size"),
+        _open("benchbox-review", "**High**: Unchecked size"),
+        {**_open("benchbox-review", "**High**: Unchecked size"), "resolved": True},
+        _open("benchbox-review", "**High**: Other"),
+    ]
+    assert open_thread_counts(threads, "benchbox-review") == {
+        fingerprint(PATH, "Unchecked size"): 2,
+        fingerprint(PATH, "Other"): 1,
+    }

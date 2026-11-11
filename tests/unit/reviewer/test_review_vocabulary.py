@@ -163,7 +163,7 @@ def test_the_local_record_marker_is_written_as_review_and_read_under_both_names(
     assert findings.decode_body(retired) == findings.decode_body(encoded)
 
 
-def test_adjudication_comments_are_written_with_the_review_prefix_and_read_under_both() -> None:
+def test_adjudication_comments_use_the_review_prefix_only() -> None:
     assert adjudication.PREFIX == "Review adjudication: "
     ruling = adjudication.parse(f"{adjudication.PREFIX}WITHDRAW D3 - the citation was wrong")
     assert ruling == adjudication.Adjudication("WITHDRAW", "D3", "the citation was wrong")
@@ -171,8 +171,8 @@ def test_adjudication_comments_are_written_with_the_review_prefix_and_read_under
         "issue_comment", {"comment": {"body": f"{adjudication.PREFIX}MAINTAIN D1 - still true"}}
     )
     retired = "Oracle adjudication: MAINTAIN D1 - still true"
-    assert adjudication.parse(retired) == adjudication.Adjudication("MAINTAIN", "D1", "still true")
-    assert cli._is_adjudication("issue_comment", {"comment": {"body": retired}})
+    assert adjudication.parse(retired) is None
+    assert not cli._is_adjudication("issue_comment", {"comment": {"body": retired}})
 
 
 def _reset_comments(prefix: str) -> list[dict[str, Any]]:
@@ -195,6 +195,14 @@ def test_backoff_resets_are_written_with_the_review_prefix_and_read_under_both()
     assert reset.reset_moment(_reset_comments("Oracle backoff reset: "), HEAD, attesters) == datetime(
         2026, 10, 1, 11, tzinfo=UTC
     )
+
+
+def test_a_retired_name_backoff_reset_from_a_non_attester_is_rejected() -> None:
+    comments = _reset_comments("Oracle backoff reset: ")
+    comments[1]["user"] = {"login": "someone-else", "type": "User"}
+    assert reset.reset_moment(comments, HEAD, frozenset({OWNER})) is None
+    comments[1]["user"] = {"login": OWNER, "type": "Bot"}
+    assert reset.reset_moment(comments, HEAD, frozenset({OWNER})) is None
 
 
 def test_the_gate_reads_only_the_review_verdict_status_context() -> None:
