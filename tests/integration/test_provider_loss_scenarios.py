@@ -83,7 +83,8 @@ def test_the_last_served_provider_reviews_each_bucket_it_has_a_candidate_for(
     status = _status(harness, head)
     if expected is None:
         assert harness.omp_calls() == 0
-        assert status["state"] == "pending" and status["description"].startswith("pending: no reviewer available")
+        assert status["state"] == "pending"
+        assert status["description"].startswith(status_text.unavailable("provider outage") + status_text.DEGRADED_MARK)
         state = harness.github.artifact_json("review-verdict-state-302", "state.json")
         assert state["pending_cause"] == "unavailable" and state["retries"] == []
         assert run.attempts() == []
