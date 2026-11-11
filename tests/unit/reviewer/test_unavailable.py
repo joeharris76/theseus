@@ -381,3 +381,34 @@ def test_no_provider_name_is_printed_when_the_plan_routes_none() -> None:
     item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, "anthropic")
     assert "anthropic" not in unavailable.lines([item], Step(selection.PENDING), {})[0]
     assert "anthropic" not in unavailable.excluded_line(item, {})
+
+
+HEX = "b" * 40
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"### ✅ SHIP · no open findings\n\nReviewed {HEAD}\n\nrest",
+        f"### 🔧 SHIP WITH FIXES · 2 findings block merge · shadow (advisory)\n\n**1 High · 1 Low** · reviewed {HEAD} · fix",
+        f"### 🔧 SHIP WITH FIXES · unchanged (no reviewer ran)\n\nReviewed {HEAD}\n\nnote",
+    ],
+    ids=["ship", "ship-with-fixes", "repost"],
+)
+def test_the_reviewed_line_of_the_apps_layouts_names_the_head(body: str) -> None:
+    posts = [_post(BOT, _notice("quota"), EARLY), _post(BOT, body, LATE)]
+    assert not unavailable.repeats(posts, HEAD, _notice("quota"), BOT)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"### 🔧 SHIP WITH FIXES · 1 finding blocks merge\n\nintro\n\nReviewed {HEAD}",
+        f"### ✅ SHIP · no open findings\n\n**x** · reviewed {HEX}\n\nReviewed {HEAD}",
+        f"text\n### ✅ SHIP · no open findings\n\nReviewed {HEAD}",
+    ],
+    ids=["model-text-deeper", "meta-names-another-head", "not-at-start"],
+)
+def test_a_reviewed_line_that_is_not_the_apps_meta_line_does_not_count(body: str) -> None:
+    posts = [_post(BOT, _notice("quota"), EARLY), _post(BOT, body, LATE)]
+    assert unavailable.repeats(posts, HEAD, _notice("quota"), BOT)

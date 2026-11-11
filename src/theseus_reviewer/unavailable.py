@@ -12,7 +12,8 @@ from .selection import Attempt, Step
 MARKER_VERSION = "v1"
 MARKER_OPEN = "<!-- review-unavailable:"
 VERDICT_MARKER = re.compile(r"<!-- review-verdict: v2 [a-z]+ (?P<head>[0-9a-f]{40}) -->")
-REVIEWED_LINE = re.compile(r"^Reviewed (?P<head>[0-9a-f]{40})\b", re.MULTILINE)
+# The App's own meta line, directly after the headline: "Reviewed <head>" or "**counts** · reviewed <head>".
+REVIEWED_LINE = re.compile(r"\A### [^\n]*\n\n(?:\*\*[^\n]*?\*\* · reviewed |Reviewed )(?P<head>[0-9a-f]{40})\b")
 MARKER_PATTERN = re.compile(
     rf"{re.escape(MARKER_OPEN)} {MARKER_VERSION} (?P<head>[0-9a-f]{{40}}) (?P<key>[a-z0-9+-]+) -->"
 )
@@ -215,7 +216,10 @@ def _post_head(post: Mapping[str, Any], head: str) -> bool:
         post.get("commit_id") == head
         or f"for `{head}`" in body.split("\n", 1)[0]
         or any(found[0] == head for found in MARKER_PATTERN.findall(body))
-        or any(found.group("head") == head for found in (*VERDICT_MARKER.finditer(body), *REVIEWED_LINE.finditer(body)))
+        or any(
+            found.group("head") == head
+            for found in (*VERDICT_MARKER.finditer(body), *filter(None, [REVIEWED_LINE.match(body)]))
+        )
     )
 
 

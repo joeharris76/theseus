@@ -442,3 +442,17 @@ def test_setext_underlines_do_not_turn_model_text_into_headings() -> None:
     assert layout.neutralize("Title\n=") == "Title\n\\="
     assert layout.neutralize("a\n\n----\nb") == "a\n\n----\nb"
     assert layout.neutralize("x = a-b\n- item") == "x = a-b\n- item"
+
+
+def test_code_inside_a_fence_is_left_alone_and_the_same_lines_outside_it_are_escaped() -> None:
+    lines = "key: v\n---\n# comment\n- [ ] todo\nTitle\n====="
+    for fence in ("```", "~~~", "````yaml"):
+        closer = fence[0] * len(fence.rstrip("yaml"))
+        inside = f"before\n{fence}\n{lines}\n{closer}\nafter"
+        assert layout.neutralize(inside) == inside
+    outside = layout.neutralize(lines)
+    assert "\\---" in outside and "\\# comment" in outside and "`[ ]`" in outside and "\\=====" in outside
+    mixed = layout.neutralize(f"# a\n```\n{lines}\n```\n# b\n- [x] c")
+    assert mixed == f"\\# a\n```\n{lines}\n```\n\\# b\n- `[x]` c"
+    unclosed = layout.neutralize(f"```\n{lines}")
+    assert unclosed == f"```\n{lines}\n```"

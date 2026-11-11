@@ -37,20 +37,46 @@ _SETEXT = re.compile(r"(?<=\S)\n([ \t]{0,3})([=-])(?=[=-]*[ \t]*(?:\n|$))", re.M
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
-def _close_fence(text: str) -> str:
-    """Close a code fence the text leaves open, so it cannot swallow what follows inside a collapsible."""
+def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
+    """Split text into (is_code, line) pairs, fence lines included as code, and the fence left open, if any."""
     opened: str | None = None
+    pairs: list[tuple[bool, str]] = []
     for line in text.split("\n"):
         found = _FENCE.match(line)
-        if found is None:
-            continue
-        fence, rest = found.groups()
-        if opened is None:
-            if fence[0] != "`" or "`" not in rest:
-                opened = fence
-        elif fence[0] == opened[0] and len(fence) >= len(opened) and not rest.strip():
-            opened = None
-    return text if opened is None else f"{text}\n{opened}"
+        code = opened is not None
+        if found is not None:
+            fence, rest = found.groups()
+            if opened is None:
+                if fence[0] != "`" or "`" not in rest:
+                    opened, code = fence, True
+            elif fence[0] == opened[0] and len(fence) >= len(opened) and not rest.strip():
+                opened, code = None, True
+        pairs.append((code, line))
+    return pairs, opened
+
+
+def _prose(chunk: str) -> str:
+    chunk = _SETEXT.sub(lambda match: f"\n{match.group(1)}\\{match.group(2)}", chunk)
+    chunk = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", chunk)
+    return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
+
+
+def _outside_code(text: str) -> str:
+    """Close a fence the text leaves open, and escape headings and task items only where they are prose."""
+    pairs, opened = _scan(text)
+    out: list[str] = []
+    run: list[str] = []
+    for code, line in pairs:
+        if code:
+            if run:
+                out.append(_prose("\n".join(run)))
+                run = []
+            out.append(line)
+        else:
+            run.append(line)
+    if run:
+        out.append(_prose("\n".join(run)))
+    return "\n".join(out + ([opened] if opened is not None else []))
 
 
 def severity_rank(severity: str) -> int:
@@ -72,11 +98,7 @@ def neutralize(text: str) -> str:
     It can no longer open or close a collapsible, start a comment or heading, or turn a list item into a task
     list checkbox (ticking one would edit the review, and an edited review holds the pull request).
     """
-    text = _close_fence(display_path(text))
-    text = _RAW_TAG.sub("&lt;", text)
-    text = _SETEXT.sub(lambda match: f"\n{match.group(1)}\\{match.group(2)}", text)
-    text = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", text)
-    return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", text)
+    return _outside_code(_RAW_TAG.sub("&lt;", display_path(text)))
 
 
 def plain_path(path: str) -> str:
