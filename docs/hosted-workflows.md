@@ -104,6 +104,8 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
 
+Status descriptions are at most 140 characters, lead with the decision or state and name no tier. Programs that read them match only these tokens, defined once in `theseus_reviewer.status_text`: a trailing ` [run <id>]`, ` (reposted)` before it, `SHIP WITH FIXES`, `escalated D1,D2`, `only exempt paths changed`, the prefixes `refused after`, `a review was edited` and `review-verdict failed twice without a result at: `, ` · degraded: <providers>`, and for a `review-gate` that is waiting, the prefix `Waiting for review-verdict` (the head appears only inside the quoted stand-in line `Stand-in review: APPROVE <40-hex sha>`). Anything else is prose, and a reader that cannot classify a description treats it as not passing.
+
 `theseus gate` exits with:
 
 | Exit | Meaning | `gate / gate` job |
@@ -144,6 +146,12 @@ The attempt phase probes the gateway's served models before choosing a reviewer,
 - A review that cannot run for availability alone ends pending with cause `unavailable`: no attempt or daily retry is spent, the sweep retries it after the flat `retry.backoff_start_minutes` (at most about 24 a day), and `review-gate` stays pending. Those dispatches are exempt from the sweep's daily dispatch cap, and the state records each one so a later `all-absent` retry still has its full budget after the outage.
 - The `health` job runs on `schedule` only (the caller's existing hourly cron) and needs no permission beyond `contents: read`. It exits 1, and the scheduled run goes red, when the gateway is unreachable, the client token is rejected, or a provider named in the trusted omp config is not served. Push, pull request and dispatch events skip it. It reads the same `REVIEW_GATEWAY_URL` and `REVIEW_GATEWAY_TOKEN` secrets as the attempt steps. The CI health job cannot see the host's owner denylist, so a provider the owner removed on purpose still shows the scheduled run red until the trusted config no longer names it; that is the expected CI-side behaviour for a deliberate removal, and the host monitor is what reports it as a notice rather than an alert.
 
+## The not-reviewed notice
+
+When no reviewer produces a verdict, the pending review (heading `### review-verdict: pending for <sha>`) lists each absence under the bold title `**Reviewers not available**` as a short reason: provider quota, gateway unreachable, provider error, timeout, an answer that was not a valid review, a reviewer that did not read every changed hunk, a change too large to read, or run artifacts that failed validation. Provider text never reaches GitHub; it stays in the run log and the uploaded attempt artifacts. The same reasons fill the `Reviewers not available` and `Provider availability` sections of verdict bodies. A `Next step:` line follows by cause: transient causes say the hourly sweep retries and a maintainer can comment `/review`; a change too large says to split the pull request or ask an owner for a stand-in review; withheld artifacts and a reviewer that never reported say to push a new head.
+
+The notice ends with a hidden marker, `<!-- review-unavailable: v1 <40-hex head sha> <cause-key> -->`. The cause key is the sorted set of cause keys joined by `+` (`quota`, `provider-auth`, `timeout`, `invalid-answer`, `empty-answer`, `incomplete-read`, `provider-error`, `run-failed`, `too-large`, `gateway-unreachable`, `gateway-rejected`, `gateway-error`, `not-served`, `capacity-unknown`, `blocked`, `no-report`, `artifacts-invalid`, `reviewer-disabled`, `attempt-limit`, `no-reviewer`). `drive publish` skips the post when the latest post by the review App for the same head carries the same marker; only markers are compared, never prose. A missing, unreadable or differently keyed previous marker, or a listing that cannot be read, posts again. The status and the retry state are written either way.
+
 ## Permission ceilings
 
 A callee job can hold at most what the caller's calling job grants. The example callers grant the union of what the callee jobs ask for; each callee job then narrows it.
@@ -183,6 +191,10 @@ Candidate code never meets a credential: the pull request head is checked out wi
 ## The `workflow_run` bridge
 
 The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-request]`. GitHub matches that list against the triggering workflow's `name:`, not its file name. The consumer's `review-request.yml` therefore must keep `name: review-request`. `gate.yml` repeats the check on the event itself: its `bridge` job runs only when `github.event.workflow_run.name` equals `review_workflow_name` and the run belongs to the same repository, then dispatches `caller_workflow` for every open pull request whose head matches and whose base is gated, on that pull request's own base branch. The bridge checks out only the pinned `bases.py` matcher at `theseus_ref`, runs no candidate code and holds no secrets.
+
+## Reading review output
+
+Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-defect`, `review-finding`, and a `review-verdict` marker that readers accept but no release writes yet). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
 
 ## Local pre-submission review
 

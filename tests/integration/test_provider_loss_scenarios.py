@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import providers
+from theseus_reviewer import providers, status_text, unavailable
 from theseus_reviewer._vendor import yaml
 
 from .harness import ALPHA_ROOT, CHECKER, POLICY, Harness
@@ -83,7 +83,8 @@ def test_the_last_served_provider_reviews_each_bucket_it_has_a_candidate_for(
     status = _status(harness, head)
     if expected is None:
         assert harness.omp_calls() == 0
-        assert status["state"] == "pending" and status["description"].startswith("pending: no reviewer available")
+        assert status["state"] == "pending"
+        assert status["description"].startswith(status_text.unavailable("provider outage") + status_text.DEGRADED_MARK)
         state = harness.github.artifact_json("review-verdict-state-302", "state.json")
         assert state["pending_cause"] == "unavailable" and state["retries"] == []
         assert run.attempts() == []
@@ -105,16 +106,24 @@ def test_an_unknown_or_empty_served_set_fails_closed_as_unavailable_without_spen
 
     status = _status(harness, head)
     assert status["state"] == "pending"
-    assert status["description"].startswith("pending: no reviewer available")
+    expected = {
+        "down": status_text.unavailable("model gateway unusable or misconfigured"),
+        "rejected": status_text.unavailable("model gateway rejected the client token"),
+        "malformed": status_text.unavailable("model gateway unusable or misconfigured"),
+    }
+    if mode == "serve-none":
+        assert status["description"].startswith(status_text.unavailable("provider outage"))
+    else:
+        assert status["description"] == expected[mode]
     assert harness.omp_calls() == 0 and run.attempts() == []
     state = harness.github.artifact_json("review-verdict-state-303", "state.json")
     assert state["pending_cause"] == "unavailable" and state["retries"] == []
     assert "success" not in [item["state"] for item in harness.github.gate_statuses(head)]
     detail = {
         "serve-none": "unavailable",
-        "down": "gateway answered 503",
-        "rejected": "client token rejected",
-        "malformed": "malformed model list",
+        "down": unavailable.GATEWAY_ERROR.reason,
+        "rejected": unavailable.GATEWAY_REJECTED.reason,
+        "malformed": unavailable.GATEWAY_ERROR.reason,
     }[mode]
     assert detail in harness.github.reviews[303][-1]["body"] or detail in status["description"]
 
