@@ -41,7 +41,7 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
     assert harness.github.threads[pr] == []
     assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     latest_review = harness.github.reviews[pr][-1]["body"]
-    assert "No review thread exists for D1" in latest_review
+    assert "D1 · " in latest_review and "(thread below)" not in latest_review
     assert "Dispute: D<n> - <reason>" in latest_review
 
     gate_step = harness.gate(pr, head)
@@ -129,8 +129,8 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
     }
 
     latest_review = harness.github.reviews[pr][-1]
-    assert "Decision: **SHIP**." in latest_review["body"]
-    assert "Owner adjudication: **WITHDRAW D1** - verified as dead code by owner" in latest_review["body"]
+    assert latest_review["body"].startswith("### ✅ SHIP · owner ruling: WITHDRAW D1")
+    assert "**Owner ruling:** WITHDRAW D1 - verified as dead code by owner" in latest_review["body"]
     latest_verdict_status = harness.github.review_statuses(head)[-1]
     assert latest_verdict_status["state"] == "success"
     assert "owner adjudication: WITHDRAW D1; SHIP" in latest_verdict_status["description"]

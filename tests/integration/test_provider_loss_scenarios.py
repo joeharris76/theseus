@@ -63,7 +63,7 @@ def test_losing_any_one_provider_still_reviews_every_bucket_on_a_served_candidat
         status["description"].endswith(f" · degraded: {lost}") or f" · degraded: {lost} [run" in status["description"]
     )
     body = harness.github.reviews[301][-1]["body"]
-    assert "Provider availability" in body and f"not served by the gateway: {lost}" in body
+    assert "Run details" in body and f"not served by the gateway: {lost}" in body
     if expected != options[0]:
         assert f"{options[0]} → {expected}" in body
         assert f"Model that ran: {expected}." in body

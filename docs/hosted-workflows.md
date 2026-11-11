@@ -140,7 +140,7 @@ When no artifact exists, the Jobs API must prove the trusted `review` job was sk
 
 The attempt phase probes the gateway's served models before choosing a reviewer, so a provider that is gone changes the reviewer's model, never the outcome of the run; see [Provider loss](consumer-policy.md#provider-loss) for the selection rules.
 
-- A review that ran on a substitute, or while a routed provider is unserved or excluded, ends its status description with `· degraded: <providers>` and has a `Provider availability` body section.
+- A review that ran on a substitute, or while a routed provider is unserved or excluded, ends its status description with `· degraded: <providers>` and lists the provider availability in the body's collapsed `Run details` block.
 - A review that cannot run for availability alone ends pending with cause `unavailable`: no attempt or daily retry is spent, the sweep retries it after the flat `retry.backoff_start_minutes` (at most about 24 a day), and `review-gate` stays pending. Those dispatches are exempt from the sweep's daily dispatch cap, and the state records each one so a later `all-absent` retry still has its full budget after the outage.
 - The `health` job runs on `schedule` only (the caller's existing hourly cron) and needs no permission beyond `contents: read`. It exits 1, and the scheduled run goes red, when the gateway is unreachable, the client token is rejected, or a provider named in the trusted omp config is not served. Push, pull request and dispatch events skip it. It reads the same `REVIEW_GATEWAY_URL` and `REVIEW_GATEWAY_TOKEN` secrets as the attempt steps. The CI health job cannot see the host's owner denylist, so a provider the owner removed on purpose still shows the scheduled run red until the trusted config no longer names it; that is the expected CI-side behaviour for a deliberate removal, and the host monitor is what reports it as a notice rather than an alert.
 
@@ -186,7 +186,7 @@ The caller `review-gate.yml` triggers on `workflow_run: workflows: [review-reque
 
 ## Reading review output
 
-Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-defect`, `review-finding`, and a `review-verdict` marker that readers accept but no release writes yet). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
+Review bodies and threads carry HTML-comment markers (`review-protocol`, `review-defect`, `review-finding`, and the `review-verdict: v2` marker, which every review body written after 0.2.8 carries in place of the old `### review-verdict:` heading). They are the supported machine interface; the surrounding prose is presentation and may change. The grammar is in [review-markers.md](review-markers.md).
 
 ## Local pre-submission review
 

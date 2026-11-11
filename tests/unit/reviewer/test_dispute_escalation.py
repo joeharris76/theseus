@@ -286,7 +286,7 @@ def test_a_withdrawal_stops_the_finding_blocking(monkeypatch: pytest.MonkeyPatch
     assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
     assert "escalated" not in record and record["carried"] is True
     assert final.description.startswith("owner adjudication: WITHDRAW D1")
-    assert final.review["body"].startswith("### review-verdict: success for `")
+    assert final.review["body"].startswith("### ✅ SHIP · owner ruling: WITHDRAW D1")
 
 
 def test_maintaining_a_finding_closes_its_dispute_and_keeps_it_blocking(

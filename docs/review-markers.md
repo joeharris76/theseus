@@ -1,6 +1,6 @@
 # Review markers
 
-Theseus posts reviews and review threads whose visible text is presentation and whose HTML-comment markers are the machine interface. A consumer that needs to know a verdict, a finding's identity or a protocol record reads a marker. It does not parse prose. One exception applies today: the `review-verdict: v2` marker is accepted by readers but no release writes it yet, so the verdict of a posted review is read from its `review-protocol` record (`decision`, `head_sha`) and, for the gate, the `### review-verdict: <state> for `<40hex>`` heading, which is still the only verdict line written. A release that starts writing the v2 marker will say so here; the heading's wording is stable until then. The prose (headings, wording, ordering, emoji, tables, collapsed sections) may change in any release without notice; the grammars below change only by a new version.
+Theseus posts reviews and review threads whose visible text is presentation and whose HTML-comment markers are the machine interface. A consumer that needs to know a verdict, a finding's identity or a protocol record reads a marker. It does not parse prose. Every review body written after 0.2.8 carries the `review-verdict: v2` marker and no longer starts with the `### review-verdict: <state> for `<40hex>`` heading; that heading is only what 0.2.8 and earlier wrote, and readers must keep accepting it for older reviews. For every review with a protocol record, the verdict is also in its `review-protocol` record (`decision`, `head_sha`). The prose (headings, wording, ordering, emoji, tables, collapsed sections) may change in any release without notice; the grammars below change only by a new version.
 
 Every marker is an HTML comment, so GitHub does not render it. Model text cannot forge one: the reviewer sanitizes every model-supplied string and rewrites `<!--` and `-->` to `&lt;!--` and `--&gt;` before it reaches a body, so a raw marker in a posted body was written by Theseus. Trust a marker only on a body authored by the review App, unedited (`last_edited_at` null and `includes_created_edit` false). Theseus itself never trusts an edited bot review.
 
@@ -9,7 +9,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 | Marker | Lives on | Meaning |
 |---|---|---|
 | `review-protocol: v1` | review body | the decision record |
-| `review-verdict: v2` | review body | the verdict state for one head (read by the gate; not yet written) |
+| `review-verdict: v2` | review body | the verdict state for one head (written on every verdict body; read by the gate) |
 | `review-unavailable: v1` | review body | reserved: the head was not reviewed because no reviewer was available |
 | `review-defect` | review thread comment | the defect id the thread belongs to |
 | `review-finding` | review thread comment | the finding fingerprint used for deduplication |
@@ -34,12 +34,18 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 Reading rules, which the gate applies when it decides whether a review is a receipt for a head:
 
 - A body carries at most one `review-verdict` marker, anywhere in the body. Two or more, or one that is malformed, is not a receipt.
-- The older heading form `### review-verdict: <state> for `<40hex>`` at the very start of the body is equally accepted.
+- The older heading form `### review-verdict: <state> for `<40hex>`` at the very start of the body is equally accepted. Reviews written after 0.2.8 do not carry it.
 - A body that carries both forms is a receipt only if they agree on state and SHA. Any disagreement is not a receipt.
 - The SHA must equal the head under test, and the state must be `success` for a passing receipt.
 - A receipt is additionally bound to the verdict status by the `run_uuid` in its `review-protocol` record, and must be unedited.
 
 For every review with a protocol record, `decision` is `SHIP` if and only if the verdict state is `success`.
+
+The marker sits on its own line immediately before the `review-protocol` record, so the record stays the last thing in the body. A "not reviewed" body (no reviewer ran, no protocol record) ends with the marker, with state `pending`.
+
+### What the body looks like (presentation, not interface)
+
+The first line is `### <mark> <DECISION> · <one fact>` with the marks ✅ SHIP, 🔧 SHIP WITH FIXES, ⛔ DO NOT SHIP, ⏳ NOT REVIEWED (YET) and 🚫 REFUSED. A second line gives severity counts, the reviewed head and, when findings are open, how to contest them (`Dispute: D<n> - <reason>`). Each finding is one line, most severe first: `<mark> **<Severity>** · D<n> · <title> · <path>`, with 🔴 Critical, 🟠 High, 🟡 Medium, 🔵 Low and ⚪ Advisory. Every listed finding blocks the merge whatever its severity, and the severity word is always printed next to the mark. A finding without a review thread keeps its detail in a collapsed block. The reviewer's notes and the attempt log are collapsed. Model-written text placed in a body cannot open or close a collapsible, start a heading or a comment, or form a task-list checkbox: ticking one would edit the review, and Theseus treats an edited review as tampering.
 
 ## `review-unavailable: v1`
 
@@ -73,6 +79,8 @@ When a thread has no `review-finding` marker (threads from older releases), Thes
 ```
 
 `<Severity>` is `Critical`, `High`, `Medium` or `Low`; `<mark>` is one of 🔴 🟠 🟡 🔵 ⚪; `D<n>` is a defect id. Both forms yield the same severity and title, and the title alone (without decoration) is what Theseus hashes and shows to the reviewer in a dispute. A title in neither form gives no fingerprint (the thread is not recognised as a posted finding), and the dispute brief shows the thread's first line as written. When both forms appear in one body, the earliest one wins.
+
+Threads written after 0.2.8 use the second form. The detail follows, then a footer line, `<sub>Blocks merge · to contest, reply starting <code>Dispute:</code> with file:line evidence</sub>`, then the `review-defect` and `review-finding` markers. The footer is not a dispute: a dispute is a reply whose line starts with `Dispute:`, and the footer line starts with `<sub>`.
 
 ## `review-local-record: v1`
 

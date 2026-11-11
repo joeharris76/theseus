@@ -140,7 +140,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: success for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\nDecision: **SHIP**.\n\nReviewer: medium (role review, omp @default).\n\nThe change keeps checker semantics; no defects.\n\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"0e0101aadfc01475f8e5f6e594b052f2\", \"patch_map\": {\"5b21f32d\": \"6327e9b5e5fcdc28\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
+        "body": "### ✅ SHIP · no open findings\n\nReviewed <sha0>\n\n<details><summary>Reviewer notes · medium (omp @default)</summary>\n\nReviewer: medium (role review, omp @default).\n\nThe change keeps checker semantics; no defects.\n\n</details>\n\n<!-- review-verdict: v2 success <sha0> -->\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"0e0101aadfc01475f8e5f6e594b052f2\", \"patch_map\": {\"5b21f32d\": \"6327e9b5e5fcdc28\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
         "commit_id": "<sha0>",
         "creator": "benchbox-review[bot]"
       }

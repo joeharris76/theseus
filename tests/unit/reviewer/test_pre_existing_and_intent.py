@@ -171,7 +171,7 @@ def test_unverified_pre_existing_findings_publish_as_blocking_and_remain_open(po
 def test_an_unverified_pre_existing_finding_does_not_carry_a_verified_tag(policy: Policy, tmp_path: Path) -> None:
     final = _final(policy, tmp_path, _plan_with(policy), _v("s", [_old("High")]))
     assert final.state == "failure"
-    assert final.review["comments"][0]["body"].startswith("**High**: High issue\n")
+    assert final.review["comments"][0]["body"].startswith("🟠 **High** · D1 · High issue\n")
     assert "advisory" not in protocol.decode_marker(final.review["body"])
 
 

@@ -39,8 +39,7 @@ def test_an_oversized_review_body_is_capped_and_keeps_every_defect(policy: Polic
     assert final.review is not None
     body = final.review["body"]
     assert len(body) <= GITHUB_LIMIT
-    assert body.startswith("### review-verdict: failure for `")
-    assert "Decision: **SHIP WITH FIXES**." in body
+    assert body.startswith("### 🔧 SHIP WITH FIXES · 10 findings block merge")
     assert "Size limit: the detail of 15 of 15 listed defect(s) was shortened" in body
     assert report.TRUNCATED in body
     for index in range(15):
