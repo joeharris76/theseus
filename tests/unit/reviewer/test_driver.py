@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -376,6 +377,34 @@ def test_a_minimise_failure_changes_neither_the_exit_code_nor_what_was_posted_no
     assert (code, kinds[:-1], written) == baseline
     assert kinds[-1] == "minimize"
     assert "::warning::" in capsys.readouterr().err
+
+
+def test_a_hanging_minimise_still_leaves_state_recorded_written_and_exit_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outputs: Path,
+    sink: RecordingSink,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release = threading.Event()
+    seen_outputs: list[str] = []
+
+    def stall(repo: str, pr: int, head: str, bot_login: str) -> list[str]:
+        seen_outputs.append(outputs.read_text(encoding="utf-8"))
+        release.wait(30)
+        return []
+
+    monkeypatch.setattr(sink, "minimize_superseded", stall)
+    monkeypatch.setattr(driver, "MINIMIZE_STEP_SECONDS", 0.2)
+    try:
+        code, kinds, written = _publish_with_minimizing(tmp_path, monkeypatch, sink, flag=True)
+    finally:
+        release.set()
+
+    assert code == 0
+    assert "state_recorded=true" in written and "state_recorded=true" in seen_outputs[0]
+    assert kinds == ["comment", "review", "status", "gate"]
+    assert "no answer within" in capsys.readouterr().err
 
 
 def test_publish_still_succeeds_when_the_minimise_step_cannot_read_the_policy_flag(

@@ -7,7 +7,7 @@ verdict, the status, the gate or the record: every failure is reported and swall
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from . import protocol
@@ -20,11 +20,23 @@ def carries_record(body: Any) -> bool:
         return False
 
 
-def superseded(reviews: Sequence[Mapping[str, Any]], bot_login: str, head_sha: str) -> list[str]:
+def _record_of(review: Mapping[str, Any]) -> Mapping[str, Any]:
+    return protocol.decode_marker(review["body"]) or {}
+
+
+def _open_keys(record: Mapping[str, Any]) -> set[str]:
+    return {f"c{record.get('cycle')}-{item['id']}" for item in record.get("open_defects") or ()}
+
+
+def superseded(
+    reviews: Sequence[Mapping[str, Any]], bot_login: str, head_sha: str, threaded: Collection[str] = ()
+) -> list[str]:
     """Node ids of the bot's record-bearing reviews that a newer record-bearing review for ``head_sha`` replaced.
 
     Nothing is returned unless the newest record-bearing review is on ``head_sha``: that review (and every review
-    without a record, every human review and every inline thread) is never a candidate.
+    without a record, every human review and every inline thread) is never a candidate. An earlier review also stays
+    expanded when it lists a defect that is still open in the newest record but has no review thread (``threaded``
+    holds the ``c<cycle>-D<n>`` keys of the bot's threads): its detail and dispute instruction exist only there.
     """
     bearing = [
         review
@@ -36,8 +48,11 @@ def superseded(reviews: Sequence[Mapping[str, Any]], bot_login: str, head_sha: s
     ]
     if len(bearing) < 2 or bearing[-1].get("commit_id") != head_sha:
         return []
+    threadless = _open_keys(_record_of(bearing[-1])) - set(threaded)
     return [
         node_id
-        for node_id in (review.get("node_id") for review in bearing[:-1])
+        for review in bearing[:-1]
+        if not _open_keys(_record_of(review)) & threadless
+        for node_id in [review.get("node_id")]
         if isinstance(node_id, str) and node_id
     ]

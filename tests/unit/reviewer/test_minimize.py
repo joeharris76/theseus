@@ -183,6 +183,7 @@ def test_minimising_through_the_pull_request_touches_only_superseded_reviews(
     human = _review(4, login="joe", user_type="User", head=OLD)
     reviews = [_review(1, head=OLD), _review(2, "Not reviewed.", head=OLD), human, _review(3)]
     monkeypatch.setattr(github, "reviews", lambda repo, pr: reviews)
+    monkeypatch.setattr(github, "review_threads", lambda repo, pr: [])
     sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
     assert sink.minimize_superseded("o/r", 7, HEAD, BOT) == []
     assert [fields for kind, fields, _ in gh.calls if kind == "mutation"] == [{"id": ["PRR_1"]}]
@@ -308,3 +309,72 @@ def test_a_real_edit_is_still_detected_next_to_minimised_reviews() -> None:
     _, _, minimised = _probe_review("after_review_minimize")
     edited = copy.deepcopy(minimised) | {"id": 9, "last_edited_at": "2026-11-10T16:00:00Z"}
     assert protocol.history([minimised, edited], BOT).error == "a review was edited"
+
+
+# --- findings that exist only in a review body keep that review expanded ------------------------------------------
+
+
+def _defect(number: int) -> dict[str, Any]:
+    return {"id": f"D{number}", "severity": "High", "file": "f.txt", "line": 1, "end_line": None, "title": f"t{number}"}
+
+
+def _listing(number: int, defects: list[int], *, head: str = HEAD, cycle: int = 1) -> dict[str, Any]:
+    record = _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", open_defects=[_defect(n) for n in defects], cycle=cycle)
+    body = "Body.\n\n" + protocol.encode_marker({k: v for k, v in record.items() if k != "patch_map"})
+    return _review(number, body, head=head)
+
+
+def test_an_earlier_review_listing_a_still_open_threadless_defect_stays_expanded() -> None:
+    reviews = [_listing(1, [1, 2], head=OLD), _listing(2, [3], head=OLD), _listing(3, [1, 2])]
+    assert minimize.superseded(reviews, BOT, HEAD, threaded={"c1-D2"}) == ["PRR_2"]
+    assert minimize.superseded(reviews, BOT, HEAD, threaded={"c1-D1", "c1-D2"}) == ["PRR_1", "PRR_2"]
+    assert minimize.superseded(reviews, BOT, HEAD) == ["PRR_2"]
+
+
+def test_a_threadless_defect_that_is_fixed_in_the_newest_record_no_longer_protects_its_review() -> None:
+    reviews = [_listing(1, [1], head=OLD), _listing(2, [2])]
+    assert minimize.superseded(reviews, BOT, HEAD) == ["PRR_1"]
+
+
+def test_a_defect_id_from_another_cycle_does_not_protect_a_review() -> None:
+    reviews = [_listing(1, [1], head=OLD, cycle=1), _listing(2, [1], cycle=2)]
+    assert minimize.superseded(reviews, BOT, HEAD) == ["PRR_1"]
+
+
+def test_the_sink_reads_thread_markers_to_decide_which_reviews_stay_expanded(
+    monkeypatch: pytest.MonkeyPatch, gh: FakeGh
+) -> None:
+    reviews = [_listing(1, [1, 2], head=OLD), _listing(2, [3], head=OLD), _listing(3, [1, 2])]
+    bot = {"author": f"{BOT}[bot]", "author_type": "Bot", "body": "x\n<!-- review-defect: c1-D1 -->", "resolved": True}
+    monkeypatch.setattr(github, "reviews", lambda repo, pr: reviews)
+    monkeypatch.setattr(github, "review_threads", lambda repo, pr: [bot])
+    sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
+    assert sink.minimize_superseded("o/r", 7, HEAD, BOT) == []
+    # D2 has no thread, so review 1 stays; review 2 lists only D3, which the newest record no longer holds open.
+    assert [fields for kind, fields, _ in gh.calls if kind == "mutation"] == [{"id": ["PRR_2"]}]
+
+
+# --- the step is bounded ------------------------------------------------------------------------------------------
+
+
+def test_every_graphql_call_has_a_timeout_and_a_timeout_is_a_reported_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Any] = []
+
+    def hang(argv: list[str], **kwargs: Any) -> Any:
+        seen.append(kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(github.subprocess, "run", hang)
+    with pytest.raises(github.GitHubError, match="timed out"):
+        github.minimize_reviews(["PRR_1"], "t")
+    assert seen == [github.MINIMIZE_CALL_SECONDS]
+
+
+def test_the_total_time_cap_skips_the_remaining_reviews(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeGh()
+    monkeypatch.setattr(github.subprocess, "run", fake)
+    clock = iter([0.0, 0.0, 1000.0, 1000.0, 1000.0])
+    monkeypatch.setattr(github, "monotonic", lambda: next(clock))
+    failures = github.minimize_reviews(["PRR_1", "PRR_2"], "t")
+    assert [fields for kind, fields, _ in fake.calls if kind == "mutation"] == [{"id": ["PRR_1"]}]
+    assert len(failures) == 1 and failures[0].startswith("PRR_2:") and "limit" in failures[0]

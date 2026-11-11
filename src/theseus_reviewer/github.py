@@ -10,7 +10,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 from urllib.parse import quote
 
@@ -571,11 +571,20 @@ query($ids: [ID!]!) {
 """
 
 
+MINIMIZE_CALL_SECONDS = 20
+MINIMIZE_TOTAL_SECONDS = 60
+
+
 def _graphql_as(token: str, query: str, variables: Sequence[tuple[str, str]]) -> Any:
     argv = ["gh", "api", "graphql", "-f", f"query={query}"]
     for name, value in variables:
         argv += ["-f", f"{name}={value}"]
-    result = subprocess.run(argv, capture_output=True, text=True, check=False, env=_token_env(token))
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, check=False, env=_token_env(token), timeout=MINIMIZE_CALL_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(f"GitHub GraphQL request timed out after {MINIMIZE_CALL_SECONDS} seconds") from exc
     if result.returncode != 0:
         raise GitHubError(f"GitHub GraphQL request failed: {(result.stderr.strip() or result.stdout.strip())[:500]}")
     try:
@@ -594,6 +603,7 @@ def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
     ids = list(dict.fromkeys(node_ids))
     if not ids:
         return []
+    deadline = monotonic() + MINIMIZE_TOTAL_SECONDS
     already: set[str] = set()
     for batch in edits.batches(ids):
         nodes = _graphql_as(token, MINIMIZED_QUERY, [("ids[]", node_id) for node_id in batch]).get("nodes")
@@ -603,6 +613,9 @@ def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
     failures: list[str] = []
     for node_id in ids:
         if node_id in already:
+            continue
+        if monotonic() > deadline:
+            failures.append(f"{node_id}: skipped, the {MINIMIZE_TOTAL_SECONDS}-second limit was reached")
             continue
         try:
             _graphql_as(token, MINIMIZE_MUTATION, [("id", node_id)])
