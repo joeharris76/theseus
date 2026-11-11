@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from theseus_reviewer import status_text
+
 from .harness import CHECKER, Harness
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
@@ -32,7 +34,7 @@ def test_a_failed_install_posts_a_distinct_pending_status_runs_no_attempt_and_is
     assert run.attempts() == [] and harness.omp_calls() == 0
     [status] = harness.github.review_statuses(head)
     assert status["state"] == "pending"
-    assert status["description"] == "the pinned omp build could not be installed; no reviewer ran"
+    assert status["description"] == status_text.OMP_INSTALL
     assert harness.github.artifact_json("review-verdict-state-71", "state.json")["pending_cause"] == "omp-install"
 
     harness.github.age(run.run, 600)

@@ -13,8 +13,20 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
+from . import status_text
 from .matchers import Matchers
 from .policy import Binding, PromotionRules
+from .status_text import (
+    EDITED_REASON,
+    ESCALATED,
+    EXEMPT_SUCCESS_DESCRIPTION,
+    OPEN_FINDINGS_LABEL,
+    REFUSED_DESCRIPTION_PREFIX,
+    REPOSTED_MARK,
+    STANDIN_APPROVAL,
+    run_suffix,
+    strip_run_suffix,
+)
 
 REVIEW_CONTEXT = "review-verdict"
 _REVIEW_VERDICT = re.compile(
@@ -23,14 +35,7 @@ _REVIEW_VERDICT = re.compile(
 )
 _VERDICT_MARKER = re.compile(rf"<!-- {re.escape(REVIEW_CONTEXT)}: v2 (?P<state>[a-z]+) (?P<sha>[0-9a-f]{{40}}) -->")
 _VERDICT_MARKER_OPEN = re.compile(rf"<\s*!\s*-\s*-\s*{re.escape(REVIEW_CONTEXT)}")
-_RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
-EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
-REFUSED_DESCRIPTION_PREFIX = "refused after"
-STANDIN_APPROVAL = "Stand-in review: APPROVE"
 _STANDIN_MARKER = re.compile(rf"{re.escape(STANDIN_APPROVAL)} ([0-9a-f]{{40}})")
-OPEN_FINDINGS_LABEL = "SHIP WITH FIXES"
-REPOSTED_MARK = " (reposted)"
-_ESCALATED = re.compile(r"escalated (?P<ids>D[0-9]+(?:,D[0-9]+)*)")
 
 
 def _attested_shas(comment: dict[str, Any]) -> list[str]:
@@ -128,12 +133,7 @@ def _receipt_candidates(
 
 
 def _status_run_uuid(status: dict[str, Any]) -> str | None:
-    match = _RUN_SUFFIX.search(status.get("description") or "")
-    return match.group("run") if match else None
-
-
-def _strip_run_suffix(description: str | None) -> str:
-    return _RUN_SUFFIX.sub("", description or "")
+    return run_suffix(status.get("description"))
 
 
 def _receipt_run_uuid(receipt: dict[str, Any]) -> str | None:
@@ -171,7 +171,7 @@ def _receipt_backed_success(
     for status in reversed(verdicts):
         if status["state"] != "success":
             return False
-        if _strip_run_suffix(status.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
+        if strip_run_suffix(status.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
             continue
         status_uuid = _status_run_uuid(status)
         own = [
@@ -204,7 +204,7 @@ def _parse_time(value: str) -> datetime:
 
 
 def _is_repost(status: dict[str, Any]) -> bool:
-    return _strip_run_suffix(status.get("description")).endswith(REPOSTED_MARK)
+    return strip_run_suffix(status.get("description")).endswith(REPOSTED_MARK)
 
 
 def _latest_decisive(verdicts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -212,8 +212,6 @@ def _latest_decisive(verdicts: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _edit_hold(status: dict[str, Any]) -> bool:
-    from .edits import EDITED_REASON
-
     return status["state"] == "pending" and (status.get("description") or "").startswith(EDITED_REASON)
 
 
@@ -226,21 +224,15 @@ def _open_findings(verdicts: list[dict[str, Any]]) -> bool:
     )
 
 
-def _open_findings_message(verdicts: list[dict[str, Any]], head_sha: str) -> str:
+def _open_findings_message(verdicts: list[dict[str, Any]]) -> str:
     from .adjudication import GRAMMAR
+    from .protocol import COMMENT_DISPUTE_GRAMMAR
 
     decisive = _latest_decisive(verdicts)
-    match = _ESCALATED.search((decisive or {}).get("description") or "")
+    match = ESCALATED.search((decisive or {}).get("description") or "")
     if match:
-        return (
-            f"review: {match.group('ids')} on {head_sha} stayed open through repeated dispute re-reviews and "
-            f"need the owner's ruling: post '{GRAMMAR}' for each after an Owner instruction comment naming this "
-            "pull request, head and finding, or push a fix"
-        )
-    return (
-        f"review: the review's latest verdict for {head_sha} lists open findings, which a stand-in cannot "
-        "waive: fix them, or dispute a finding with file:line counter-evidence in its review thread"
-    )
+        return status_text.gate_escalated(match.group("ids").split(","), GRAMMAR, int(match.group("more") or 0))
+    return status_text.gate_open_findings(COMMENT_DISPUTE_GRAMMAR)
 
 
 def decide(
@@ -259,12 +251,12 @@ def decide(
 ) -> tuple[int, str]:
     refused = list(bump_refusals)
     if refused:
-        return WAITING, f"review: omp pin bump refused: {'; '.join(refused)}"
+        return WAITING, status_text.gate_refusals("omp pin bump refused", refused)
     promo_refused = list(promotion_refusals)
     if promo_refused:
-        return WAITING, f"review: theseus promotion refused: {'; '.join(promo_refused)}"
+        return WAITING, status_text.gate_refusals("theseus promotion refused", promo_refused)
     if not is_promotion and not paths(files):
-        return PASS, "review: only exempt paths changed"
+        return PASS, status_text.GATE_PASS_EXEMPT
     base_time = _parse_time(base_date) if base_date else None
     verdicts = _verdict_statuses(statuses, base_time, binding.bot_login)
     latest = verdicts[-1] if verdicts else None
@@ -283,42 +275,28 @@ def decide(
     )
     if latest and verdict != "success" and not standin:
         if (latest.get("description") or "").startswith(REFUSED_DESCRIPTION_PREFIX):
-            return WAITING, (
-                f"review: the review refused to review {head_sha} after repeated DO NOT SHIP decisions; "
-                "close this pull request and open a new one, or post a stand-in attestation after that verdict"
-            )
+            return WAITING, status_text.GATE_REFUSED
         if findings_open:
-            return WAITING, _open_findings_message(verdicts, head_sha)
-        return WAITING, (
-            f"review: the review's latest verdict for {head_sha} is {verdict}, not success; fix the "
-            "findings, or post a stand-in attestation after that verdict"
-        )
+            return WAITING, _open_findings_message(verdicts)
+        if verdict == "pending":
+            return WAITING, status_text.GATE_NOT_REVIEWED
+        if verdict == "failure":
+            return WAITING, status_text.GATE_DO_NOT_SHIP
+        return WAITING, status_text.gate_state(verdict)
     if not (latest or standin):
-        return OUTSTANDING, (
-            f"review: waiting for the review's verdict on {head_sha}, or a stand-in attestation "
-            f"'Stand-in review: APPROVE {head_sha}' from a listed attester"
-        )
+        return OUTSTANDING, status_text.gate_waiting(head_sha)
 
     if verdict == "success":
-        if _strip_run_suffix(latest.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
+        if strip_run_suffix(latest.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
             if standin is None:
-                return WAITING, (
-                    f"review: the review-verdict status for {head_sha} reports only exempt paths changed, "
-                    "but the gate's current rules require a review of this head; push a new head (a byte-identical "
-                    "rebase is enough), or have the owner stand-in post an attestation"
-                )
+                return WAITING, status_text.GATE_EXEMPT_STALE
         else:
             if _receipt_backed_success(verdicts, reviews, head_sha, base_time, binding.bot_login):
-                return PASS, f"review: pass (review verdict for {head_sha})"
+                return PASS, status_text.GATE_PASS_VERDICT
             if standin is None:
-                return WAITING, (
-                    f"review: the review-verdict status for {head_sha} is success, but this pull request "
-                    f"has no unedited review of {head_sha} from the same verdict run agreeing with it; "
-                    "push a new head (a byte-identical rebase is enough) so the verdict runs again, or have the "
-                    "owner stand-in post an attestation"
-                )
+                return WAITING, status_text.GATE_UNMATCHED_SUCCESS
     assert standin is not None
-    return PASS, f"review: pass (stand-in review attested by {standin.get('login')} for {head_sha})"
+    return PASS, status_text.gate_pass_standin(standin.get("login"))
 
 
 def _request(token: str, url: str, body: dict[str, Any] | None = None) -> Any:

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA
-from theseus_reviewer import gate, promotion, protocol, review_check
+from theseus_reviewer import gate, promotion, protocol, review_check, status_text
 from theseus_reviewer.policy import Binding, PromotionRules
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -279,7 +279,7 @@ def _evaluate_gate(
 def test_valid_exact_head_promotion_record_with_valid_verdict_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     status, message = _evaluate_gate(monkeypatch, reviews=[_review(promo=_promo_dict())])
     assert status == review_check.PASS
-    assert "pass (review verdict" in message
+    assert message == status_text.GATE_PASS_VERDICT
 
 
 def test_promotion_refusal_and_is_promotion_still_hold_even_if_exempt_matcher_returns_false(
@@ -572,6 +572,7 @@ def test_ship_receipt_cannot_authorize_untrusted_dependency(
         reviews=[_review(promo=_promo_dict())],
     )
     assert status == review_check.WAITING
+    assert message.startswith("Blocked · theseus promotion refused · dependency pyyaml 6.0.3")
     assert "not pinned in the base review policy" in message
 
 

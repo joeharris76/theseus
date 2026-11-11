@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import cli, github
+from theseus_reviewer import cli, github, status_text
 from theseus_reviewer.retry import State
 
 from .conftest import POLICY_PATH
@@ -383,7 +383,7 @@ def test_a_failure_already_surfaced_as_pending_is_not_redispatched_after_the_run
         {
             "context": "review-verdict",
             "state": "pending",
-            "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
+            "description": status_text.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
             "target_url": "u",
             "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
             "updated_at": (datetime.now(UTC) - timedelta(days=3)).isoformat(),
@@ -397,7 +397,7 @@ def _surfaced_status() -> dict[str, Any]:
     return {
         "context": "review-verdict",
         "state": "pending",
-        "description": github.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
+        "description": status_text.SWEEP_FAILURE_SURFACE_PREFIX + "Run the attempt loop. Rerun with /review",
         "target_url": "u",
         "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
         "updated_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
