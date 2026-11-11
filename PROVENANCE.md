@@ -39,3 +39,4 @@ The sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tr
 | v0.2.7 | `41ed0c6290765cfe27a3920023dee4d986f35ecd1dd5a6651841f1f1cec79608` |
 | v0.2.8 | `76d34f7198f0c2c81340f8c2cde97426f801c4dcf13f668ef3fcca558e393d51` |
 | v0.2.9 | `07fbfb1e42f1b7f4a9fe5c079e1a64daebc57160e341e5004325a9461960c2c5` |
+| v0.2.10 | `cd4d784d32f388dfe6f42f6277e06cc9a6ddd66f2b2aa093d390ff2aec293215` |
