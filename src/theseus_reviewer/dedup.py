@@ -14,11 +14,7 @@ MARKER_OPEN = "<!-- review-finding:"
 _MARKER = re.compile(
     rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.FINDING_MARKER_OPEN)}) (?P<print>[0-9a-f]{{16}}) -->\s*\Z"
 )
-_SEVERITY = "(?P<severity>Critical|High|Medium|Low)"
-_TITLES = (
-    re.compile(rf"^\*\*{_SEVERITY}\*\*: (?P<title>.+)$", re.MULTILINE),
-    re.compile(rf"^(?:🔴|🟠|🟡|🔵|⚪) \*\*{_SEVERITY}\*\* · D[1-9][0-9]{{0,3}} · (?P<title>.+)$", re.MULTILINE),
-)
+_TITLE = re.compile(r"^\*\*(?P<severity>Critical|High|Medium|Low)\*\*: (?P<title>.+)$", re.MULTILINE)
 _NOT_WORD = re.compile(r"[^a-z0-9]+")
 
 
@@ -31,30 +27,12 @@ def marker(finding: Finding) -> str:
     return f"{MARKER_OPEN} {fingerprint(finding.file, finding.title)} -->"
 
 
-def parse_title(body: str) -> tuple[str, str] | None:
-    matches = [match for pattern in _TITLES if (match := pattern.search(body)) is not None]
-    if not matches:
-        return None
-    first = min(matches, key=lambda match: match.start())
-    return first.group("severity"), first.group("title").strip()
-
-
-def first_line_title(body: str) -> str:
-    lines = body.splitlines()
-    first = lines[0] if lines else ""
-    for pattern in _TITLES:
-        match = pattern.fullmatch(first)
-        if match is not None:
-            return match.group("title").strip()
-    return first
-
-
 def thread_fingerprint(path: str | None, body: str) -> str | None:
     match = _MARKER.search(body.rstrip())
     if match is not None:
         return match.group("print")
-    title = parse_title(body)
-    return fingerprint(path, title[1]) if path and title else None
+    title = _TITLE.search(body)
+    return fingerprint(path, title.group("title").strip()) if path and title else None
 
 
 def open_fingerprints(threads: Iterable[Mapping[str, Any]], login: str) -> dict[str, str]:
@@ -69,9 +47,9 @@ def open_fingerprints(threads: Iterable[Mapping[str, Any]], login: str) -> dict[
             continue
         body = thread.get("body") or ""
         key = thread_fingerprint(thread.get("path"), body)
-        title = parse_title(body)
+        title = _TITLE.search(body)
         if key is not None:
-            severity = title[0] if title else SEVERITIES[-1]
+            severity = title.group("severity") if title else SEVERITIES[-1]
             prints[key] = min(prints.get(key, severity), severity, key=SEVERITIES.index)
     return dict(sorted(prints.items()))
 

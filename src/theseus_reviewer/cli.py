@@ -285,6 +285,7 @@ def _disputed_threads(threads: list[dict[str, Any]], bot_login: str) -> list[dic
         ]
         if not replies:
             continue
+        title = (thread.get("body") or "").splitlines()
         found = protocol.thread_finding(thread.get("body") or "")
         hashes = (
             [protocol.claim_hash(protocol.canonical_claim(reply["body"])) for reply in replies]
@@ -296,7 +297,7 @@ def _disputed_threads(threads: list[dict[str, Any]], bot_login: str) -> list[dic
                 "id": found[1] if found is not None else None,
                 "cycle": found[0] if found is not None else None,
                 "path": thread.get("path") or "",
-                "title": dedup.first_line_title(thread.get("body") or "")[:300],
+                "title": title[0][:300] if title else "",
                 "replies": replies,
                 "claim_hashes": hashes,
             }
