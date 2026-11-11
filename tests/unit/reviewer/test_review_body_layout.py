@@ -502,3 +502,39 @@ def test_a_not_reviewed_headline_and_the_status_description_state_the_same_fact(
     blocked = _headline_cases(policy)
     for name in ("withheld", "blocked", "no-report"):
         assert " YET" not in _body(blocked[name]).splitlines()[0], name
+
+
+@pytest.mark.parametrize("context", ["review-shadow", "oracle-verdict", "something-else"])
+def test_only_the_review_verdict_context_writes_a_verdict_marker(policy: Policy, context: str) -> None:
+    plan = {**_protocol_plan(policy), "status_context": context}
+    for verdict, kind in ((_v("fine"), selection.PASS), (_v("x", [_defect("Bad", 2)]), selection.FAIL)):
+        body = _body(_finalize(policy, plan, verdict, kind=kind))
+        assert layout.VERDICT_MARKER_OPEN not in body
+        assert review_check.verdict_state(body, HEAD) is None
+        assert protocol.decode_marker(body) is not None and RECORD.search(body)
+    pending = _body(_finalize(policy, plan, None, kind=selection.PENDING, reviewer=None))
+    assert layout.VERDICT_MARKER_OPEN not in pending and review_check.verdict_state(pending, HEAD) is None
+    carried = report.carried({**_carry_plan(policy, _previous("SHIP")), "status_context": context}).body
+    assert layout.VERDICT_MARKER_OPEN not in carried and RECORD.search(carried)
+
+
+def test_a_path_with_a_line_break_cannot_forge_layout(policy: Policy) -> None:
+    from theseus_reviewer.verdict import VerdictError, validate
+
+    bad = "x.py\n- [ ] tick\n</details>"
+    with pytest.raises(VerdictError):
+        validate(_v("s", [_defect("T", 2, "d", file=bad)]))
+    entry = {"id": "D1", "severity": "High", "file": bad, "line": 2, "end_line": None, "title": "T"}
+    body = report._entry_item(entry)
+    text = "\n".join(body)
+    assert len(body) == 1 and "\n" not in text and text.count("`") == 2
+    assert "\n" not in layout.shown_path(bad) and "\n" not in layout.plain_path(bad)
+
+
+def test_a_raw_html_block_cannot_hide_a_fence_from_the_scanner() -> None:
+    text = "<div>\n```\n\n- [ ] tick"
+    out = layout.neutralize(text)
+    assert "&lt;div>" in out
+    fences = [line for line in out.splitlines() if line.startswith("```")]
+    assert len(fences) == 2 and out.index("- [ ] tick") > out.index("```") and out.endswith("```")
+    assert layout.neutralize("```\n<div>\n```") == "```\n<div>\n```"

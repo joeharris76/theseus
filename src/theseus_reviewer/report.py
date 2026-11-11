@@ -380,9 +380,18 @@ def _meta(
 def _close(
     lines: Sequence[str], plan: Mapping[str, Any], state: str, record: str | None, unavailable_marker: str = ""
 ) -> str:
-    """The body: the visible text, the verdict marker, any unavailable marker, then the record as the final bytes."""
-    body = "\n".join(lines).rstrip() + "\n\n" + layout.verdict_marker(state, plan["head_sha"])
-    return body + (f"\n{unavailable_marker}" if unavailable_marker else "") + (f"\n{record}" if record else "")
+    """The body: the visible text, the verdict marker, any unavailable marker, then the record as the final bytes.
+
+    Only the `review-verdict` context writes a verdict marker: a shadow or legacy context must never look like a
+    receipt for the gate.
+    """
+    body = "\n".join(lines).rstrip()
+    if plan.get("status_context") == layout.VERDICT_CONTEXT:
+        body += "\n\n" + layout.verdict_marker(state, plan["head_sha"])
+    for part in (unavailable_marker, record):
+        if part:
+            body += ("\n" if body.endswith("-->") else "\n\n") + part
+    return body
 
 
 def _reviewer_line(plan: Mapping[str, Any], name: str | None, ran: str = "") -> list[str]:

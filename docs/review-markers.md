@@ -29,7 +29,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 <!-- review-verdict: v2 <state> <40hex> -->
 ```
 
-`<state>` is `success`, `failure` or `pending`, matching the commit status the App posts to the `review-verdict` context; `<40hex>` is the full lowercase head SHA the verdict is for.
+`<state>` is `success`, `failure` or `pending`, matching the commit status the App posts to the `review-verdict` context. Only that context writes the marker: a review posted under any other status context (shadow or legacy) carries no verdict marker, so it is never a receipt; `<40hex>` is the full lowercase head SHA the verdict is for.
 
 Reading rules, which the gate applies when it decides whether a review is a receipt for a head:
 

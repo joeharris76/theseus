@@ -35,6 +35,8 @@ _RAW_TAG = re.compile(r"<(?=/?\s*(?:details|summary)\b)", re.IGNORECASE)
 _TASK_ITEM = re.compile(r"^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\]", re.MULTILINE)
 _HEADING = re.compile(r"^([ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
 _SETEXT = re.compile(r"(?<=\S)\n([ \t]{0,3})([=-])(?=[=-]*[ \t]*(?:\n|$))", re.MULTILINE)
+_BREAKS = re.compile(r"[\r\n\t]+")
+_HTML_OPENER = re.compile(r"^([ \t]{0,3})<(?=[A-Za-z/!?])", re.MULTILINE)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -58,6 +60,7 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
 
 def _prose(chunk: str) -> str:
     chunk = _SETEXT.sub(lambda match: f"\n{match.group(1)}\\{match.group(2)}", chunk)
+    chunk = _HTML_OPENER.sub(lambda match: f"{match.group(1)}&lt;", chunk)
     chunk = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 
@@ -104,7 +107,7 @@ def neutralize(text: str) -> str:
 
 def plain_path(path: str) -> str:
     """The path without the staging directory a promotion review reads from."""
-    return path.removeprefix(STAGED_NEW_PREFIX)
+    return _BREAKS.sub(" ", path.removeprefix(STAGED_NEW_PREFIX))
 
 
 def shown_path(path: str) -> str:

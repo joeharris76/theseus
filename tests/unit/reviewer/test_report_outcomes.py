@@ -899,5 +899,8 @@ def test_comment_delivery_does_not_call_a_same_line_re_report_an_open_thread(pol
     plan["threaded"] = []
     plan.update(open_findings={}, open_counts={})
     final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
-    assert "Defects already open as review threads" not in final.body
+    assert "(existing thread)" not in final.body and "Already open as review threads" not in final.body
     assert "Old" in final.body
+    del plan["threaded"]
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert "(existing thread)" not in final.body and "Old" in final.body
