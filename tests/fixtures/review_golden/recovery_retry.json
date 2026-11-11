@@ -81,7 +81,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "medium: SHIP [run <run>]",
+      "description": "SHIP · no open findings [run <run>]",
       "state": "success",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -392,14 +392,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "medium: SHIP [run <run>]",
+        "description": "SHIP · no open findings [run <run>]",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "review: pass (review verdict for <sha0>)",
+        "description": "Pass · review-verdict: SHIP",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -434,5 +434,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #104: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery retry (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: medium\nslot 2: medium verdict\nslot 3: pass\nslot 3: pass\nslot 3: pass\nslot 3: pass\nreview-verdict #104 <sha0>: success: medium: SHIP\n"
+  "summary": "review-verdict plan for #104: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery retry (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: medium\nslot 2: medium verdict\nslot 3: pass\nslot 3: pass\nslot 3: pass\nslot 3: pass\nreview-verdict #104 <sha0>: success: SHIP · no open findings\n"
 }
