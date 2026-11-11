@@ -105,7 +105,7 @@ class FakeGh:
         self.query_fails = query_fails
         self.calls: list[tuple[str, dict[str, list[str]], str]] = []
 
-    def __call__(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def __call__(self, argv: list[str], *, token: str, timeout: float) -> subprocess.CompletedProcess[str]:
         assert argv[:3] == ["gh", "api", "graphql"]
         fields: dict[str, list[str]] = {}
         pairs = [item for flag, item in zip(argv[3:], argv[4:], strict=False) if flag == "-f"]
@@ -113,7 +113,7 @@ class FakeGh:
             name, _, value = pair.partition("=")
             fields.setdefault(name, []).append(value)
         query = fields.pop("query")[0]
-        token = kwargs["env"]["GH_TOKEN"]
+        token = token
         kind = "mutation" if query.lstrip().startswith("mutation") else "query"
         self.calls.append((kind, fields, token))
         if kind == "query":
@@ -135,7 +135,7 @@ class FakeGh:
 @pytest.fixture
 def gh(monkeypatch: pytest.MonkeyPatch) -> FakeGh:
     fake = FakeGh()
-    monkeypatch.setattr(github.subprocess, "run", fake)
+    monkeypatch.setattr(github, "run_gh", fake)
     return fake
 
 
@@ -149,7 +149,7 @@ def test_the_mutation_is_the_probed_one_and_only_names_the_given_reviews(gh: Fak
 def test_an_already_minimised_review_is_not_minimised_again() -> None:
     fake = FakeGh(minimized=("PRR_1",))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(github.subprocess, "run", fake)
+        patch.setattr(github, "run_gh", fake)
         assert github.minimize_reviews(["PRR_1", "PRR_2"], "t") == []
     assert [fields for kind, fields, _ in fake.calls if kind == "mutation"] == [{"id": ["PRR_2"]}]
 
@@ -162,7 +162,7 @@ def test_no_review_means_no_request(gh: FakeGh) -> None:
 def test_a_refused_mutation_is_reported_and_the_others_still_run() -> None:
     fake = FakeGh(refuse=("PRR_1",))
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(github.subprocess, "run", fake)
+        patch.setattr(github, "run_gh", fake)
         failures = github.minimize_reviews(["PRR_1", "PRR_2"], "t")
     assert len(failures) == 1 and failures[0].startswith("PRR_1:") and "not accessible" in failures[0]
     assert [fields for kind, fields, _ in fake.calls if kind == "mutation"] == [{"id": ["PRR_1"]}, {"id": ["PRR_2"]}]
@@ -171,7 +171,7 @@ def test_a_refused_mutation_is_reported_and_the_others_still_run() -> None:
 def test_a_failed_state_query_raises_before_any_mutation() -> None:
     fake = FakeGh(query_fails=True)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(github.subprocess, "run", fake)
+        patch.setattr(github, "run_gh", fake)
         with pytest.raises(github.GitHubError, match="not accessible"):
             github.minimize_reviews(["PRR_1"], "t")
     assert all(kind == "query" for kind, _, _ in fake.calls)
@@ -183,6 +183,7 @@ def test_minimising_through_the_pull_request_touches_only_superseded_reviews(
     human = _review(4, login="joe", user_type="User", head=OLD)
     reviews = [_review(1, head=OLD), _review(2, "Not reviewed.", head=OLD), human, _review(3)]
     monkeypatch.setattr(github, "reviews", lambda repo, pr: reviews)
+    monkeypatch.setattr(github, "pull_head_sha", lambda repo, pr, token: HEAD)
     monkeypatch.setattr(github, "review_threads", lambda repo, pr: [])
     sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
     assert sink.minimize_superseded("o/r", 7, HEAD, BOT) == []
@@ -347,6 +348,7 @@ def test_the_sink_reads_thread_markers_to_decide_which_reviews_stay_expanded(
     reviews = [_listing(1, [1, 2], head=OLD), _listing(2, [3], head=OLD), _listing(3, [1, 2])]
     bot = {"author": f"{BOT}[bot]", "author_type": "Bot", "body": "x\n<!-- review-defect: c1-D1 -->", "resolved": True}
     monkeypatch.setattr(github, "reviews", lambda repo, pr: reviews)
+    monkeypatch.setattr(github, "pull_head_sha", lambda repo, pr, token: HEAD)
     monkeypatch.setattr(github, "review_threads", lambda repo, pr: [bot])
     sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
     assert sink.minimize_superseded("o/r", 7, HEAD, BOT) == []
@@ -360,11 +362,11 @@ def test_the_sink_reads_thread_markers_to_decide_which_reviews_stay_expanded(
 def test_every_graphql_call_has_a_timeout_and_a_timeout_is_a_reported_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[Any] = []
 
-    def hang(argv: list[str], **kwargs: Any) -> Any:
-        seen.append(kwargs.get("timeout"))
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+    def hang(argv: list[str], *, token: str, timeout: float) -> Any:
+        seen.append(timeout)
+        raise github.GitHubError("gh api graphql timed out after 20 seconds")
 
-    monkeypatch.setattr(github.subprocess, "run", hang)
+    monkeypatch.setattr(github, "run_gh", hang)
     with pytest.raises(github.GitHubError, match="timed out"):
         github.minimize_reviews(["PRR_1"], "t")
     assert seen == [github.MINIMIZE_CALL_SECONDS]
@@ -372,9 +374,39 @@ def test_every_graphql_call_has_a_timeout_and_a_timeout_is_a_reported_failure(mo
 
 def test_the_total_time_cap_skips_the_remaining_reviews(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeGh()
-    monkeypatch.setattr(github.subprocess, "run", fake)
+    monkeypatch.setattr(github, "run_gh", fake)
     clock = iter([0.0, 0.0, 1000.0, 1000.0, 1000.0])
     monkeypatch.setattr(github, "monotonic", lambda: next(clock))
     failures = github.minimize_reviews(["PRR_1", "PRR_2"], "t")
     assert [fields for kind, fields, _ in fake.calls if kind == "mutation"] == [{"id": ["PRR_1"]}]
     assert len(failures) == 1 and failures[0].startswith("PRR_2:") and "limit" in failures[0]
+
+
+def test_a_stale_run_minimises_nothing_when_the_pull_request_has_moved_on(
+    monkeypatch: pytest.MonkeyPatch, gh: FakeGh
+) -> None:
+    reviews = [_review(1, head=OLD), _review(2, head=OLD), _review(3)]
+    monkeypatch.setattr(github, "reviews", lambda repo, pr: reviews)
+    monkeypatch.setattr(github, "review_threads", lambda repo, pr: [])
+    monkeypatch.setattr(github, "pull_head_sha", lambda repo, pr, token: "c" * 40)
+    sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
+    assert sink.minimize_superseded("o/r", 7, HEAD, BOT) == []
+    assert gh.calls == []
+
+
+def test_a_failed_live_head_read_minimises_nothing(monkeypatch: pytest.MonkeyPatch, gh: FakeGh) -> None:
+    def broken(repo: str, pr: int, token: str) -> str:
+        raise github.GitHubError("HTTP 502")
+
+    monkeypatch.setattr(github, "pull_head_sha", broken)
+    sink = GitHubSink("app-token", "job-token", "develop", POLICY_PATH)
+    with pytest.raises(github.GitHubError):
+        sink.minimize_superseded("o/r", 7, HEAD, BOT)
+    assert gh.calls == []
+
+
+def test_run_gh_turns_a_timeout_into_a_github_error() -> None:
+    import sys
+
+    with pytest.raises(github.GitHubError, match="timed out"):
+        github.run_gh([sys.executable, "-c", "import time; time.sleep(5)"], token="t", timeout=0.2)

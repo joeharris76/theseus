@@ -572,16 +572,31 @@ MINIMIZE_CALL_SECONDS = 20
 MINIMIZE_TOTAL_SECONDS = 60
 
 
+def run_gh(argv: Sequence[str], *, token: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Run one ``gh`` command as the App, bounded in time. The seam the minimise requests are faked through."""
+    try:
+        return subprocess.run(
+            list(argv), capture_output=True, text=True, check=False, env=_token_env(token), timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(f"{' '.join(argv[:3])} timed out after {timeout} seconds") from exc
+
+
+def pull_head_sha(repo: str, pr: int, token: str) -> str:
+    result = run_gh(
+        ["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"], token=token, timeout=MINIMIZE_CALL_SECONDS
+    )
+    sha = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+        raise GitHubError(f"could not read the head of #{pr}: {result.stderr.strip()[:500]}")
+    return sha
+
+
 def _graphql_as(token: str, query: str, variables: Sequence[tuple[str, str]]) -> Any:
     argv = ["gh", "api", "graphql", "-f", f"query={query}"]
     for name, value in variables:
         argv += ["-f", f"{name}={value}"]
-    try:
-        result = subprocess.run(
-            argv, capture_output=True, text=True, check=False, env=_token_env(token), timeout=MINIMIZE_CALL_SECONDS
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise GitHubError(f"GitHub GraphQL request timed out after {MINIMIZE_CALL_SECONDS} seconds") from exc
+    result = run_gh(argv, token=token, timeout=MINIMIZE_CALL_SECONDS)
     if result.returncode != 0:
         raise GitHubError(f"GitHub GraphQL request failed: {(result.stderr.strip() or result.stdout.strip())[:500]}")
     try:

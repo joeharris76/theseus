@@ -105,6 +105,8 @@ class GitHubSink:
         github.post_gate(repo, pr, head, self.app_token, self.policy)
 
     def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]:
+        if github.pull_head_sha(repo, pr, self.app_token) != head:
+            return []  # a stale run: a newer head owns the pull request's verdict now
         held = cli._threaded_findings(
             [{**thread, "resolved": False, "edited": False} for thread in github.review_threads(repo, pr)], bot_login
         )
