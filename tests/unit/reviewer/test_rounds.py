@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import cli, edits, github, protocol, report
+from theseus_reviewer import cli, edits, github, protocol, report, status_text
 from theseus_reviewer.absence import Absence
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.diff import commentable_lines
@@ -75,6 +75,12 @@ def _record(final: report.Final) -> dict[str, Any]:
 
 def _prior(defect_id: str, file: str = CHECKER, line: int = 2) -> dict[str, Any]:
     return {"id": defect_id, "severity": "High", "file": file, "line": line, "end_line": None, "title": "Old"}
+
+
+def _open_findings(total: int, *severities: tuple[str, int]) -> str:
+    return status_text.with_findings(
+        status_text.OPEN_FINDINGS_LABEL, total, list(severities), [], "", status_text.DESCRIPTION_LIMIT
+    )
 
 
 def test_a_first_review_records_its_decision_and_numbers_its_defects(policy: Policy, tmp_path: Path) -> None:
@@ -145,7 +151,7 @@ def test_a_follow_up_counts_unfixed_and_new_defects_in_changed_files_only(policy
     assert f"D2 · Old · `{CHECKER}:1`" in still_open
     hidden = final.body.split("<details><summary>Not counted", 1)[1].split("</details>", 1)[0]
     assert f"`{OTHER}:9`" in hidden and f"`{OTHER}:9`" not in final.body.replace(hidden, "")
-    assert final.description.endswith(": SHIP WITH FIXES, 2 defect(s) to fix")
+    assert final.description == _open_findings(2, ("High", 1), ("Medium", 1))
     assert final.review is not None
     assert [comment["path"] for comment in final.review["comments"]] == [CHECKER]
     assert "<!-- review-defect: c1-D3 -->" in final.review["comments"][0]["body"]
@@ -946,7 +952,7 @@ def test_a_follow_up_counts_a_defect_on_a_changed_file_whose_name_needs_escaping
     plan = _follow_up(policy, [], [path])
     final = _final(policy, tmp_path, plan, _v("s", [{**_finding("High", 2), "file": path}]))
     assert final.state == "failure"
-    assert final.description.endswith(": SHIP WITH FIXES, 1 defect(s) to fix")
+    assert final.description == _open_findings(1, ("High", 1))
     assert [item["file"] for item in _record(final)["open_defects"]] == [path]
     assert "<details><summary>Not counted" not in final.body
     assert "<!--bad" not in final.body and "a-->b" not in final.body
@@ -958,7 +964,7 @@ def test_a_follow_up_counts_an_nfd_finding_on_an_nfc_changed_file(policy: Policy
     plan = _follow_up(policy, [], [nfc_path])
     final = _final(policy, tmp_path, plan, _v("s", [{**_finding("High", 2), "file": nfd_path}]))
     assert final.state == "failure"
-    assert final.description.endswith(": SHIP WITH FIXES, 1 defect(s) to fix")
+    assert final.description == _open_findings(1, ("High", 1))
     assert [item["file"] for item in _record(final)["open_defects"]] == [nfc_path]
     assert "<details><summary>Not counted" not in final.body
 
@@ -968,7 +974,7 @@ def test_a_follow_up_counts_a_case_variant_finding_on_a_changed_file(policy: Pol
     plan = _follow_up(policy, [], [path])
     final = _final(policy, tmp_path, plan, _v("s", [{**_finding("High", 2), "file": "benchbox/café.py"}]))
     assert final.state == "failure"
-    assert final.description.endswith(": SHIP WITH FIXES, 1 defect(s) to fix")
+    assert final.description == _open_findings(1, ("High", 1))
     assert [item["file"] for item in _record(final)["open_defects"]] == [path]
     assert "<details><summary>Not counted" not in final.body
 
@@ -978,7 +984,7 @@ def test_a_follow_up_counts_an_ambiguous_case_variant_on_changed_files(policy: P
     plan = _follow_up(policy, [], paths)
     final = _final(policy, tmp_path, plan, _v("s", [{**_finding("High", 2), "file": "benchbox/query.py"}]))
     assert final.state == "failure"
-    assert final.description.endswith(": SHIP WITH FIXES, 1 defect(s) to fix")
+    assert final.description == _open_findings(1, ("High", 1))
     assert [item["file"] for item in _record(final)["open_defects"]] == ["benchbox/query.py"]
     assert "<details><summary>Not counted" not in final.body
 
@@ -1107,7 +1113,7 @@ def test_a_record_that_cannot_fit_even_trimmed_goes_pending_with_every_finding(
     final = _final(policy, tmp_path, _cjk_plan(policy), _cjk_verdict(findings))
     assert final.state == "pending" and final.pending_cause == "marker-limit" and final.strikes is None
     assert final.review is not None and protocol.MARKER_OPEN not in final.review["body"]
-    assert "does not fit" in final.description
+    assert final.description == status_text.MARKER_LIMIT
     posted = final.review["body"] + "".join(comment["body"] for comment in final.review["comments"])
     assert all(finding["file"] in posted and finding["title"] in posted for finding in findings)
 

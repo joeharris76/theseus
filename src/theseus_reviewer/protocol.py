@@ -14,11 +14,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import adjudication, promotion
+from . import adjudication, legacy, promotion
 from .coverage import Returned
-from .edits import EDITED_REASON, EditStateError, is_edited
+from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .policy import SEVERITIES
+from .status_text import DO_NOT_SHIP_LABEL, EDITED_REASON, OPEN_FINDINGS_LABEL, REFUSED_LABEL, SHIP_LABEL
 from .verdict import (
     COMPLETE,
     DEMOTED_DISPOSITION,
@@ -38,8 +39,13 @@ from .verdict import (
 )
 
 DO_NOT_SHIP_SUMMARY = 1500
-REFUSED = "REFUSED"
-LABELS = {SHIP: "SHIP", SHIP_WITH_FIXES: "SHIP WITH FIXES", DO_NOT_SHIP: "DO NOT SHIP", REFUSED: "REFUSED"}
+REFUSED = REFUSED_LABEL
+LABELS = {
+    SHIP: SHIP_LABEL,
+    SHIP_WITH_FIXES: OPEN_FINDINGS_LABEL,
+    DO_NOT_SHIP: DO_NOT_SHIP_LABEL,
+    REFUSED: REFUSED_LABEL,
+}
 RECORD_DECISIONS = (SHIP, SHIP_WITH_FIXES, DO_NOT_SHIP, REFUSED)
 
 FIRST = "first"
@@ -55,7 +61,9 @@ MARKER_VERSION = 1
 MARKER_LIMIT = 4096
 MARKER_TRIMS = ((120, 120), (80, 80), (50, 60), (32, 40), (24, 24))
 MARKER_OPEN = "<!-- review-protocol:"
-_MARKER = re.compile(rf"{re.escape(MARKER_OPEN)} v1 (?P<data>[A-Za-z0-9_-]+) -->\s*\Z")
+_MARKER = re.compile(
+    rf"(?:{re.escape(MARKER_OPEN)}|{re.escape(legacy.PROTOCOL_MARKER_OPEN)}) v1 (?P<data>[A-Za-z0-9_-]+) -->\s*\Z"
+)
 MARKER_INFLATE_LIMIT = 64 << 20
 DEFECT_ID = re.compile(r"D([1-9][0-9]{0,3})")
 NOT_COUNTED_LIMIT = 5
@@ -341,7 +349,7 @@ def _clamped(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def decode_marker(body: str) -> dict[str, Any] | None:
-    count = body.count(MARKER_OPEN)
+    count = body.count(MARKER_OPEN) + body.count(legacy.PROTOCOL_MARKER_OPEN)
     if count == 0:
         return None
     match = _MARKER.search(body)
@@ -822,10 +830,12 @@ def judge_planned(
     )
 
 
-THREAD_MARKER = re.compile(r"<!--\s*review-defect:\s*c([0-9]+)-(D[1-9][0-9]{0,3})\s*-->")
+THREAD_MARKER = re.compile(
+    rf"<!--\s*(?:review-defect|{re.escape(legacy.DEFECT_MARKER_NAME)}):\s*c([0-9]+)-(D[1-9][0-9]{{0,3}})\s*-->"
+)
 MARKER_LINE = re.compile(
-    r"^\s*(?:<!--\s*review-[\s\S]*?-->\s*"
-    r"|review-defect\s*:.*)$"
+    rf"^\s*(?:<!--\s*(?:review-|{re.escape(legacy.MARKER_PREFIX)})[\s\S]*?-->\s*"
+    rf"|(?:review-defect|{re.escape(legacy.DEFECT_MARKER_NAME)})\s*:.*)$"
 )
 REPLY_LIMIT = 1000
 DISPUTE_MARKER = "Dispute:"

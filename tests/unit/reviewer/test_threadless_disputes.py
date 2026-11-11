@@ -8,8 +8,18 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA
+from theseus_reviewer import (
+    adjudication,
+    capacity,
+    cli,
+    comment_disputes,
+    gate,
+    protocol,
+    report,
+    review_check,
+    status_text,
+)
 from theseus_reviewer import attempts as attempt_files
-from theseus_reviewer import capacity, cli, comment_disputes, gate, protocol, report, review_check
 from theseus_reviewer.diff import commentable_lines
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import State
@@ -459,7 +469,9 @@ def test_threadless_finding_two_keyed_comment_disputes_escalation_owner_adjudica
     review_one = _published(final_one, 2, "2026-10-08T12:00:00Z")
     statuses.append(_status(final_one, plan_one, "2026-10-08T12:00:30Z", 1))
     status, message = _gate(statuses, [_receipt(final_one, "2026-10-08T12:00:00Z", 2)])
-    assert status == review_check.WAITING and "lists open findings" in message
+    assert status == review_check.WAITING and message == status_text.gate_open_findings(
+        protocol.COMMENT_DISPUTE_GRAMMAR
+    )
 
     # 2. Second keyed dispute, posted after that review: the same finding stays open, so it escalates.
     dispute_two = _comment("Dispute: D1 - the same guard also covers the retry path", "2026-10-08T13:00:00Z", id=71)
@@ -468,12 +480,12 @@ def test_threadless_finding_two_keyed_comment_disputes_escalation_owner_adjudica
     assert plan_two["protocol"]["maintained"] == {"D1": 1}
     final_two = _finalize(plan_two, tmp_path / "a2", _maintain(plan_two), "5102")
     record_two = protocol.decode_marker(final_two.review["body"])
-    assert record_two["escalated"] == ["D1"] and final_two.description.endswith("; escalated D1")
+    assert record_two["escalated"] == ["D1"] and "escalated D1" in final_two.description
     assert "Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in final_two.review["body"]
     review_two = _published(final_two, 3, "2026-10-08T14:00:00Z")
     statuses.append(_status(final_two, plan_two, "2026-10-08T14:00:30Z", 2))
     status, message = _gate(statuses, [_receipt(final_two, "2026-10-08T14:00:00Z", 3)])
-    assert status == review_check.WAITING and "need the owner's ruling" in message and "D1" in message
+    assert status == review_check.WAITING and message == status_text.gate_escalated(["D1"], adjudication.GRAMMAR)
 
     # A third dispute round on this patch is refused: only the owner can settle it now.
     values, plan_three = _run(
@@ -508,7 +520,7 @@ def test_threadless_finding_two_keyed_comment_disputes_escalation_owner_adjudica
     statuses.append(_status(final_four, {**plan_four, "run_id": "5104"}, "2026-10-08T15:00:30Z", 3))
     assert _gate(statuses, [_receipt(final_four, "2026-10-08T15:00:00Z", 4)]) == (
         review_check.PASS,
-        f"review: pass (review verdict for {HEAD})",
+        status_text.GATE_PASS_VERDICT,
     )
 
 

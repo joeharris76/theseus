@@ -13,8 +13,10 @@ from . import (
     providers,
     redaction_check,
     selection,
+    status_text,
     unavailable,
 )
+from .policy import SEVERITIES
 from .retry import (
     ALL_ABSENT,
     FAILURE,
@@ -41,17 +43,16 @@ from .verdict import (
     sanitize,
 )
 
-DESCRIPTION_LIMIT = 140
 BODY_LIMIT = 65536
 BODY_CUT_NOTICE = "Size limit: the rest of this review was cut to stay under GitHub's character limit."
 TRUNCATED = "… [truncated]"
-OVERSIZE_DESCRIPTION = "pending: too large for the review; split the pull request or ask the owner for a stand-in"
+OVERSIZE_DESCRIPTION = status_text.OVERSIZE
 OVERSIZE_NOTE = (
     "This pull request is too large for the review: the reading it needs is more than any reviewer can hold, "
     "so no reviewer can run and this head is not retried. Split it into smaller pull requests, or ask the "
     "owner for a stand-in review of this head."
 )
-MARKER_LIMIT_DESCRIPTION = "pending: the protocol record does not fit in a review marker"
+MARKER_LIMIT_DESCRIPTION = status_text.MARKER_LIMIT
 MARKER_LIMIT_NOTE = (
     "The decision and its defects are listed in full in this review, but the protocol record they must be saved in "
     "exceeds the size limit of a review marker even after shortening titles and paths. This head has no recorded "
@@ -80,10 +81,7 @@ class Final:
     marker: str | None = None
     degraded: str = ""
     classification_note: str = ""
-
-
-def _clip(text: str, limit: int = DESCRIPTION_LIMIT) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    detail: str = ""
 
 
 def _cut(text: str, limit: int) -> str:
@@ -172,17 +170,32 @@ def _threads_to_open(
     commentable: Mapping[str, frozenset[int]],
     delivery: str,
     cycle: int,
-) -> list[tuple[Finding, str]]:
+    shared_room: dict[str, int] | None = None,
+) -> tuple[list[tuple[Finding, str]], list[str]]:
     """Open findings carried from earlier rounds that have no thread: thread the anchorable ones."""
     if judgement is None or judgement.decision != protocol.SHIP_WITH_FIXES:
-        return []
-    if delivery != "review" or plan.get("threaded") is None:
-        return []
+        return [], []
+    if delivery == "review" and plan.get("threaded") is None:
+        return [], []
+    if delivery != "review":
+        return [], [entry["id"] for entry in judgement.carried]
     threaded = frozenset(plan["threaded"])
     known = plan.get("open_findings") or {}
     opened: list[tuple[Finding, str]] = []
+    unanchored: list[str] = []
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
+    prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
+    counts = plan.get("open_counts")
+    room = (
+        shared_room
+        if shared_room is not None
+        else {key: int(count) for key, count in (counts if counts is not None else dict.fromkeys(known, 1)).items()}
+    )
+    if counts is None and shared_room is None:
+        for entry in judgement.carried:
+            if f"c{cycle}-{entry['id']}" in threaded:
+                room[prints[entry["id"]]] = room.get(prints[entry["id"]], 0) - 1
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
@@ -191,6 +204,7 @@ def _threads_to_open(
         if moved or line not in lines:
             # The recorded line belongs to an earlier head: open on the file's first changed line instead.
             if not moved or not lines:
+                unanchored.append(entry["id"])
                 continue
             line, end = min(lines), None
         finding = Finding(
@@ -203,9 +217,12 @@ def _threads_to_open(
             else "",
             end if isinstance(end, int) and end > line else None,
         )
-        if dedup.fingerprint(finding.file, finding.title) not in known:
-            opened.append((finding, entry["id"]))
-    return opened
+        key = prints[entry["id"]]
+        if key in known and room.get(key, 0) > 0:
+            room[key] -= 1
+            continue
+        opened.append((finding, entry["id"]))
+    return opened, unanchored
 
 
 def _entry_item(entry: Mapping[str, Any], threaded: bool = False) -> list[str]:
@@ -517,28 +534,95 @@ def defect_ids(plan: Mapping[str, Any], defects: Sequence[Finding]) -> dict[Find
     return {finding: f"D{next_id + index}" for index, finding in enumerate(defects)}
 
 
-def escalation_suffix(escalated: Sequence[str]) -> str:
-    return f"; escalated {','.join(escalated)}" if escalated else ""
+def _severities(entries: Sequence[Mapping[str, Any]], findings: Sequence[Finding]) -> list[tuple[str, int]]:
+    return status_text.severity_counts(
+        [*(str(entry.get("severity")) for entry in entries), *(finding.severity for finding in findings)],
+        SEVERITIES,
+    )
 
 
-def _description(
-    step: Step,
-    judgement: protocol.Judgement | None,
-    reviewer: str | None,
-    cause: str,
+def decision_description(
+    decision: str,
+    state: str,
+    *,
+    open_entries: Sequence[Mapping[str, Any]] = (),
+    open_findings: Sequence[Finding] = (),
     escalated: Sequence[str] = (),
-    gone: str = "",
-    absent: Sequence[unavailable.Cause] = (),
+    fixed: Sequence[str] = (),
+    strikes: int = 0,
+    strike_limit: int | None = None,
+    tail: str = "",
+) -> str:
+    limit = status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.REPOST_LIMIT
+    if decision == protocol.SHIP:
+        return status_text.shipped(fixed, tail, limit)
+    if decision == protocol.SHIP_WITH_FIXES:
+        return status_text.with_findings(
+            status_text.OPEN_FINDINGS_LABEL,
+            len(open_entries) + len(open_findings),
+            _severities(open_entries, open_findings),
+            escalated,
+            tail,
+            limit,
+        )
+    return status_text.refused_decision(protocol.LABELS[decision], strikes, strike_limit, tail, limit)
+
+
+def _unavailable_cause(attempts: Sequence[Attempt], plan: Mapping[str, Any]) -> unavailable.Cause | None:
+    absent = [
+        attempt for attempt in sorted(attempts, key=lambda item: item.slot) if attempt.outcome == selection.ABSENT
+    ]
+    if absent:
+        return unavailable.attempt_cause(absent[-1])
+    return unavailable.QUOTA if plan.get("pool_blocked_until") else None
+
+
+SHORT_CAUSES = {
+    unavailable.QUOTA.key: "provider quota",
+    unavailable.PROVIDER_AUTH.key: "provider authentication",
+    unavailable.TIMEOUT.key: "reviewer timed out",
+    unavailable.INVALID.key: "reviewer returned no usable result",
+    unavailable.EMPTY.key: "reviewer returned no usable result",
+    unavailable.PROVIDER_ERROR.key: "provider error",
+    unavailable.RUN_FAILED.key: "reviewer failed to run",
+    unavailable.TOO_LARGE.key: "change exceeds the model context",
+    unavailable.INCOMPLETE.key: "reviewer did not read every changed hunk",
+}
+DEFAULT_SHORT_CAUSE = "no reviewer could run"
+
+
+GATEWAY_SHORT = {
+    unavailable.GATEWAY_REJECTED.key: "model gateway rejected the client token",
+    unavailable.GATEWAY_ERROR.key: "model gateway unusable or misconfigured",
+}
+
+
+def _pending_description(
+    cause: str, attempts: Sequence[Attempt], plan: Mapping[str, Any], degraded: Sequence[str]
 ) -> str:
     if cause == OVERSIZE:
         return OVERSIZE_DESCRIPTION
-    if cause == UNAVAILABLE and judgement is None:
-        return f"pending: no reviewer available ({gone})"
-    if judgement is None:
-        return "pending: " + unavailable.reason_text(absent)
-    if judgement.decision == protocol.SHIP_WITH_FIXES:
-        return f"{reviewer}: {judgement.label}, {judgement.open_count} defect(s) to fix{escalation_suffix(escalated)}"
-    return f"{reviewer}: {judgement.label}"
+    if cause == STOPPED:
+        return status_text.STOPPED
+    if cause == UNREPORTED:
+        return status_text.UNREPORTED
+    if cause == UNAVAILABLE and plan.get("served_error"):
+        gateway = unavailable.gateway_cause(str(plan["served_error"]))
+        if gateway is unavailable.GATEWAY:
+            return status_text.GATEWAY_DOWN
+        return status_text.unavailable(GATEWAY_SHORT[gateway.key])
+    kind = _unavailable_cause(attempts, plan)
+    if kind is unavailable.INCOMPLETE:
+        return status_text.incomplete_read(len(attempts))
+    if cause == UNAVAILABLE and kind is None:
+        return status_text.unavailable("provider outage" if degraded else "no served model can hold this change")
+    return status_text.unavailable(SHORT_CAUSES.get(kind.key, DEFAULT_SHORT_CAUSE) if kind else DEFAULT_SHORT_CAUSE)
+
+
+def _detail(step: Step, cause: str, gone: str) -> str:
+    if cause == UNAVAILABLE:
+        return f"no reviewer available ({gone})"
+    return "; ".join(step.reasons or ("no reviewer available",))
 
 
 def _reviewer_label(plan: Mapping[str, Any], name: str | None) -> str:
@@ -744,7 +828,7 @@ def finalize(
             if plan.get("findings_delivery") == "review"
             else None
         )
-        return Final(PENDING, "result withheld: artifacts failed validation", body, review, None, INTEGRITY)
+        return Final(PENDING, status_text.INTEGRITY, body, review, None, INTEGRITY, detail="; ".join(errors))
     step, pending_cause = _settled(plan, step)
     state = STATES[step.kind]
     reviewer = step.reviewer.name if step.reviewer else None
@@ -765,15 +849,24 @@ def finalize(
         if judgement is not None
         else []
     )
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
+    delivery = plan.get("findings_delivery", "comment")
+    threaded_ids = plan.get("threaded")
+    widen = delivery == "review" and threaded_ids is not None
+    carried_at = {
+        (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
+        for entry in (judgement.carried if judgement is not None else ())
+        if widen or (threaded_ids is not None and f"c{cycle}-{entry['id']}" in threaded_ids)
+    }
+    open_counts = plan.get("open_counts")
+    room = {key: int(count) for key, count in open_counts.items()} if open_counts is not None else None
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), room, carried_at)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
         if judgement is not None
         else {}
     )
-    delivery = plan.get("findings_delivery", "comment")
-    opened = _threads_to_open(plan, judgement, commentable, delivery, cycle)
+    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (
         protocol.escalated_ids(rules.get("maintained") or {}, judgement.carried, disputed)
@@ -803,13 +896,24 @@ def finalize(
         if plan.get("served_error")
         else (f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change")
     )
+    if unrecorded:
+        description = MARKER_LIMIT_DESCRIPTION
+    elif judgement is None:
+        description = _pending_description(pending_cause, attempts, plan, degraded)
+    else:
+        description = decision_description(
+            judgement.decision,
+            state,
+            open_entries=judgement.carried,
+            open_findings=judgement.defects,
+            escalated=escalated,
+            fixed=judgement.fixed,
+            strikes=strikes,
+            strike_limit=(rules.get("max_do_not_ship") or None),
+        )
     absent_causes = unavailable.causes(step, attempts, plan)
-    description = (
-        MARKER_LIMIT_DESCRIPTION
-        if unrecorded
-        else _description(step, judgement, reviewer, pending_cause, escalated, gone, absent_causes)
-    )
-    degraded_suffix = f" · degraded: {', '.join(degraded)}" if degraded else ""
+    detail = _detail(step, pending_cause, gone) if judgement is None else ""
+    degraded_suffix = f"{status_text.DEGRADED_MARK}{', '.join(degraded)}" if degraded else ""
     notice_causes = (
         (unavailable.PENDING_CAUSES[pending_cause],) if pending_cause in unavailable.PENDING_CAUSES else absent_causes
     )
@@ -883,7 +987,11 @@ def finalize(
     final_strikes = strikes if judgement is not None and not unrecorded else None
     return Final(
         state,
-        _clip(description, DESCRIPTION_LIMIT - len(degraded_suffix)) + degraded_suffix,
+        status_text.with_degraded(
+            description,
+            degraded,
+            status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.DESCRIPTION_LIMIT,
+        ),
         body if has_content else "",
         review,
         reviewer,
@@ -892,6 +1000,7 @@ def finalize(
         judgement,
         marker,
         degraded_suffix,
+        detail=detail,
     )
 
 
@@ -921,8 +1030,16 @@ def carried(plan: Mapping[str, Any]) -> Final:
     reviewed_head = plan["reviewed_head"]
     label = protocol.LABELS[decision]
     open_defects = protocol.unique_defects(previous["open_defects"])
+    description = decision_description(
+        decision,
+        outcome,
+        open_entries=open_defects,
+        escalated=previous.get("escalated", ()),
+        strikes=int(previous["strikes_after"]),
+        strike_limit=rules.get("max_do_not_ship") or None,
+        tail=status_text.carried_tail(reviewed_head),
+    )
     moved = reviewed_head != plan["head_sha"]
-    description = f"carried from {reviewed_head[:12]}: {label}{escalation_suffix(previous.get('escalated', ()))}"
     lines = [
         *_head(
             plan,
@@ -962,7 +1079,7 @@ def carried(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    return Final(outcome, _clip(description), body, delivered, None, None, int(previous["strikes_after"]))
+    return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
 
 def adjudicated(plan: Mapping[str, Any]) -> Final:
@@ -1016,18 +1133,22 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    description = f"owner adjudication: {action} {defect_id}; {label}{escalation_suffix(escalated)}"
-    return Final(outcome, _clip(description), body, delivered, None, None, int(previous["strikes_after"]))
+    description = decision_description(
+        decision,
+        outcome,
+        open_entries=open_defects,
+        escalated=escalated,
+        strikes=int(previous["strikes_after"]),
+        strike_limit=rules.get("max_do_not_ship") or None,
+        tail=status_text.ruling_tail(action, defect_id),
+    )
+    return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
 
 REPOST_NOTE = (
     "A rerun does not re-judge an unchanged head. To get a new judgement, push a change, or reply `Dispute:` "
     "with file:line counter-evidence on the finding's review thread and then comment `/review`."
 )
-
-
-REPOSTED_MARK = " (reposted)"
-RUN_SUFFIX_RESERVE = 45
 
 
 def reposted(plan: Mapping[str, Any]) -> Final:
@@ -1043,10 +1164,10 @@ def reposted(plan: Mapping[str, Any]) -> Final:
         )
         + "\n"
     )
-    base = repost["description"].removesuffix(REPOSTED_MARK)
-    reserve = RUN_SUFFIX_RESERVE if repost["state"] == SUCCESS else 0
-    description = _clip(base, DESCRIPTION_LIMIT - len(REPOSTED_MARK) - reserve) + REPOSTED_MARK
-    return Final(repost["state"], description, body, None, None, None, None)
+    base = repost["description"]
+    if repost["state"] == SUCCESS:
+        base = status_text.trim(base, status_text.SUCCESS_LIMIT)
+    return Final(repost["state"], status_text.repost(base), body, None, None, None, None)
 
 
 def refused(plan: Mapping[str, Any]) -> Final:
@@ -1073,16 +1194,15 @@ def refused(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    description = f"refused after {strikes} DO NOT SHIP decisions: open a new pull request"
-    return Final(FAILURE, _clip(description), body, delivered, None, None, strikes)
+    return Final(FAILURE, status_text.refused(strikes), body, delivered, None, None, strikes)
 
 
 def fixed(state: str, description: str) -> Final:
-    return Final(state, _clip(description), "", None, None)
+    return Final(state, status_text.trim(description, status_text.DESCRIPTION_LIMIT), "", None, None)
 
 
 def omp_install_failed() -> Final:
-    return Final(PENDING, "the pinned omp build could not be installed; no reviewer ran", "", None, None, OMP_INSTALL)
+    return Final(PENDING, status_text.OMP_INSTALL, "", None, None, OMP_INSTALL)
 
 
 def bound_run(plan: Mapping[str, Any]) -> Any:
@@ -1093,11 +1213,7 @@ def status_payload(plan: Mapping[str, Any], final: Final, target_url: str) -> di
     description = final.description
     run_id = bound_run(plan)
     if final.state == SUCCESS and run_id:
-        suffix = f" [run {run_id}]"
-        if len(description) + len(suffix) > DESCRIPTION_LIMIT:
-            base = description.removesuffix(final.degraded)
-            description = _clip(base, DESCRIPTION_LIMIT - len(suffix) - len(final.degraded)) + final.degraded
-        description += suffix
+        description = status_text.with_run_suffix(description, run_id)
     return {
         "state": final.state,
         "context": plan["status_context"],

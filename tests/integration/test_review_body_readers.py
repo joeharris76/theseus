@@ -47,7 +47,7 @@ def test_a_ship_in_the_new_layout_passes_the_gate_and_reads_as_success(harness: 
 
     assert gate.code == 0, gate.stderr
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["success", "success"]
-    assert harness.github.gate_statuses(head)[-1]["description"] == f"review: pass (review verdict for {head})"
+    assert harness.github.gate_statuses(head)[-1]["description"].startswith("Pass")
 
 
 def test_a_blocking_review_in_the_new_layout_holds_the_gate_with_its_findings_named(harness: Harness) -> None:

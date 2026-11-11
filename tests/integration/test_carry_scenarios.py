@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from theseus_reviewer import status_text
+
 from .harness import CHECKER, Harness, git
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
@@ -42,7 +44,10 @@ def test_a_rebase_with_an_identical_merge_base_diff_carries_the_decision(harness
     assert run.plan["decision"] == "carry", run.plan["decision_reason"]
     assert harness.omp_calls() == 1
     [status] = harness.github.review_statuses(head)
-    assert status["state"] == "success" and status["description"].startswith(f"carried from {first[:12]}: SHIP")
+    assert status["state"] == "success"
+    assert status["description"].startswith(
+        status_text.SEP.join((status_text.SHIP_LABEL, status_text.carried_tail(first)))
+    )
     assert f"### ✅ SHIP · carried from {first}" in harness.github.reviews[71][-1]["body"]
 
 

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import credentials, dedup, layout, protocol, report, selection
+from theseus_reviewer import credentials, dedup, layout, protocol, report, selection, status_text
 from theseus_reviewer.diff import commentable_lines
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import INTEGRITY, MARKER_LIMIT, OVERSIZE, UNREPORTED
@@ -76,6 +76,7 @@ def _kitchen_plan(policy: Policy, **over: Any) -> dict[str, Any]:
         policy, kind="follow-up", round=2, prior=prior, changed=[CHECKER], next_id=7, strikes=1, **over
     )
     plan["open_findings"] = {dedup.fingerprint(CHECKER, "Already open problem"): "Medium"}
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Already open problem"): 1}
     plan.update(scope="changed", reviewed_head=OLD)
     return plan
 
@@ -147,7 +148,11 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     assert "Verified fixed" not in body and "supersedes" not in body and "Decision: **" not in body
     assert lines[-2].startswith(layout.VERDICT_MARKER_OPEN) and lines[-1].startswith(protocol.MARKER_OPEN)
     assert final.reviewer == "small" and final.strikes == 1 and final.pending_cause is None
-    assert final.review is None and final.description == "small: SHIP WITH FIXES, 5 defect(s) to fix"
+    assert final.review is None and final.description == (
+        status_text.with_findings(
+            status_text.OPEN_FINDINGS_LABEL, 5, [("High", 2), ("Medium", 3)], [], "", status_text.DESCRIPTION_LIMIT
+        )
+    )
 
 
 def test_a_follow_up_records_every_open_defect_with_its_next_id(policy: Policy) -> None:
@@ -297,16 +302,16 @@ def test_a_pending_selection_that_never_reported_names_the_selected_reviewer(pol
     )
     assert final.state == "pending" and final.pending_cause == UNREPORTED
     assert "- small: a selected reviewer did not report" in final.body.split("\n")
-    assert final.description == "pending: a selected reviewer did not report"
+    assert final.description == status_text.UNREPORTED
     nameless = report.finalize(_comment_plan(policy), Step(selection.REVIEW, None, ()), [], [], {}, COMMENTABLE)
     assert nameless.state == "pending" and nameless.pending_cause == UNREPORTED
 
 
 def test_a_pending_selection_without_reasons_still_says_why(policy: Policy) -> None:
     final = _finalize(policy, _comment_plan(policy), None, kind=selection.PENDING, reviewer=None)
-    assert final.description.startswith("pending: ") and len(final.description) > len("pending: ")
+    assert final.description == status_text.unavailable("no reviewer could run")
     two = _finalize(policy, _comment_plan(policy), None, kind=selection.PENDING, reviewer=None, reasons=("a", "b"))
-    assert two.description == "pending: no reviewer could run"
+    assert two.description == final.description and "a; b" in two.detail
 
 
 def test_an_oversize_plan_keeps_its_header_before_the_size_note(policy: Policy) -> None:
@@ -357,6 +362,7 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     monkeypatch.setattr(protocol, "MARKER_LIMIT", 10)
     plan = _protocol_plan(policy, strikes=1)
     plan["open_findings"] = {dedup.fingerprint(CHECKER, "Already open problem"): "Medium"}
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Already open problem"): 1}
     verdict = _v("s", [_defect("New problem", 2, "d"), _defect("Already open problem", 1), _defect("Far", 40)])
     final = _finalize(policy, plan, verdict)
     assert final.state == "pending" and final.pending_cause == MARKER_LIMIT and final.strikes is None
@@ -655,7 +661,14 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     assert sum("D4 · Old" in line for line in lines) == 1
     assert f"Fix each one, or contest it with a comment `{protocol.COMMENT_DISPUTE_GRAMMAR}`." in lines
     assert any("2 of 3" in line and "DO NOT SHIP" in line for line in lines)
-    assert final.description == f"carried from {OLD[:12]}: SHIP WITH FIXES"
+    assert final.description == status_text.with_findings(
+        status_text.OPEN_FINDINGS_LABEL,
+        2,
+        [("High", 2)],
+        [],
+        status_text.carried_tail(OLD),
+        status_text.DESCRIPTION_LIMIT,
+    )
     assert (final.state, final.strikes, final.reviewer, final.pending_cause) == ("failure", 2, None, None)
     assert final.review is None
     assert final.body.split("\n")[-1].startswith(protocol.MARKER_OPEN)
@@ -698,12 +711,12 @@ def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Polic
 def test_the_success_status_carries_the_run_identity_inside_the_description_limit() -> None:
     plan = {"status_context": "review-verdict", "run_id": "a" * 32}
     suffix = f" [run {'a' * 32}]"
-    room = report.DESCRIPTION_LIMIT - len(suffix)
+    room = status_text.DESCRIPTION_LIMIT - len(suffix)
     exact = report.Final("success", "d" * room, "", None, None)
     assert report.status_payload(plan, exact, "url")["description"] == "d" * room + suffix
     over = report.Final("success", "d" * (room + 1), "", None, None)
     clipped = report.status_payload(plan, over, "url")["description"]
-    assert clipped == "d" * (room - 1) + "…" + suffix and len(clipped) == report.DESCRIPTION_LIMIT
+    assert clipped == "d" * (room - 1) + "…" + suffix and len(clipped) == status_text.DESCRIPTION_LIMIT
 
 
 @pytest.mark.parametrize(
@@ -773,3 +786,118 @@ def test_a_protocol_decision_separates_its_text_from_the_record_by_one_blank_lin
     lines = final.body.split("\n")
     assert lines[-1].startswith(protocol.MARKER_OPEN) and lines[-2].startswith(layout.VERDICT_MARKER_OPEN)
     assert lines[-3] == "" and lines[-4] != ""
+
+
+def _carried(defect_id: str, line: int) -> dict[str, Any]:
+    return {
+        "id": defect_id,
+        "severity": "High",
+        "file": "a.py",
+        "line": line,
+        "end_line": None,
+        "title": "Unchecked size",
+    }
+
+
+def _thread_plan(threaded: list[str]) -> dict[str, Any]:
+    key = dedup.fingerprint("a.py", "Unchecked size")
+    return {"threaded": threaded, "open_findings": {key: "High"}, "head_sha": "h", "protocol": {"previous_head": "h"}}
+
+
+def _judged(*entries: dict[str, Any]) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(decision=protocol.SHIP_WITH_FIXES, carried=list(entries))
+
+
+def test_carried_defects_with_one_fingerprint_each_get_a_thread_or_a_notice() -> None:
+    lines = {"a.py": frozenset({3, 40})}
+    entries = (_carried("D1", 3), _carried("D2", 40))
+    opened, unanchored = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
+    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")] and unanchored == []
+    opened, unanchored = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"] and unanchored == []
+    opened, unanchored = report._threads_to_open(
+        _thread_plan([]), _judged(_carried("D1", 3), _carried("D2", 41)), lines, "review", 1
+    )
+    assert [defect_id for _, defect_id in opened] == [] and unanchored == ["D2"]
+
+
+def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_fingerprint() -> None:
+    lines = {"a.py": frozenset({3, 40})}
+    entries = (_carried("D1", 3), _carried("D2", 40))
+    key = dedup.fingerprint("a.py", "Unchecked size")
+    plan = {**_thread_plan(["c1-D1"]), "open_counts": {key: 1}}
+    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == ([], [])
+    plan["open_counts"] = {}
+    opened, _ = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"]
+
+
+def _located_plan(policy: Policy) -> dict[str, Any]:
+    plan = _protocol_plan(policy, kind="follow-up", round=2, prior=[_prior("D1")], changed=[CHECKER], next_id=2)
+    key = dedup.fingerprint(CHECKER, "Old")
+    plan.update(open_findings={key: "High"}, open_counts={}, threaded=["c1-D1"], scope="changed", reviewed_head=OLD)
+    return plan
+
+
+def _located_verdict(status: str, *lines: int) -> dict[str, Any]:
+    verdict = _v("s", [_defect("Old", line, "d") for line in lines])
+    verdict["prior_defects"] = [{"id": "D1", "status": status, "evidence": "e"}]
+    return verdict
+
+
+def _thread_lines(final: report.Final) -> list[int]:
+    assert final.review is not None
+    return [comment["line"] for comment in final.review["comments"]]
+
+
+def test_a_carried_defect_reported_again_at_its_own_line_gets_no_second_thread(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("not_fixed", 2))
+    assert _thread_lines(final) == []
+
+
+def test_a_carried_defect_reported_again_at_another_line_gets_its_own_thread(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("not_fixed", 1))
+    assert _thread_lines(final) == [1]
+
+
+def test_a_fixed_defects_open_thread_does_not_suppress_a_new_finding_with_its_fingerprint(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("fixed", 2))
+    assert _thread_lines(final) == [2]
+
+
+def test_one_unmarked_thread_covers_only_one_of_a_new_and_a_carried_defect(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    plan["threaded"] = []
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Old"): 1}
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 1))
+    assert final.review is not None
+    placed = [comment["line"] for comment in final.review["comments"]]
+    assert placed == [2]
+
+
+def test_a_new_finding_at_an_unthreaded_carried_location_takes_no_thread_room(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    plan["threaded"] = []
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Old"): 1}
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert final.review is not None
+    assert [comment["line"] for comment in final.review["comments"]] == []
+
+
+def test_a_same_line_re_report_still_gets_a_thread_when_threads_were_not_read(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    del plan["threaded"]
+    plan.update(open_findings={}, open_counts={})
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert _thread_lines(final) == [2]
+
+
+def test_comment_delivery_does_not_call_a_same_line_re_report_an_open_thread(policy: Policy) -> None:
+    plan = {**_located_plan(policy), "findings_delivery": "comment"}
+    plan["threaded"] = []
+    plan.update(open_findings={}, open_counts={})
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert "Defects already open as review threads" not in final.body
+    assert "Old" in final.body

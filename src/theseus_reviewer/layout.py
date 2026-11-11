@@ -11,17 +11,18 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
 
+from . import status_text
 from .policy import SEVERITIES
 from .verdict import display_path
 
 ADVISORY = "Advisory"
 SEVERITY_MARKS = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵", ADVISORY: "⚪"}
 DECISION_MARKS = {
-    "SHIP": "✅",
-    "SHIP WITH FIXES": "🔧",
-    "DO NOT SHIP": "⛔",
+    status_text.SHIP_LABEL: "✅",
+    status_text.OPEN_FINDINGS_LABEL: "🔧",
+    status_text.DO_NOT_SHIP_LABEL: "⛔",
     "NOT REVIEWED": "⏳",
-    "REFUSED": "🚫",
+    status_text.REFUSED_LABEL: "🚫",
 }
 VERDICT_CONTEXT = "review-verdict"
 VERDICT_MARKER_OPEN = f"<!-- {VERDICT_CONTEXT}: v2"

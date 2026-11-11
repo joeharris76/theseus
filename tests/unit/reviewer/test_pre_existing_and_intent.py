@@ -10,7 +10,7 @@ import pytest
 
 from conftest import ALPHA_POLICY
 from theseus_reviewer import attempts as attempt_files
-from theseus_reviewer import cli, coverage, github, intent, protocol, selection
+from theseus_reviewer import cli, coverage, github, intent, protocol, selection, status_text
 from theseus_reviewer.absence import INCOMPLETE, Absence
 from theseus_reviewer.diff import STAGED_DIFF_NAME, added_lines
 from theseus_reviewer.policy import Policy
@@ -159,7 +159,9 @@ def test_the_origin_is_validated_defaults_to_introduced_and_survives_the_artifac
 def test_unverified_pre_existing_findings_publish_as_blocking_and_remain_open(policy: Policy, tmp_path: Path) -> None:
     plan = _plan_with(policy)
     final = _final(policy, tmp_path, plan, _v("s", [_old("Medium"), _old("Low", 3)]))
-    assert final.state == "failure" and "SHIP WITH FIXES, 2 defect(s) to fix" in final.description
+    assert final.state == "failure" and final.description == status_text.with_findings(
+        status_text.OPEN_FINDINGS_LABEL, 2, [("Medium", 1), ("Low", 1)], [], "", status_text.DESCRIPTION_LIMIT
+    )
     body = final.review["body"]
     assert "**Pre-existing, not blocking**" not in body and "(pre-existing)" not in body
     record = protocol.decode_marker(body)
