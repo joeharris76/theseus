@@ -155,6 +155,23 @@ def test_escalated_ids_survive_whole_and_the_label_is_never_cut() -> None:
         assert tail in description
 
 
+def test_the_escalated_pattern_reads_the_hidden_count_and_the_gate_repeats_it() -> None:
+    description = report.decision_description(
+        protocol.SHIP_WITH_FIXES, "failure", open_entries=[{"severity": "Low"}] * 99, escalated=MANY, tail=""
+    )
+    match = status_text.ESCALATED.search(description)
+    assert match is not None and match.group("more") is not None
+    ids, more = match.group("ids").split(","), int(match.group("more"))
+    assert len(ids) + more == len(MANY)
+    message = status_text.gate_escalated(ids, adjudication.GRAMMAR, more)
+    shown = message.split(" · ")[1].split(" need ")[0]
+    listed, _, hidden = shown.partition(" +")
+    assert len(listed.split(",")) + int(hidden.split(" ")[0]) == len(MANY)
+    assert len(message) <= status_text.DESCRIPTION_LIMIT
+    assert status_text.ESCALATED.search("escalated D1,D2").group("more") is None  # type: ignore[union-attr]
+    assert "more" not in status_text.gate_escalated(["D1", "D2"], adjudication.GRAMMAR)
+
+
 def test_the_run_suffix_is_trailing_and_the_reposted_mark_precedes_it() -> None:
     posted = status_text.with_run_suffix(status_text.repost("SHIP · no open findings"), RUN_ID)
     assert posted == f"SHIP · no open findings (reposted) [run {RUN_ID}]"
@@ -439,7 +456,7 @@ def test_the_exempt_status_with_a_stale_rule_set_waits_with_its_own_message() ->
 
 def test_no_decision_waits_with_the_prefix_the_consumers_match() -> None:
     status, message = _decide([])
-    assert status == review_check.WAITING
+    assert status == review_check.OUTSTANDING
     assert message.startswith(status_text.GATE_WAITING_PREFIX)
     assert f"{status_text.STANDIN_APPROVAL} {HEAD}" in message
 

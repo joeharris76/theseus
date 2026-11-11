@@ -19,6 +19,7 @@ from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, pars
 from .review_check import (
     API_ROOT,
     ERROR,
+    OUTSTANDING,
     PASS,
     WAITING,
     CheckError,
@@ -63,7 +64,9 @@ class EvaluationFailed(Exception):
 
 
 def gate_state(status: int) -> str:
-    return "success" if status == PASS else "failure"
+    if status == PASS:
+        return "success"
+    return "pending" if status == OUTSTANDING else "failure"
 
 
 def gate_description(message: str) -> str:
@@ -380,7 +383,7 @@ def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
         return ERROR
     print(message)
     if args.no_post:
-        return PASS if status == PASS else WAITING
+        return status if status in (PASS, OUTSTANDING) else WAITING
     try:
         latest_sha, latest_status, latest_message = evaluate(args.repo, args.pr, token, config)
     except UngatedBase as exc:
@@ -401,11 +404,11 @@ def post_gate(args: argparse.Namespace, token: str, config: GateConfig) -> int:
     except CheckError as exc:
         print(f"review-gate: error: {exc}", file=sys.stderr)
         return ERROR
-    return PASS if status == PASS else WAITING
+    return status if status in (PASS, OUTSTANDING) else WAITING
 
 
 def process_exit(status: int) -> int:
-    return WAITING_EXIT if status == WAITING else status
+    return WAITING_EXIT if status in (WAITING, OUTSTANDING) else status
 
 
 def run(argv: list[str] | None = None) -> int:

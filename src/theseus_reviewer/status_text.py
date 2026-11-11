@@ -20,7 +20,7 @@ OPEN_FINDINGS_LABEL = "SHIP WITH FIXES"
 DO_NOT_SHIP_LABEL = "DO NOT SHIP"
 REFUSED_LABEL = "REFUSED"
 ESCALATED_LABEL = "escalated"
-ESCALATED = re.compile(rf"{ESCALATED_LABEL} (?P<ids>D[0-9]+(?:,D[0-9]+)*)")
+ESCALATED = re.compile(rf"{ESCALATED_LABEL} (?P<ids>D[0-9]+(?:,D[0-9]+)*)(?: \+(?P<more>[0-9]+) more)?")
 EXEMPT_SUCCESS_DESCRIPTION = "only exempt paths changed"
 REFUSED_DESCRIPTION_PREFIX = "refused after"
 EDITED_REASON = "a review was edited"
@@ -133,9 +133,10 @@ def _escalated_text(ids: Sequence[str], room: int) -> str:
     return f"{ESCALATED_LABEL} {ids[0]}"
 
 
-def ids_text(ids: Sequence[str], room: int, joiner: str = ",") -> str:
+def ids_text(ids: Sequence[str], room: int, joiner: str = ",", unseen: int = 0) -> str:
     for shown in range(len(ids), 0, -1):
-        hidden = f" +{len(ids) - shown} more" if shown < len(ids) else ""
+        left = len(ids) - shown + unseen
+        hidden = f" +{left} more" if left else ""
         text = f"{joiner.join(ids[:shown])}{hidden}"
         if len(text) <= room:
             return text
@@ -261,13 +262,13 @@ def gate_open_findings(dispute_grammar: str) -> str:
     )
 
 
-def gate_escalated(ids: Sequence[str], adjudication_grammar: str) -> str:
+def gate_escalated(ids: Sequence[str], adjudication_grammar: str, more: int = 0) -> str:
     stem = f"{GATE_BLOCKED}{SEP}"
     ruling = f" need an owner ruling: '{adjudication_grammar}', or push a fix"
     short = f" need an owner ruling{SEP}see the review-verdict status"
     for tail in (ruling, short):
         room = DESCRIPTION_LIMIT - len(stem) - len(tail)
-        shown = ids_text(ids, room)
+        shown = ids_text(ids, room, unseen=more)
         if len(shown) <= room:
             return f"{stem}{shown}{tail}"
     return f"{stem}{ids[0]}{short}"

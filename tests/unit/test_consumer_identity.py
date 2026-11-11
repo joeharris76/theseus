@@ -11,7 +11,7 @@ from tests.conftest import ALPHA_POLICY, BETA_POLICY, CONSUMER_ALPHA, CONSUMER_B
 from theseus_reviewer import gate, github, omp_bump_gate, review_check, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import PolicyError, load_policy, parse_policy
-from theseus_reviewer.review_check import WAITING
+from theseus_reviewer.review_check import OUTSTANDING, WAITING
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -73,14 +73,14 @@ def test_standin_attestation_is_accepted_only_from_the_consumers_own_attesters(o
     assert status == review_check.PASS
     assert message == status_text.gate_pass_standin(CONSUMERS[own]["owner"])
     status, message = _decide(config, [], [_comment(CONSUMERS[other]["owner"], attestation)])
-    assert status == WAITING
+    assert status == OUTSTANDING
     assert message == status_text.gate_waiting(HEAD)
 
 
 def test_beta_deputy_is_an_attester_for_beta_only():
     attestation = f"Stand-in review: APPROVE {HEAD}"
     assert _decide(_config(BETA), [], [_comment("beta-deputy", attestation)])[0] == review_check.PASS
-    assert _decide(_config(ALPHA), [], [_comment("beta-deputy", attestation)])[0] == WAITING
+    assert _decide(_config(ALPHA), [], [_comment("beta-deputy", attestation)])[0] == OUTSTANDING
 
 
 @pytest.mark.parametrize("own,other", [("alpha", "beta"), ("beta", "alpha")])
@@ -90,7 +90,7 @@ def test_verdict_statuses_count_only_from_the_consumers_own_app(own, other):
     assert status == WAITING
     assert message == status_text.GATE_DO_NOT_SHIP
     status, message = _decide(config, [_status(CONSUMERS[other]["bot"])], [])
-    assert status == WAITING
+    assert status == OUTSTANDING
     assert message == status_text.gate_waiting(HEAD)
 
 

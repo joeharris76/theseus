@@ -107,7 +107,7 @@ def test_evidence_that_is_wrong_edited_or_not_the_owners_does_not_release_the_bu
 
 def test_matching_unedited_owner_evidence_releases_the_bump(texts: dict[str, str]) -> None:
     status, message = _gate([_evidence()])
-    assert status == check.WAITING
+    assert status == check.OUTSTANDING
     assert message == status_text.gate_waiting(HEAD)
 
 
@@ -168,7 +168,7 @@ def test_the_owner_evidence_attesters_come_from_the_binding(texts: dict[str, str
         evidence = _evidence(login=attester)
         assert "has no owner evidence" not in " ".join(_refusals([evidence], [POLICY_PATH], config=BETA))
     status, message = _gate([_evidence(login="beta-deputy")], config=BETA)
-    assert status == check.WAITING and "omp pin bump refused" not in message
+    assert status == check.OUTSTANDING and "omp pin bump refused" not in message
 
 
 def test_captured_fixtures_under_the_consumer_prefix_ride_along_with_a_bump(texts: dict[str, str]) -> None:
