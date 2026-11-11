@@ -27,6 +27,7 @@ from theseus_reviewer import (
     protocol,
     reset,
     review_check,
+    status_text,
     sweep,
 )
 from theseus_reviewer.retry import State
@@ -225,7 +226,7 @@ def test_a_standin_attestation_passes_the_gate_only_in_the_review_spelling() -> 
 def test_the_verdict_heading_is_read_only_in_the_review_form() -> None:
     for context, expected in (("review-verdict", "success"), ("oracle-verdict", None)):
         body = f"### {context}: success for `{HEAD}`\n\nDetails."
-        assert review_check.verdict_state(body, HEAD, review_check._REVIEW_VERDICT) == expected
+        assert review_check.verdict_state(body, HEAD) == expected
 
 
 def test_app_statuses_count_only_under_their_own_context() -> None:
@@ -245,11 +246,11 @@ def test_app_statuses_count_only_under_their_own_context() -> None:
 
 
 def test_a_surfaced_sweep_failure_is_recognised_under_its_current_prefix_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    for prefix, expected in ((github.SWEEP_FAILURE_SURFACE_PREFIX, True), ("oracle-verdict failed: ", False)):
+    for prefix, expected in ((status_text.SWEEP_FAILURE_SURFACE_PREFIX, True), ("oracle-verdict failed: ", False)):
         pending = [{"state": "pending", "description": f"{prefix}Run the attempt loop."}]
         monkeypatch.setattr(cli, "_own_statuses", lambda *args, _p=pending: _p)
         assert cli._already_surfaced("o/r", HEAD, "review-verdict", "bot", 7, None) is expected
-    assert sweep.surface_description(["Run it"]).startswith(github.SWEEP_FAILURE_SURFACE_PREFIX)
+    assert sweep.surface_description(["Run it"]).startswith(status_text.SWEEP_FAILURE_SURFACE_PREFIX)
     assert "/review" in sweep.surface_description([])
 
 

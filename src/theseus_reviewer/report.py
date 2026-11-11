@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import absence, adjudication, credentials, dedup, protocol, providers, recovery, redaction_check, selection
+from . import adjudication, dedup, protocol, providers, redaction_check, selection, status_text, unavailable
+from .policy import SEVERITIES
 from .retry import (
     ALL_ABSENT,
     FAILURE,
@@ -33,23 +34,23 @@ from .verdict import (
     sanitize,
 )
 
-DESCRIPTION_LIMIT = 140
 BODY_LIMIT = 65536
 BODY_CUT_NOTICE = "Size limit: the rest of this review was cut to stay under GitHub's character limit."
 TRUNCATED = "… [truncated]"
-OVERSIZE_DESCRIPTION = "pending: too large for the review; split the pull request or ask the owner for a stand-in"
+OVERSIZE_DESCRIPTION = status_text.OVERSIZE
 OVERSIZE_NOTE = (
     "This pull request is too large for the review: the reading it needs is more than any reviewer can hold, "
     "so no reviewer can run and this head is not retried. Split it into smaller pull requests, or ask the "
     "owner for a stand-in review of this head."
 )
-MARKER_LIMIT_DESCRIPTION = "pending: the protocol record does not fit in a review marker"
+MARKER_LIMIT_DESCRIPTION = status_text.MARKER_LIMIT
 MARKER_LIMIT_NOTE = (
     "The decision and its defects are listed in full in this review, but the protocol record they must be saved in "
     "exceeds the size limit of a review marker even after shortening titles and paths. This head has no recorded "
     "decision and is not retried; push a new head with fewer or shorter findings. The defects below carry no "
     "identifiers and open no tracked threads, so they are not carried into the next review."
 )
+NOTICE_CAUSES = (ALL_ABSENT, UNAVAILABLE, UNREPORTED, STOPPED, OVERSIZE)
 STATES = {selection.PASS: SUCCESS, selection.FAIL: FAILURE, selection.PENDING: PENDING}
 STEP_BACK_NOTE = (
     "Step back: this pull request has had {rounds} review rounds with findings, so this round re-read the whole"
@@ -71,10 +72,7 @@ class Final:
     marker: str | None = None
     degraded: str = ""
     classification_note: str = ""
-
-
-def _clip(text: str, limit: int = DESCRIPTION_LIMIT) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    detail: str = ""
 
 
 def _cut(text: str, limit: int) -> str:
@@ -291,7 +289,9 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
     served = _served(plan)
     lines: list[str] = []
     if served is None and plan.get("served_error"):
-        return [f"- the gateway's served models are unknown: {plan['served_error']}"]
+        return [
+            f"- the gateway's served models are unknown: {unavailable.gateway_cause(str(plan['served_error'])).reason}"
+        ]
     if served is None:
         return lines
     unserved = [item for item in degraded if item not in served.providers]
@@ -300,9 +300,7 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
         lines.append(f"- not served by the gateway: {', '.join(unserved)}")
     for attempt in attempts:
         if selection.provider_failed(attempt):
-            lines.append(
-                f"- excluded after {attempt.provider} failed (attempt {attempt.slot}, {attempt.reviewer}): {attempt.absence}"
-            )
+            lines.append(unavailable.excluded_line(attempt, plan))
     if degraded or excluded:
         lines.append(f"- served: {', '.join(sorted(served.providers)) or 'none'}")
     for attempt in attempts:
@@ -315,30 +313,8 @@ def _classification_lines(note: str) -> list[str]:
     return [note, ""] if note else []
 
 
-def _recovery_text(attempt: Attempt) -> str:
-    held = attempt.recovery
-    if held is None:
-        return ""
-    if held.source == recovery.JEV:
-        return f"recovery: {held.choice} (Jev, probability {held.probability:.2f}, confidence {held.confidence:.2f})"
-    return f"recovery: {held.choice} (fallback, {held.reason})"
-
-
-def _absences(attempts: list[Attempt], step: Step) -> list[str]:
-    known = credentials.known()
-    lines = []
-    for attempt in attempts:
-        if attempt.outcome != "absent":
-            continue
-        detail = absence.published_detail(attempt.detail, known)
-        lines.append(
-            f"- {attempt.reviewer} (attempt {attempt.slot}): absent ({attempt.absence})"
-            + (f": {detail}" if detail else "")
-            + (f"; {_recovery_text(attempt)}" if attempt.recovery is not None else "")
-        )
-    attempted = {attempt.reviewer for attempt in attempts}
-    lines += [f"- {reason}" for reason in step.reasons if reason.split(":", 1)[0] not in attempted]
-    return lines
+def _absences(attempts: list[Attempt], step: Step, plan: Mapping[str, Any]) -> list[str]:
+    return unavailable.lines(attempts, step, plan)
 
 
 def _review_comment(
@@ -428,27 +404,95 @@ def defect_ids(plan: Mapping[str, Any], defects: Sequence[Finding]) -> dict[Find
     return {finding: f"D{next_id + index}" for index, finding in enumerate(defects)}
 
 
-def escalation_suffix(escalated: Sequence[str]) -> str:
-    return f"; escalated {','.join(escalated)}" if escalated else ""
+def _severities(entries: Sequence[Mapping[str, Any]], findings: Sequence[Finding]) -> list[tuple[str, int]]:
+    return status_text.severity_counts(
+        [*(str(entry.get("severity")) for entry in entries), *(finding.severity for finding in findings)],
+        SEVERITIES,
+    )
 
 
-def _description(
-    step: Step,
-    judgement: protocol.Judgement | None,
-    reviewer: str | None,
-    cause: str,
+def decision_description(
+    decision: str,
+    state: str,
+    *,
+    open_entries: Sequence[Mapping[str, Any]] = (),
+    open_findings: Sequence[Finding] = (),
     escalated: Sequence[str] = (),
-    unavailable: str = "",
+    fixed: Sequence[str] = (),
+    strikes: int = 0,
+    strike_limit: int | None = None,
+    tail: str = "",
+) -> str:
+    limit = status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.REPOST_LIMIT
+    if decision == protocol.SHIP:
+        return status_text.shipped(fixed, tail, limit)
+    if decision == protocol.SHIP_WITH_FIXES:
+        return status_text.with_findings(
+            status_text.OPEN_FINDINGS_LABEL,
+            len(open_entries) + len(open_findings),
+            _severities(open_entries, open_findings),
+            escalated,
+            tail,
+            limit,
+        )
+    return status_text.refused_decision(protocol.LABELS[decision], strikes, strike_limit, tail, limit)
+
+
+def _unavailable_cause(attempts: Sequence[Attempt], plan: Mapping[str, Any]) -> unavailable.Cause | None:
+    absent = [
+        attempt for attempt in sorted(attempts, key=lambda item: item.slot) if attempt.outcome == selection.ABSENT
+    ]
+    if absent:
+        return unavailable.attempt_cause(absent[-1])
+    return unavailable.QUOTA if plan.get("pool_blocked_until") else None
+
+
+SHORT_CAUSES = {
+    unavailable.QUOTA.key: "provider quota",
+    unavailable.PROVIDER_AUTH.key: "provider authentication",
+    unavailable.TIMEOUT.key: "reviewer timed out",
+    unavailable.INVALID.key: "reviewer returned no usable result",
+    unavailable.EMPTY.key: "reviewer returned no usable result",
+    unavailable.PROVIDER_ERROR.key: "provider error",
+    unavailable.RUN_FAILED.key: "reviewer failed to run",
+    unavailable.TOO_LARGE.key: "change exceeds the model context",
+    unavailable.INCOMPLETE.key: "reviewer did not read every changed hunk",
+}
+DEFAULT_SHORT_CAUSE = "no reviewer could run"
+
+
+GATEWAY_SHORT = {
+    unavailable.GATEWAY_REJECTED.key: "model gateway rejected the client token",
+    unavailable.GATEWAY_ERROR.key: "model gateway unusable or misconfigured",
+}
+
+
+def _pending_description(
+    cause: str, attempts: Sequence[Attempt], plan: Mapping[str, Any], degraded: Sequence[str]
 ) -> str:
     if cause == OVERSIZE:
         return OVERSIZE_DESCRIPTION
-    if cause == UNAVAILABLE and judgement is None:
-        return f"pending: no reviewer available ({unavailable})"
-    if judgement is None:
-        return "pending: " + "; ".join(step.reasons or ("no reviewer available",))
-    if judgement.decision == protocol.SHIP_WITH_FIXES:
-        return f"{reviewer}: {judgement.label}, {judgement.open_count} defect(s) to fix{escalation_suffix(escalated)}"
-    return f"{reviewer}: {judgement.label}"
+    if cause == STOPPED:
+        return status_text.STOPPED
+    if cause == UNREPORTED:
+        return status_text.UNREPORTED
+    if cause == UNAVAILABLE and plan.get("served_error"):
+        gateway = unavailable.gateway_cause(str(plan["served_error"]))
+        if gateway is unavailable.GATEWAY:
+            return status_text.GATEWAY_DOWN
+        return status_text.unavailable(GATEWAY_SHORT[gateway.key])
+    kind = _unavailable_cause(attempts, plan)
+    if kind is unavailable.INCOMPLETE:
+        return status_text.incomplete_read(len(attempts))
+    if cause == UNAVAILABLE and kind is None:
+        return status_text.unavailable("provider outage" if degraded else "no served model can hold this change")
+    return status_text.unavailable(SHORT_CAUSES.get(kind.key, DEFAULT_SHORT_CAUSE) if kind else DEFAULT_SHORT_CAUSE)
+
+
+def _detail(step: Step, cause: str, gone: str) -> str:
+    if cause == UNAVAILABLE:
+        return f"no reviewer available ({gone})"
+    return "; ".join(step.reasons or ("no reviewer available",))
 
 
 def _judgement_notes(judgement: protocol.Judgement | None) -> list[str]:
@@ -515,15 +559,20 @@ def finalize(
     note: str = "",
 ) -> Final:
     if errors:
+        withheld = (unavailable.ARTIFACTS,)
         body = "\n".join(
-            [*_header(plan, PENDING), *_section("Result withheld: the run's artifacts failed validation", errors)]
+            [
+                *_header(plan, PENDING),
+                *_section("Result withheld", [f"- {unavailable.ARTIFACTS.reason}"]),
+                *unavailable.notice(plan["head_sha"], withheld),
+            ]
         )
         review = (
             _review_payload(plan, body, Placement((), ()), commentable)
             if plan.get("findings_delivery") == "review"
             else None
         )
-        return Final(PENDING, "result withheld: artifacts failed validation", body, review, None, INTEGRITY)
+        return Final(PENDING, status_text.INTEGRITY, body, review, None, INTEGRITY, detail="; ".join(errors))
     step, pending_cause = _settled(plan, step)
     state = STATES[step.kind]
     reviewer = step.reviewer.name if step.reviewer else None
@@ -579,15 +628,32 @@ def finalize(
         opened, unanchored = [], []
         state, pending_cause = PENDING, MARKER_LIMIT
     degraded = _degraded(plan, attempts)
-    gone = plan.get("served_error") or (
-        f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change"
+    gone = (
+        unavailable.gateway_cause(str(plan["served_error"])).reason
+        if plan.get("served_error")
+        else (f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change")
     )
-    description = (
-        MARKER_LIMIT_DESCRIPTION
-        if unrecorded
-        else _description(step, judgement, reviewer, pending_cause, escalated, gone)
+    if unrecorded:
+        description = MARKER_LIMIT_DESCRIPTION
+    elif judgement is None:
+        description = _pending_description(pending_cause, attempts, plan, degraded)
+    else:
+        description = decision_description(
+            judgement.decision,
+            state,
+            open_entries=judgement.carried,
+            open_findings=judgement.defects,
+            escalated=escalated,
+            fixed=judgement.fixed,
+            strikes=strikes,
+            strike_limit=(rules.get("max_do_not_ship") or None),
+        )
+    absent_causes = unavailable.causes(step, attempts, plan)
+    detail = _detail(step, pending_cause, gone) if judgement is None else ""
+    degraded_suffix = f"{status_text.DEGRADED_MARK}{', '.join(degraded)}" if degraded else ""
+    notice_causes = (
+        (unavailable.PENDING_CAUSES[pending_cause],) if pending_cause in unavailable.PENDING_CAUSES else absent_causes
     )
-    degraded_suffix = f" · degraded: {', '.join(degraded)}" if degraded else ""
     listed = [*placement.inline, *placement.summary, *(judgement.not_counted if judgement is not None else ())]
 
     def render(cap: int | None, evidence_cap: int | None = None) -> str:
@@ -668,8 +734,10 @@ def finalize(
         lines += _strike_line(
             plan, strikes if judgement is not None and not unrecorded else int(rules.get("strikes", 0))
         )
-        lines += _section("Reviewers not available", _absences(attempts, step))
+        lines += _section("Reviewers not available", _absences(attempts, step, plan))
         lines += _section("Provider availability", _availability(plan, attempts, degraded))
+        if judgement is None and not unrecorded and pending_cause in NOTICE_CAUSES:
+            lines += unavailable.notice(plan["head_sha"], notice_causes, with_next_step=pending_cause != OVERSIZE)
         body = "\n".join(lines).rstrip() + "\n"
         if marker is not None:
             body += "\n" + marker
@@ -698,7 +766,11 @@ def finalize(
     final_strikes = strikes if judgement is not None and not unrecorded else None
     return Final(
         state,
-        _clip(description, DESCRIPTION_LIMIT - len(degraded_suffix)) + degraded_suffix,
+        status_text.with_degraded(
+            description,
+            degraded,
+            status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.DESCRIPTION_LIMIT,
+        ),
         body if has_content else "",
         review,
         reviewer,
@@ -707,6 +779,7 @@ def finalize(
         judgement,
         marker,
         degraded_suffix,
+        detail=detail,
     )
 
 
@@ -717,7 +790,16 @@ def carried(plan: Mapping[str, Any]) -> Final:
     outcome = SUCCESS if decision == protocol.SHIP else FAILURE
     reviewed_head = plan["reviewed_head"]
     label = protocol.LABELS[decision]
-    description = f"carried from {reviewed_head[:12]}: {label}{escalation_suffix(previous.get('escalated', ()))}"
+    open_entries = protocol.unique_defects(previous["open_defects"])
+    description = decision_description(
+        decision,
+        outcome,
+        open_entries=open_entries,
+        escalated=previous.get("escalated", ()),
+        strikes=int(previous["strikes_after"]),
+        strike_limit=rules.get("max_do_not_ship") or None,
+        tail=status_text.carried_tail(reviewed_head),
+    )
     lines = [
         *_header(plan, outcome),
         f"Decision: **{label}**, carried from head `{reviewed_head}`.",
@@ -750,7 +832,7 @@ def carried(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    return Final(outcome, _clip(description), body, delivered, None, None, int(previous["strikes_after"]))
+    return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
 
 def adjudicated(plan: Mapping[str, Any]) -> Final:
@@ -804,8 +886,16 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    description = f"owner adjudication: {action} {defect_id}; {label}{escalation_suffix(escalated)}"
-    return Final(outcome, _clip(description), body, delivered, None, None, int(previous["strikes_after"]))
+    description = decision_description(
+        decision,
+        outcome,
+        open_entries=open_defects,
+        escalated=escalated,
+        strikes=int(previous["strikes_after"]),
+        strike_limit=rules.get("max_do_not_ship") or None,
+        tail=status_text.ruling_tail(action, defect_id),
+    )
+    return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
 
 REPOST_NOTE = (
@@ -815,17 +905,13 @@ REPOST_NOTE = (
 )
 
 
-REPOSTED_MARK = " (reposted)"
-RUN_SUFFIX_RESERVE = 45
-
-
 def reposted(plan: Mapping[str, Any]) -> Final:
     repost = plan["repost"]
     body = f"review-verdict for `{plan['head_sha']}`: **{repost['label']}** ({repost['state']}).\n\n{REPOST_NOTE}\n"
-    base = repost["description"].removesuffix(REPOSTED_MARK)
-    reserve = RUN_SUFFIX_RESERVE if repost["state"] == SUCCESS else 0
-    description = _clip(base, DESCRIPTION_LIMIT - len(REPOSTED_MARK) - reserve) + REPOSTED_MARK
-    return Final(repost["state"], description, body, None, None, None, None)
+    base = repost["description"]
+    if repost["state"] == SUCCESS:
+        base = status_text.trim(base, status_text.SUCCESS_LIMIT)
+    return Final(repost["state"], status_text.repost(base), body, None, None, None, None)
 
 
 def refused(plan: Mapping[str, Any]) -> Final:
@@ -856,16 +942,15 @@ def refused(plan: Mapping[str, Any]) -> Final:
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
     delivered = review if plan.get("findings_delivery") == "review" else None
-    description = f"refused after {strikes} DO NOT SHIP decisions: open a new pull request"
-    return Final(FAILURE, _clip(description), body, delivered, None, None, strikes)
+    return Final(FAILURE, status_text.refused(strikes), body, delivered, None, None, strikes)
 
 
 def fixed(state: str, description: str) -> Final:
-    return Final(state, _clip(description), "", None, None)
+    return Final(state, status_text.trim(description, status_text.DESCRIPTION_LIMIT), "", None, None)
 
 
 def omp_install_failed() -> Final:
-    return Final(PENDING, "the pinned omp build could not be installed; no reviewer ran", "", None, None, OMP_INSTALL)
+    return Final(PENDING, status_text.OMP_INSTALL, "", None, None, OMP_INSTALL)
 
 
 def bound_run(plan: Mapping[str, Any]) -> Any:
@@ -876,11 +961,7 @@ def status_payload(plan: Mapping[str, Any], final: Final, target_url: str) -> di
     description = final.description
     run_id = bound_run(plan)
     if final.state == SUCCESS and run_id:
-        suffix = f" [run {run_id}]"
-        if len(description) + len(suffix) > DESCRIPTION_LIMIT:
-            base = description.removesuffix(final.degraded)
-            description = _clip(base, DESCRIPTION_LIMIT - len(suffix) - len(final.degraded)) + final.degraded
-        description += suffix
+        description = status_text.with_run_suffix(description, run_id)
     return {
         "state": final.state,
         "context": plan["status_context"],

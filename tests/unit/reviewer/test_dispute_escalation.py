@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import adjudication, protocol, report
+from theseus_reviewer import adjudication, protocol, report, status_text
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import State
 
@@ -171,7 +171,7 @@ def test_a_finding_disputed_and_maintained_twice_on_one_patch_is_escalated(polic
     record = protocol.decode_marker(final.review["body"])
     assert record["escalated"] == ["D1"]
     assert record["disputed"] == ["D1"]
-    assert final.description.endswith("; escalated D1")
+    assert final.description == "SHIP WITH FIXES · 2 to fix · escalated D1 · owner ruling needed"
     assert "adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in final.review["body"]
 
 
@@ -285,7 +285,9 @@ def test_a_withdrawal_stops_the_finding_blocking(monkeypatch: pytest.MonkeyPatch
     assert record["decision"] == "SHIP" and record["open_defects"] == []
     assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
     assert "escalated" not in record and record["carried"] is True
-    assert final.description.startswith("owner adjudication: WITHDRAW D1")
+    assert final.description == status_text.SEP.join(
+        (status_text.SHIP_LABEL, status_text.ruling_tail("WITHDRAW", "D1"))
+    )
     assert final.review["body"].startswith("### review-verdict: success for `")
 
 

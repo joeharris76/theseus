@@ -41,6 +41,7 @@ from .classifier import ChangedFile, soundness_scope
 from .commands import LOOPBACK_PROXY
 from .matchers import load_matchers
 from .policy import Policy, PolicyError, load_policy, parse_policy
+from .status_text import EXEMPT_SUCCESS_DESCRIPTION, SEP
 from .verdict import DO_NOT_SHIP, Finding
 
 BLOCKING_SEVERITIES = ("Critical", "High")
@@ -349,7 +350,7 @@ class LocalEnvironment:
         plan["scope_reasons"] = list(scope.reasons)
         if not scope.soundness:
             plan["decision"] = cli.SUCCESS
-            plan["decision_reason"] = "only exempt paths changed"
+            plan["decision_reason"] = EXEMPT_SUCCESS_DESCRIPTION
             return cli._finish_plan(out_dir, plan)
         plan["manual"] = False
         plan["previous_state"] = None
@@ -967,7 +968,7 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
         plan, step, errors, loaded.attempts, loaded.verdicts, commentable, workspace=layout.workspace, secrets=()
     )
     if final.judgement is None:
-        reasons = "; ".join(errors) if errors else final.description
+        reasons = "; ".join(errors) if errors else final.detail
         raise Unavailable(
             f"no reviewer produced a verdict: {reasons}",
             availability=final.pending_cause == retry.UNAVAILABLE and not _holds_blocking(previous),
@@ -975,7 +976,7 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
     if final.degraded:
         terminal_slot = next((item for item in loaded.attempts if item.reviewer == final.reviewer), None)
         ran = f"; reviewed by {terminal_slot.target}" if terminal_slot is not None and terminal_slot.target else ""
-        run.reporter.say(f"Review {final.degraded.removeprefix(' · ')}{ran}.")
+        run.reporter.say(f"Review {final.degraded.removeprefix(SEP)}{ran}.")
     terminal = next(
         (item for item in loaded.attempts if item.reviewer == final.reviewer and item.outcome == step.kind), None
     )

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import bases
+from . import bases, status_text
 from ._vendor import yaml
 from .matchers import Matchers, load_matchers
 from .policy import Binding, Consumer, Policy, PromotionRules, load_policy, parse_policy
@@ -40,8 +40,7 @@ from .review_check import (
 )
 
 GATE_CONTEXT = "review-gate"
-DESCRIPTION_LIMIT = 140
-PENDING_DESCRIPTION = "review-gate: evaluating this head"
+PENDING_DESCRIPTION = status_text.GATE_EVALUATING
 PULL_READ_ATTEMPTS = 3
 PULL_READ_BACKOFF_SECONDS = 2
 HEAD_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -68,7 +67,7 @@ def gate_state(status: int) -> str:
 
 
 def gate_description(message: str) -> str:
-    return message if len(message) <= DESCRIPTION_LIMIT else message[: DESCRIPTION_LIMIT - 1] + "…"
+    return status_text.trim(message, status_text.DESCRIPTION_LIMIT)
 
 
 def status_payload(status: int, message: str, target_url: str | None = None) -> dict[str, Any]:
@@ -298,7 +297,7 @@ def _fail_closed(args: argparse.Namespace, token: str, exc: EvaluationFailed) ->
     if args.no_post:
         return ERROR
     try:
-        post_status(token, args.repo, exc.head_sha, ERROR, f"{GATE_CONTEXT}: evaluation error: {exc}")
+        post_status(token, args.repo, exc.head_sha, ERROR, status_text.gate_error(exc))
     except CheckError as post_exc:
         print(f"review-gate: error: {post_exc}", file=sys.stderr)
     return ERROR

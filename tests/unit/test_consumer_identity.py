@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tests.conftest import ALPHA_POLICY, BETA_POLICY, CONSUMER_ALPHA, CONSUMER_BETA
 
-from theseus_reviewer import gate, github, omp_bump_gate, review_check
+from theseus_reviewer import gate, github, omp_bump_gate, review_check, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import PolicyError, load_policy, parse_policy
 from theseus_reviewer.review_check import WAITING
@@ -71,10 +71,10 @@ def test_standin_attestation_is_accepted_only_from_the_consumers_own_attesters(o
     attestation = f"Stand-in review: APPROVE {HEAD}"
     status, message = _decide(config, [], [_comment(CONSUMERS[own]["owner"], attestation)])
     assert status == review_check.PASS
-    assert CONSUMERS[own]["owner"] in message
+    assert message == status_text.gate_pass_standin(CONSUMERS[own]["owner"])
     status, message = _decide(config, [], [_comment(CONSUMERS[other]["owner"], attestation)])
     assert status == WAITING
-    assert "waiting for the review's verdict" in message
+    assert message == status_text.gate_waiting(HEAD)
 
 
 def test_beta_deputy_is_an_attester_for_beta_only():
@@ -88,10 +88,10 @@ def test_verdict_statuses_count_only_from_the_consumers_own_app(own, other):
     config = _config(CONSUMERS[own])
     status, message = _decide(config, [_status(CONSUMERS[own]["bot"])], [])
     assert status == WAITING
-    assert "latest verdict" in message and "is failure" in message
+    assert message == status_text.GATE_DO_NOT_SHIP
     status, message = _decide(config, [_status(CONSUMERS[other]["bot"])], [])
     assert status == WAITING
-    assert "waiting for the review's verdict" in message
+    assert message == status_text.gate_waiting(HEAD)
 
 
 def test_the_app_login_matches_the_bot_account_type_and_suffix():
@@ -128,7 +128,7 @@ def test_gate_posts_only_for_the_consumers_gated_base(own, other, monkeypatch):
     monkeypatch.setattr(gate, "fetch_promotion_refusals", lambda *a, **k: (False, []))
     head, status, message = gate.evaluate("acme/r", 7, "token", config)
     assert (head, status) == (HEAD, WAITING)
-    assert "is failure" in message
+    assert message == status_text.GATE_DO_NOT_SHIP
 
 
 def test_gate_passes_the_configured_login_to_receipt_and_promotion_checks(monkeypatch):

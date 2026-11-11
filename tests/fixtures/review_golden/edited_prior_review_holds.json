@@ -7,7 +7,7 @@
     "state/state.json": null,
     "status.json": {
       "context": "review-verdict",
-      "description": "a review was edited",
+      "description": "a review was edited · verdict withheld · push a new head",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -103,14 +103,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "a review was edited",
+        "description": "a review was edited · verdict withheld · push a new head",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "review: the review's latest verdict for <sha1> is pending, not success; fix the findings, or post a stand…",
+        "description": "Waiting · not reviewed yet · see the review-verdict status · owner may post a stand-in",
         "state": "failure",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -144,5 +144,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #73: hold (a review was edited)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #73 <sha1>: pending: a review was edited\n"
+  "summary": "review-verdict plan for #73: hold (a review was edited)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #73 <sha1>: pending: a review was edited · verdict withheld · push a new head\n"
 }
