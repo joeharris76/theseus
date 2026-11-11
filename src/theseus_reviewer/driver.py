@@ -6,13 +6,14 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import capacity, cli, commands, github, isolation, omp_pin, providers, unavailable
+from . import capacity, cli, commands, github, isolation, minimize, omp_pin, providers, unavailable
 from ._vendor import yaml
 from .policy import Consumer, PolicyError, load_policy
 
@@ -22,6 +23,7 @@ REDACTED_SECRETS = ("JOB_TOKEN",)
 CI = "ci"
 LOCAL = "local"
 VERSION_TIMEOUT_SECONDS = 60
+MINIMIZE_STEP_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,8 @@ class Sink(Protocol):
 
     def gate(self, repo: str, pr: int, head: str) -> None: ...
 
+    def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]: ...
+
 
 class CredentialError(Exception):
     pass
@@ -99,6 +103,16 @@ class GitHubSink:
 
     def gate(self, repo: str, pr: int, head: str) -> None:
         github.post_gate(repo, pr, head, self.app_token, self.policy)
+
+    def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]:
+        if github.pull_head_sha(repo, pr, self.app_token) != head:
+            return []  # a stale run: a newer head owns the pull request's verdict now
+        held = cli._threaded_findings(
+            [{**thread, "resolved": False, "edited": False} for thread in github.review_threads(repo, pr)], bot_login
+        )
+        return github.minimize_reviews(
+            minimize.superseded(github.reviews(repo, pr), bot_login, head, held), self.app_token
+        )
 
 
 class Environment(Protocol):
@@ -423,6 +437,48 @@ def _post_gate(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
         cli._output({"gate_failed": "true"})
 
 
+def _bounded(call: Callable[[], list[str]]) -> list[str]:
+    """Run ``call`` for at most MINIMIZE_STEP_SECONDS; a stalled request is abandoned, never waited for."""
+    outcome: list[Any] = []
+
+    def run() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(MINIMIZE_STEP_SECONDS)
+    if worker.is_alive():
+        raise TimeoutError(f"no answer within {MINIMIZE_STEP_SECONDS} seconds")
+    if isinstance(outcome[0], BaseException):
+        raise outcome[0]
+    return outcome[0]
+
+
+def _minimize_superseded(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
+    """Collapse earlier verdict reviews once a record-bearing review has been posted; cosmetic, so it fails open.
+
+    Runs after the status and the gate are posted and reads nothing back into them: whatever happens here, the
+    verdict, the statuses and the gate result are already final.
+    """
+    review = env.layout.final / "review.json"
+    try:
+        if not review.is_file() or not load_policy(env.policy).minimize_superseded:
+            return
+        if not minimize.carries_record(_read(review).get("body")):
+            return
+        failures = _bounded(
+            lambda: sink.minimize_superseded(env.repo, int(plan["pr"]), plan["head_sha"], plan["bot_login"])
+        )
+    except Exception as exc:  # noqa: BLE001 - presentation only: nothing here may change the review outcome
+        print(f"::warning::superseded reviews were not minimised: {exc}", file=sys.stderr)
+        return
+    for failure in failures:
+        print(f"::warning::a superseded review was not minimised: {failure}", file=sys.stderr)
+
+
 def _credentialed_sink(env: Environment) -> Sink | None:
     try:
         return env.sink()
@@ -451,6 +507,7 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
     _post_gate(env, sink, plan)
     if has_state:
         cli._output({"state_recorded": "true"})
+    _minimize_superseded(env, sink, plan)
     return 0
 
 
