@@ -1033,7 +1033,14 @@ RUN_SUFFIX_RESERVE = 45
 def reposted(plan: Mapping[str, Any]) -> Final:
     repost = plan["repost"]
     body = (
-        "\n".join([*_head(plan, repost["label"], f"{repost['label']} · unchanged (no reviewer ran)"), REPOST_NOTE])
+        "\n".join(
+            [
+                *_head(plan, repost["label"], f"{repost['label']} · unchanged (no reviewer ran)"),
+                f"Reviewed {plan['head_sha']}",
+                "",
+                REPOST_NOTE,
+            ]
+        )
         + "\n"
     )
     base = repost["description"].removesuffix(REPOSTED_MARK)

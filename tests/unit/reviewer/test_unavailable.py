@@ -209,6 +209,12 @@ def _notice(key: str, head: str = HEAD) -> str:
 
 
 def _verdict_post(at: str) -> dict[str, Any]:
+    """A verdict comment as written now: no heading, no commit id, only the v2 marker names the head."""
+    body = f"### ✅ SHIP · no open findings\n\nReviewed {HEAD}\n\n<!-- review-verdict: v2 success {HEAD} -->"
+    return _post(BOT, body, at)
+
+
+def _old_verdict_post(at: str) -> dict[str, Any]:
     return _post(BOT, f"### review-verdict: success for `{HEAD}`\n\nok", at)
 
 
@@ -228,6 +234,15 @@ EARLY, LATE = "2026-11-10T10:00:00Z", "2026-11-10T11:00:00Z"
         ([_post(BOT, _notice("quota"), EARLY), _post(BOT, _notice("timeout"), LATE)], _notice("quota"), False),
         ([_post(BOT, _notice("timeout"), EARLY), _post(BOT, _notice("quota"), LATE)], _notice("quota"), True),
         ([_post(BOT, _notice("quota"), EARLY), _verdict_post(LATE)], _notice("quota"), False),
+        ([_post(BOT, _notice("quota"), EARLY), _old_verdict_post(LATE)], _notice("quota"), False),
+        (
+            [
+                _post(BOT, _notice("quota"), EARLY),
+                _post(BOT, "### 🔧 SHIP WITH FIXES · unchanged (no reviewer ran)\n\nReviewed " + HEAD, LATE),
+            ],
+            _notice("quota"),
+            False,
+        ),
         ([_post(BOT, _notice("quota"), "not a time")], _notice("quota"), False),
         ([_post("someone", _notice("quota"), EARLY)], _notice("quota"), False),
         ([{**_post(BOT, _notice("quota"), EARLY), "user_type": "User"}], _notice("quota"), False),
