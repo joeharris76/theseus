@@ -36,8 +36,10 @@ _TASK_ITEM = re.compile(r"^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\
 _HEADING = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
 _UNDERLINE = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})([=-])(?=[=-]*[ \t]*$)")
 _BREAKS = re.compile(r"[\r\n\t]+")
-_HTML_OPENER = re.compile(r"^([ \t]{0,3})<(?=[A-Za-z/!?])", re.MULTILINE)
-_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
+# Only a fence at column 0 opens code. An indented or prefixed fence may sit in a list item or quote, where GFM
+# judges it by container rules, so it is treated as prose and everything after it is escaped too.
+_FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
@@ -45,14 +47,15 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
     opened: str | None = None
     pairs: list[tuple[bool, str]] = []
     for line in text.split("\n"):
-        found = _FENCE.match(line)
         code = opened is not None
-        if found is not None:
-            fence, rest = found.groups()
-            if opened is None:
+        if opened is None:
+            if (found := _FENCE_OPEN.match(line)) is not None:
+                fence, rest = found.groups()
                 if fence[0] != "`" or "`" not in rest:
                     opened, code = fence, True
-            elif fence[0] == opened[0] and len(fence) >= len(opened) and not rest.strip():
+        elif (found := _FENCE_CLOSE.match(line)) is not None:
+            fence, rest = found.groups()
+            if fence[0] == opened[0] and len(fence) >= len(opened) and not rest.strip():
                 opened, code = None, True
         pairs.append((code, line))
     return pairs, opened
@@ -64,7 +67,7 @@ def _prose(chunk: str) -> str:
         if rows[index - 1].strip() and (found := _UNDERLINE.match(rows[index])):
             rows[index] = f"{found.group(1)}\\{rows[index][found.end(1) :]}"
     chunk = "\n".join(rows)
-    chunk = _HTML_OPENER.sub(lambda match: f"{match.group(1)}&lt;", chunk)
+    chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
     chunk = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 

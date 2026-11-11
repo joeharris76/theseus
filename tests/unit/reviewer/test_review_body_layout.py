@@ -579,3 +579,41 @@ def test_a_carried_comment_for_a_non_review_verdict_context_is_not_a_repeat(poli
     ]
     assert not unavailable.repeats(posts, HEAD, notice, bot)
     assert unavailable.repeats(posts[:1], HEAD, notice, bot)
+
+
+def _prose_lt(text: str) -> bool:
+    """True when a `<` survives outside a column-0 fence."""
+    inside = False
+    for line in text.split("\n"):
+        if re.match(r"^(`{3,}|~{3,})", line) or (inside and re.match(r"^[ \t]{0,3}(`{3,}|~{3,})\s*$", line)):
+            inside = not inside
+            continue
+        if not inside and "<" in line:
+            return True
+    return False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "- <pre>\n  ```\n  </pre>\n- [ ] tick",
+        "> <div>\n> ```\n\n- [ ] tick",
+        "1. <details>\n```\n- [x] a",
+        'see <a href="/x">link</a> and </details> <summary>',
+        "> ```\n> <b>\n- [ ] tick",
+        "  ```\n<i>\n- [ ] tick",
+    ],
+)
+def test_no_raw_html_or_live_task_item_survives_whatever_the_prefix(text: str) -> None:
+    out = layout.neutralize(text)
+    assert not CHECKBOX.search(re.sub(r"^(`{3,}|~{3,}).*?^\1\s*$", "", out, flags=re.M | re.S)), out
+    assert not _prose_lt(out), out
+    fences = [line for line in out.splitlines() if re.match(r"^(`{3,}|~{3,})", line)]
+    assert len(fences) % 2 == 0, out
+    assert "</details>" not in out.lower() and "<details" not in out.lower()
+
+
+def test_fenced_code_with_tags_stays_unchanged_and_a_leading_fence_is_still_code() -> None:
+    code = 'intro\n```html\n<div>\n  <a href="/x">x</a>\n</div>\n- [ ] not a task\n```\nafter <b>'
+    out = layout.neutralize(code)
+    assert out == code.replace("after <b>", "after &lt;b>")
