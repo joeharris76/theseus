@@ -594,9 +594,13 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
+    delivery = plan.get("findings_delivery", "comment")
+    threaded_ids = plan.get("threaded")
+    widen = delivery == "review" and threaded_ids is not None
     carried_at = {
         (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
         for entry in (judgement.carried if judgement is not None else ())
+        if widen or (threaded_ids is not None and f"c{cycle}-{entry['id']}" in threaded_ids)
     }
     open_counts = plan.get("open_counts")
     room = {key: int(count) for key, count in open_counts.items()} if open_counts is not None else None
@@ -607,7 +611,6 @@ def finalize(
         if judgement is not None
         else {}
     )
-    delivery = plan.get("findings_delivery", "comment")
     opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (

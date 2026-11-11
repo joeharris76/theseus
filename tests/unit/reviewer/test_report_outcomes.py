@@ -869,3 +869,20 @@ def test_a_new_finding_at_an_unthreaded_carried_location_takes_no_thread_room(po
     final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
     assert final.review is not None
     assert [comment["line"] for comment in final.review["comments"]] == []
+
+
+def test_a_same_line_re_report_still_gets_a_thread_when_threads_were_not_read(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    del plan["threaded"]
+    plan.update(open_findings={}, open_counts={})
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert _thread_lines(final) == [2]
+
+
+def test_comment_delivery_does_not_call_a_same_line_re_report_an_open_thread(policy: Policy) -> None:
+    plan = {**_located_plan(policy), "findings_delivery": "comment"}
+    del plan["threaded"]
+    plan.update(open_findings={}, open_counts={})
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert "Defects already open as review threads" not in final.body
+    assert "Old" in final.body
