@@ -7,6 +7,7 @@ from typing import Any
 
 from . import legacy
 from .policy import SEVERITIES
+from .protocol import thread_finding
 from .verdict import Finding
 
 MARKER_OPEN = "<!-- review-finding:"
@@ -85,7 +86,10 @@ def open_thread_counts(threads: Iterable[Mapping[str, Any]], login: str) -> dict
             or (thread.get("author") or "").removesuffix("[bot]") != login
         ):
             continue
-        key = thread_fingerprint(thread.get("path"), thread.get("body") or "")
+        body = thread.get("body") or ""
+        if thread_finding(body) is not None:
+            continue
+        key = thread_fingerprint(thread.get("path"), body)
         if key is not None:
             counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))

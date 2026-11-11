@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from theseus_reviewer.dedup import fingerprint, marker, open_fingerprints, split, thread_fingerprint
+from theseus_reviewer.dedup import fingerprint, marker, open_fingerprints, open_thread_counts, split, thread_fingerprint
 from theseus_reviewer.verdict import Finding
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
@@ -153,15 +153,27 @@ def test_the_earliest_title_wins_when_a_plain_title_precedes_decorated_looking_t
 
 
 def test_open_thread_counts_count_every_open_thread_of_a_fingerprint() -> None:
-    from theseus_reviewer.dedup import open_thread_counts
-
     threads = [
         _open("benchbox-review", "**High**: Unchecked size"),
         _open("benchbox-review", "**High**: Unchecked size"),
         {**_open("benchbox-review", "**High**: Unchecked size"), "resolved": True},
         _open("benchbox-review", "**High**: Other"),
+        _open("benchbox-review", "**High**: Unchecked size\n\n<!-- review-defect: c1-D1 -->"),
     ]
     assert open_thread_counts(threads, "benchbox-review") == {
         fingerprint(PATH, "Unchecked size"): 2,
         fingerprint(PATH, "Other"): 1,
     }
+
+
+def test_a_new_location_gets_its_own_thread_beside_an_open_thread_of_a_marked_defect() -> None:
+    marked = _open(
+        "benchbox-review",
+        f"**High**: Unchecked size\n\n<!-- review-defect: c1-D1 -->\n{marker(_finding('Unchecked size'))}",
+    )
+    key = fingerprint(PATH, "Unchecked size")
+    assert open_fingerprints([marked], "benchbox-review") == {key: "High"}
+    counts = open_thread_counts([marked], "benchbox-review")
+    assert counts == {}
+    new = _finding("Unchecked size", 40)
+    assert split((new,), {key: "High"}, counts) == ((new,), ())

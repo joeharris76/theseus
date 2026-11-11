@@ -284,9 +284,7 @@
     "new_files": [],
     "omp_config": ".github/review-omp-config.yml",
     "omp_sha256": "<volatile>",
-    "open_counts": {
-      "a59dafa92c57121d": 1
-    },
+    "open_counts": {},
     "open_findings": {
       "a59dafa92c57121d": "High"
     },
