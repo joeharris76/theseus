@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import providers
+from theseus_reviewer import providers, unavailable
 from theseus_reviewer._vendor import yaml
 
 from .harness import ALPHA_ROOT, CHECKER, POLICY, Harness
@@ -66,7 +66,7 @@ def test_losing_any_one_provider_still_reviews_every_bucket_on_a_served_candidat
     assert "Run details" in body and f"not served by the gateway: {lost}" in body
     if expected != options[0]:
         assert f"{options[0]} → {expected}" in body
-        assert f"Model that ran: {expected}." in body
+        assert f"Model that ran: `{expected}`." in body
 
 
 @pytest.mark.parametrize("bucket", SOLE_BUCKETS)
@@ -112,9 +112,9 @@ def test_an_unknown_or_empty_served_set_fails_closed_as_unavailable_without_spen
     assert "success" not in [item["state"] for item in harness.github.gate_statuses(head)]
     detail = {
         "serve-none": "unavailable",
-        "down": "gateway answered 503",
-        "rejected": "client token rejected",
-        "malformed": "malformed model list",
+        "down": unavailable.GATEWAY_ERROR.reason,
+        "rejected": unavailable.GATEWAY_REJECTED.reason,
+        "malformed": unavailable.GATEWAY_ERROR.reason,
     }[mode]
     assert detail in harness.github.reviews[303][-1]["body"] or detail in status["description"]
 

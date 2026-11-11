@@ -6,9 +6,9 @@ The change replaces the fail-closed default with a fallback.
 
 **Next:** rework and push. A new head gets a full review. A DO NOT SHIP decision number 3 closes this pull request to further review.
 
-<details><summary>Reviewer notes · small (omp @smol)</summary>
+<details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>
 
-Reviewer: small (role review, omp @smol).
+Reviewer: `small (role review, omp @smol)`.
 
 </details>
 

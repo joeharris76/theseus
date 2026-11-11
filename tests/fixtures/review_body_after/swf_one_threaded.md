@@ -4,9 +4,9 @@
 
 - 🟡 **Medium** · D2 · Advisory demotion compares exact path strings, so another spelling of a changed file's pa… · `benchbox/core/equivalence/checker.py` (thread below)
 
-<details><summary>Reviewer notes · small (omp @smol)</summary>
+<details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>
 
-Reviewer: small (role review, omp @smol).
+Reviewer: `small (role review, omp @smol)`.
 
 One fix is needed before merge. Read both changed files in full, then followed the new protocol logic into the report writer, the runner and the gate. Checked each bypass scenario against the code as changed: a step-back round widens the scope to the whole change and keeps every prior id; a forced round demotes a first-round fix to not fixed when the cited evidence is missing; a withdrawn finding must cite a file and line; a path spelled differently from a changed file's path is compared after normalisation. Read both changed files in full, then followed the new protocol logic into the report writer, the runner and the gate. Checked each bypass scenario against the code as changed: a step-back round widens the scope to the whole change and keeps every prior id; a forced round demotes a first-round fix to not fixed when the cited evidence is missing; a withdrawn finding must cite a file and line; a path spelled differently from a changed file's path is compared after normalisation. Read both changed files in full, then followed the new protocol logic into the report writer, the runner and the gate. Checked each bypass scenario against the code as changed: a step-back round widens the scope to the whole change and keeps every prior id; a forced round demotes a first-round fix to not fixed when the cited evidence is missing; a withdrawn finding must cite a file and line; a path spelled differently from a changed file's path is compared after normalisation. 
 
@@ -14,9 +14,9 @@ One fix is needed before merge. Read both changed files in full, then followed t
 
 <details><summary>Run details · 3 earlier attempts did not finish</summary>
 
-- small (attempt 1): absent (incomplete): did not read 86 of 146 changed hunks
-- small (attempt 2): absent (incomplete): did not read 86 of 146 changed hunks
-- small (attempt 3): absent (incomplete): did not read 86 of 146 changed hunks
+- small (attempt 1): the reviewer did not read every changed hunk
+- small (attempt 2): the reviewer did not read every changed hunk
+- small (attempt 3): the reviewer did not read every changed hunk
 
 </details>
 

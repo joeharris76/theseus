@@ -4,9 +4,9 @@
 
 - 🟡 **Medium** · D1 · Far · `benchbox/core/equivalence/checker.py:40`
 
-<details><summary>Reviewer notes · small (omp @smol)</summary>
+<details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>
 
-Reviewer: small (role review, omp @smol).
+Reviewer: `small (role review, omp @smol)`.
 
 x
 

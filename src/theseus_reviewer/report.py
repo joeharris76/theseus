@@ -6,16 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from . import (
-    absence,
     adjudication,
-    credentials,
     dedup,
     layout,
     protocol,
     providers,
-    recovery,
     redaction_check,
     selection,
+    unavailable,
 )
 from .retry import (
     ALL_ABSENT,
@@ -60,6 +58,7 @@ MARKER_LIMIT_NOTE = (
     "decision and is not retried; push a new head with fewer or shorter findings. The defects below carry no "
     "identifiers and open no tracked threads, so they are not carried into the next review."
 )
+NOTICE_CAUSES = (ALL_ABSENT, UNAVAILABLE, UNREPORTED, STOPPED, OVERSIZE)
 STATES = {selection.PASS: SUCCESS, selection.FAIL: FAILURE, selection.PENDING: PENDING}
 STEP_BACK_NOTE = (
     "Step back: this pull request has had {rounds} review rounds with findings, so this round re-read the whole"
@@ -257,7 +256,8 @@ def _fit(render: Callable[[int | None, int | None], str]) -> str:
 
 
 def _hard_cut(body: str) -> str:
-    starts = [at for at in (body.rfind(layout.VERDICT_MARKER_OPEN), body.rfind(protocol.MARKER_OPEN)) if at >= 0]
+    opens = (unavailable.MARKER_OPEN, layout.VERDICT_MARKER_OPEN, protocol.MARKER_OPEN)
+    starts = [at for at in (body.rfind(marker) for marker in opens) if at >= 0]
     split = min(starts, default=-1)
     head, tail = (body, "") if split < 0 else (body[:split], body[split:])
     notice = f"\n\n{BODY_CUT_NOTICE}\n"
@@ -364,10 +364,12 @@ def _meta(
     return [" · ".join(parts), ""]
 
 
-def _close(lines: Sequence[str], plan: Mapping[str, Any], state: str, record: str | None) -> str:
-    """The body: the visible text, the verdict marker, then the protocol record as the final bytes."""
+def _close(
+    lines: Sequence[str], plan: Mapping[str, Any], state: str, record: str | None, unavailable_marker: str = ""
+) -> str:
+    """The body: the visible text, the verdict marker, any unavailable marker, then the record as the final bytes."""
     body = "\n".join(lines).rstrip() + "\n\n" + layout.verdict_marker(state, plan["head_sha"])
-    return body + (f"\n{record}" if record else "")
+    return body + (f"\n{unavailable_marker}" if unavailable_marker else "") + (f"\n{record}" if record else "")
 
 
 def _reviewer_line(plan: Mapping[str, Any], name: str | None, ran: str = "") -> list[str]:
@@ -375,8 +377,9 @@ def _reviewer_line(plan: Mapping[str, Any], name: str | None, ran: str = "") -> 
     if spec is None:
         return []
     effort = f", effort {spec['effort']}" if spec.get("effort") else ""
-    line = f"Reviewer: {name} (role {spec['role']}, {spec['harness']} {spec['model']}{effort})."
-    return [f"{line} Model that ran: {ran}." if ran else line, ""]
+    # Code spans: a model such as "@plan" would otherwise notify the GitHub user of that name.
+    line = f"Reviewer: `{name} (role {spec['role']}, {spec['harness']} {spec['model']}{effort})`."
+    return [f"{line} Model that ran: `{ran}`." if ran else line, ""]
 
 
 def _served(plan: Mapping[str, Any]) -> providers.Served | None:
@@ -391,7 +394,9 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
     served = _served(plan)
     lines: list[str] = []
     if served is None and plan.get("served_error"):
-        return [f"- the gateway's served models are unknown: {plan['served_error']}"]
+        return [
+            f"- the gateway's served models are unknown: {unavailable.gateway_cause(str(plan['served_error'])).reason}"
+        ]
     if served is None:
         return lines
     unserved = [item for item in degraded if item not in served.providers]
@@ -400,9 +405,7 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
         lines.append(f"- not served by the gateway: {', '.join(unserved)}")
     for attempt in attempts:
         if selection.provider_failed(attempt):
-            lines.append(
-                f"- excluded after {attempt.provider} failed (attempt {attempt.slot}, {attempt.reviewer}): {attempt.absence}"
-            )
+            lines.append(unavailable.excluded_line(attempt, plan))
     if degraded or excluded:
         lines.append(f"- served: {', '.join(sorted(served.providers)) or 'none'}")
     for attempt in attempts:
@@ -415,30 +418,8 @@ def _classification_lines(note: str) -> list[str]:
     return [note, ""] if note else []
 
 
-def _recovery_text(attempt: Attempt) -> str:
-    held = attempt.recovery
-    if held is None:
-        return ""
-    if held.source == recovery.JEV:
-        return f"recovery: {held.choice} (Jev, probability {held.probability:.2f}, confidence {held.confidence:.2f})"
-    return f"recovery: {held.choice} (fallback, {held.reason})"
-
-
-def _absences(attempts: list[Attempt], step: Step) -> list[str]:
-    known = credentials.known()
-    lines = []
-    for attempt in attempts:
-        if attempt.outcome != "absent":
-            continue
-        detail = absence.published_detail(attempt.detail, known)
-        lines.append(
-            f"- {attempt.reviewer} (attempt {attempt.slot}): absent ({attempt.absence})"
-            + (f": {detail}" if detail else "")
-            + (f"; {_recovery_text(attempt)}" if attempt.recovery is not None else "")
-        )
-    attempted = {attempt.reviewer for attempt in attempts}
-    lines += [f"- {reason}" for reason in step.reasons if reason.split(":", 1)[0] not in attempted]
-    return lines
+def _absences(attempts: list[Attempt], step: Step, plan: Mapping[str, Any]) -> list[str]:
+    return unavailable.lines(attempts, step, plan)
 
 
 def _review_comment(
@@ -546,14 +527,15 @@ def _description(
     reviewer: str | None,
     cause: str,
     escalated: Sequence[str] = (),
-    unavailable: str = "",
+    gone: str = "",
+    absent: Sequence[unavailable.Cause] = (),
 ) -> str:
     if cause == OVERSIZE:
         return OVERSIZE_DESCRIPTION
     if cause == UNAVAILABLE and judgement is None:
-        return f"pending: no reviewer available ({unavailable})"
+        return f"pending: no reviewer available ({gone})"
     if judgement is None:
-        return "pending: " + "; ".join(step.reasons or ("no reviewer available",))
+        return "pending: " + unavailable.reason_text(absent)
     if judgement.decision == protocol.SHIP_WITH_FIXES:
         return f"{reviewer}: {judgement.label}, {judgement.open_count} defect(s) to fix{escalation_suffix(escalated)}"
     return f"{reviewer}: {judgement.label}"
@@ -579,7 +561,9 @@ def _reviewer_notes(
         inner += [f"{judgement.merged} identical finding(s) were reported more than once and are listed once.", ""]
     if not inner:
         return []
-    return layout.collapsible(f"Reviewer notes · {layout.summary_text(_reviewer_label(plan, reviewer))}", inner)
+    return layout.collapsible(
+        f"Reviewer notes · <code>{layout.summary_text(_reviewer_label(plan, reviewer))}</code>", inner
+    )
 
 
 def disposition_label(status: str) -> str:
@@ -712,7 +696,7 @@ def _run_details(
     pending: bool,
 ) -> list[str]:
     """Attempt logs and provider availability: collapsed, because the author cannot act on them."""
-    absences = [layout.neutralize(line) for line in _absences(list(attempts), step)]
+    absences = [layout.neutralize(line) for line in _absences(list(attempts), step, plan)]
     availability = [layout.neutralize(line) for line in _availability(plan, attempts, degraded)]
     inner = [*_classification_lines(layout.neutralize(note)), *absences, *availability]
     if not inner:
@@ -744,16 +728,17 @@ def finalize(
     note: str = "",
 ) -> Final:
     if errors:
+        withheld = (unavailable.ARTIFACTS,)
         lines = [
             *_head(plan, "NOT REVIEWED", "NOT REVIEWED YET · run artifacts failed validation"),
-            "A maintainer can comment `/review` to rerun.",
+            f"Next step: {unavailable.next_step(withheld)}",
             "",
             *layout.collapsible(
                 f"What happened · {layout.noun(len(errors), 'validation error', 'validation errors')}",
-                [f"- {layout.neutralize(error)}" for error in errors],
+                [f"- {unavailable.ARTIFACTS.reason}"],
             ),
         ]
-        body = _close(lines, plan, PENDING, None)
+        body = _close(lines, plan, PENDING, None, unavailable.marker(plan["head_sha"], withheld))
         review = (
             _review_payload(plan, body, Placement((), ()), commentable)
             if plan.get("findings_delivery") == "review"
@@ -813,15 +798,21 @@ def finalize(
         opened = []
         state, pending_cause = PENDING, MARKER_LIMIT
     degraded = _degraded(plan, attempts)
-    gone = plan.get("served_error") or (
-        f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change"
+    gone = (
+        unavailable.gateway_cause(str(plan["served_error"])).reason
+        if plan.get("served_error")
+        else (f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change")
     )
+    absent_causes = unavailable.causes(step, attempts, plan)
     description = (
         MARKER_LIMIT_DESCRIPTION
         if unrecorded
-        else _description(step, judgement, reviewer, pending_cause, escalated, gone)
+        else _description(step, judgement, reviewer, pending_cause, escalated, gone, absent_causes)
     )
     degraded_suffix = f" · degraded: {', '.join(degraded)}" if degraded else ""
+    notice_causes = (
+        (unavailable.PENDING_CAUSES[pending_cause],) if pending_cause in unavailable.PENDING_CAUSES else absent_causes
+    )
     listed = [*placement.inline, *placement.summary, *(judgement.not_counted if judgement is not None else ())]
     decided = judgement is not None and not unrecorded
     shown_strikes = strikes if decided else int(rules.get("strikes", 0))
@@ -861,7 +852,12 @@ def finalize(
         if not rework:
             lines += _strike_line(plan, shown_strikes)
         lines += _run_details(plan, attempts, step, degraded, note, judgement is None)
-        return _close(lines, plan, state, marker)
+        hidden = ""
+        if judgement is None and not unrecorded and pending_cause in NOTICE_CAUSES:
+            if pending_cause != OVERSIZE:
+                lines += [f"Next step: {unavailable.next_step(notice_causes)}", ""]
+            hidden = unavailable.marker(plan["head_sha"], notice_causes)
+        return _close(lines, plan, state, marker, hidden)
 
     body = _fit(render)
     has_content = bool(

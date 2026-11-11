@@ -1,11 +1,12 @@
 ### ⏳ NOT REVIEWED YET · run artifacts failed validation · shadow (advisory)
 
-A maintainer can comment `/review` to rerun.
+Next step: Push a new head to run the review again.
 
 <details><summary>What happened · 1 validation error</summary>
 
-- attempt-1.json: bad
+- the run's artifacts failed validation
 
 </details>
 
 <!-- review-verdict: v2 pending aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->
+<!-- review-unavailable: v1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa artifacts-invalid -->

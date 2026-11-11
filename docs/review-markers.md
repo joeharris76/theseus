@@ -10,7 +10,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 |---|---|---|
 | `review-protocol: v1` | review body | the decision record |
 | `review-verdict: v2` | review body | the verdict state for one head (written on every verdict body; read by the gate) |
-| `review-unavailable: v1` | review body | reserved: the head was not reviewed because no reviewer was available |
+| `review-unavailable: v1` | review body | written on every not-reviewed post: the head was not reviewed because no reviewer was available |
 | `review-defect` | review thread comment | the defect id the thread belongs to |
 | `review-finding` | review thread comment | the finding fingerprint used for deduplication |
 | `review-local-record: v1` | pull request body | the local review's findings record |
@@ -41,7 +41,7 @@ Reading rules, which the gate applies when it decides whether a review is a rece
 
 For every review with a protocol record, `decision` is `SHIP` if and only if the verdict state is `success`.
 
-The marker sits on its own line immediately before the `review-protocol` record, so the record stays the last thing in the body. A "not reviewed" body (no reviewer ran, no protocol record) ends with the marker, with state `pending`.
+The marker sits on its own line immediately before the `review-protocol` record, so the record stays the last thing in the body. A "not reviewed" body (no reviewer ran, no protocol record) carries the verdict marker (state `pending`) and then the `review-unavailable` marker, which is last.
 
 ### What the body looks like (presentation, not interface)
 
@@ -53,7 +53,9 @@ The first line is `### <mark> <DECISION> · <one fact>` with the marks ✅ SHIP,
 <!-- review-unavailable: v1 <40hex> <cause-key> -->
 ```
 
-Reserved for the review-format release that adds it: the head `<40hex>` was not reviewed because no reviewer could run, for the cause `<cause-key>` (a lowercase token naming why). It is never a receipt and never carries a verdict. Releases that do not emit it simply never post it; consumers MUST ignore it until they implement it.
+Written on every not-reviewed post: the head `<40hex>` was not reviewed because no reviewer could run, for the cause `<cause-key>`. The cause key is the sorted set of `[a-z0-9-]` cause keys joined by `+` (for example `quota+timeout`). It is never a receipt and never carries a verdict.
+
+The post is not repeated: when the latest post by the review App for the same head already carries the same head and cause key, `drive publish` does not post again. Only markers are compared, never prose; see [hosted-workflows.md](hosted-workflows.md).
 
 ## `review-defect`
 

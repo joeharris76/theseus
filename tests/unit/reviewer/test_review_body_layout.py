@@ -95,7 +95,8 @@ def test_every_body_leads_with_its_decision_and_ends_with_one_v2_marker_then_the
         assert body.count(protocol.MARKER_OPEN) == 1
         assert protocol.decode_marker(body) is not None
     else:
-        assert body.endswith(marker) and protocol.MARKER_OPEN not in body
+        assert marker in body and protocol.MARKER_OPEN not in body
+        assert body.endswith(marker) or body.splitlines()[-1].startswith("<!-- review-unavailable:")
 
 
 @pytest.mark.parametrize("name", [*STATES, *NOT_REVIEWED])
@@ -184,7 +185,7 @@ def test_reviewer_notes_and_attempt_logs_are_collapsed_and_the_supersedes_boiler
         assert "supersedes" not in _body(final), name
         assert "Reviewers not available" not in _body(final), name
     body = _body(_bodies(policy)["ship"][0])
-    assert re.search(r"<details><summary>Reviewer notes · small \(omp @[a-z]+\)</summary>", body)
+    assert re.search(r"<details><summary>Reviewer notes · <code>small \(omp @[a-z]+\)</code></summary>", body)
     assert "Fine." not in visible(body)
     assert "No action" not in body
 
@@ -359,3 +360,43 @@ def test_a_real_world_shaped_body_matches_its_snapshot(policy: Policy, name: str
 @pytest.mark.parametrize("name", [*STATES, *NOT_REVIEWED])
 def test_every_state_matches_its_snapshot(policy: Policy, name: str) -> None:
     _snapshot(f"state-{name}", _body(_bodies(policy)[name][0]))
+
+
+MENTION = re.compile(r"(?<![\w`>])@[\w-]+")
+
+
+def _outside_code(text: str) -> str:
+    text = re.sub(r"`[^`]*`", "", text)
+    return re.sub(r"<code>.*?</code>", "", text, flags=re.DOTALL)
+
+
+def test_a_reviewer_label_never_mentions_a_github_user(policy: Policy) -> None:
+    verdict = _v("x", [_defect("Bad", 2), _defect("Far", 40, "d")])
+    for plan in (_protocol_plan(policy), _comment_plan(policy)):
+        final = _finalize(policy, plan, verdict, kind=selection.FAIL)
+        posted = [_body(final), *(comment["body"] for comment in (final.review or {"comments": []})["comments"])]
+        for text in posted:
+            assert "@smol" in text or "Bad" in text
+            assert not MENTION.search(_outside_code(text)), text
+    for name, (final, _) in _bodies(policy).items():
+        assert not MENTION.search(_outside_code(_body(final))), name
+
+
+def test_a_not_reviewed_body_keeps_its_unavailable_marker_after_the_verdict_marker_and_is_found_again(
+    policy: Policy,
+) -> None:
+    from theseus_reviewer import unavailable
+
+    bot = policy.bot_login
+    for name in ("unavailable", "oversize", "withheld"):
+        final, _ = _bodies(policy)[name]
+        body = _body(final)
+        assert body.count(unavailable.MARKER_OPEN) == 1 and body.count(layout.VERDICT_MARKER_OPEN) == 1
+        assert body.index(layout.VERDICT_MARKER_OPEN) < body.index(unavailable.MARKER_OPEN)
+        assert unavailable.MARKER_PATTERN.search(body.splitlines()[-1]) and protocol.MARKER_OPEN not in body
+        as_comment = {"login": f"{bot}[bot]", "user_type": "Bot", "body": body, "at": "2026-11-10T10:00:00Z"}
+        as_review = {**as_comment, "commit_id": HEAD, "state": "COMMENTED"}
+        for post in (as_comment, as_review):
+            assert unavailable.repeats([post], HEAD, body, bot), name
+    ship = _body(_bodies(policy)["ship"][0])
+    assert unavailable.MARKER_OPEN not in ship
