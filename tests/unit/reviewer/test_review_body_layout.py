@@ -153,7 +153,7 @@ def test_findings_are_one_line_each_most_severe_first_and_threadless_ones_collap
     body = _finalize(policy, _protocol_plan(policy), verdict, kind=selection.FAIL).review["body"]
     marks = [body.index(text) for text in ("🟠 <b>High</b>", "🟡 **Medium**", "🔵 **Low**")]
     assert marks == sorted(marks)
-    assert f"- 🔵 **Low** · D1 · Low one · `{CHECKER}` (thread below)" in body
+    assert f"- 🔵 **Low** · D1 · Low one · <code>{CHECKER}</code> (thread below)" in body
     assert (
         f"<details><summary>🟠 <b>High</b> · D2 · Far high · <code>{CHECKER}:40</code></summary>\n\nfar detail\n\n</details>"
         in body
@@ -527,7 +527,7 @@ def test_a_path_with_a_line_break_cannot_forge_layout(policy: Policy) -> None:
     entry = {"id": "D1", "severity": "High", "file": bad, "line": 2, "end_line": None, "title": "T"}
     body = report._entry_item(entry)
     text = "\n".join(body)
-    assert len(body) == 1 and "\n" not in text and text.count("`") == 2
+    assert len(body) == 1 and "\n" not in text and "<code>" in text and text.count("<code>") == 1
     assert "\n" not in layout.shown_path(bad) and "\n" not in layout.plain_path(bad)
 
 
@@ -538,3 +538,44 @@ def test_a_raw_html_block_cannot_hide_a_fence_from_the_scanner() -> None:
     fences = [line for line in out.splitlines() if line.startswith("```")]
     assert len(fences) == 2 and out.index("- [ ] tick") > out.index("```") and out.endswith("```")
     assert layout.neutralize("```\n<div>\n```") == "```\n<div>\n```"
+
+
+@pytest.mark.parametrize(
+    ("raw", "kept"),
+    [
+        ("SHIP \n===", "SHIP \n\\==="),
+        ("SHIP\t\n---", "SHIP\t\n\\---"),
+        (">SHIP\n>===", ">SHIP\n>\\==="),
+        ("> SHIP\n> ---", "> SHIP\n> \\---"),
+        ("> # q", "> \\# q"),
+        (">> ## q", ">> \\## q"),
+        ("a\n\n---\nb", "a\n\n---\nb"),
+    ],
+)
+def test_every_heading_form_is_escaped_outside_code(raw: str, kept: str) -> None:
+    assert layout.neutralize(raw) == kept
+
+
+def test_a_backtick_in_a_path_cannot_break_out_of_its_rendering() -> None:
+    bad = "a`<details><summary>x`.py"
+    line = layout.finding_line("High", "D1", "T", layout.shown_path(bad))
+    assert "<details>" not in line and "&lt;details&gt;" in line
+    entry = {"id": "D1", "severity": "High", "file": bad, "line": 2, "end_line": None, "title": "T"}
+    assert "<details><summary>x" not in "\n".join(report._entry_item(entry, threaded=True))
+
+
+def test_a_carried_comment_for_a_non_review_verdict_context_is_not_a_repeat(policy: Policy) -> None:
+    from theseus_reviewer import unavailable
+
+    bot = policy.bot_login
+    plan = {**_carry_plan(policy, _previous("SHIP")), "status_context": "oracle-verdict"}
+    carried = report.carried(plan).body
+    assert layout.VERDICT_MARKER_OPEN not in carried
+    notice = _body(_bodies(policy)["unavailable"][0])
+    base = {"login": f"{bot}[bot]", "user_type": "Bot"}
+    posts = [
+        {**base, "body": notice, "at": "2026-11-10T10:00:00Z"},
+        {**base, "body": carried, "at": "2026-11-10T11:00:00Z"},
+    ]
+    assert not unavailable.repeats(posts, HEAD, notice, bot)
+    assert unavailable.repeats(posts[:1], HEAD, notice, bot)

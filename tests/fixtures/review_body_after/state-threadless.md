@@ -2,7 +2,7 @@
 
 **1 Medium** · reviewed aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa · fix each one, or contest it with a comment `Dispute: D<n> - <reason>`
 
-- 🟡 **Medium** · D1 · Far · `benchbox/core/equivalence/checker.py:40`
+- 🟡 **Medium** · D1 · Far · <code>benchbox/core/equivalence/checker.py:40</code>
 
 <details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>
 

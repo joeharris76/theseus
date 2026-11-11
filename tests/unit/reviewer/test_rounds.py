@@ -148,9 +148,9 @@ def test_a_follow_up_counts_unfixed_and_new_defects_in_changed_files_only(policy
     assert record["next_id"] == 4 and (record["kind"], record["round"]) == ("follow-up", 2)
     assert "fixed: **D1** (resolve its thread)" in final.body.splitlines()[2]
     still_open = final.body.split("**Still open**", 1)[1]
-    assert f"D2 · Old · `{CHECKER}:1`" in still_open
+    assert f"D2 · Old · <code>{CHECKER}:1</code>" in still_open
     hidden = final.body.split("<details><summary>Not counted", 1)[1].split("</details>", 1)[0]
-    assert f"`{OTHER}:9`" in hidden and f"`{OTHER}:9`" not in final.body.replace(hidden, "")
+    assert f"<code>{OTHER}:9</code>" in hidden and f"<code>{OTHER}:9</code>" not in final.body.replace(hidden, "")
     assert final.description == _open_findings(2, ("High", 1), ("Medium", 1))
     assert final.review is not None
     assert [comment["path"] for comment in final.review["comments"]] == [CHECKER]

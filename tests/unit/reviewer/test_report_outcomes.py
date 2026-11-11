@@ -125,14 +125,14 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     expected = (
         f"<details><summary>🟡 <b>Medium</b> · D7 · Inline problem · <code>{CHECKER}:2</code></summary>",
         "inline detail",
-        f"- 🟡 **Medium** · D8 · Outside problem · `{CHECKER}:40`",
+        f"- 🟡 **Medium** · D8 · Outside problem · <code>{CHECKER}:40</code>",
         "**Still open**",
-        f"- 🟠 **High** · D5 · Old · `{CHECKER}:1-2`",
-        f"- 🟠 **High** · D6 · Old · `{CHECKER}:2`",
+        f"- 🟠 **High** · D5 · Old · <code>{CHECKER}:1-2</code>",
+        f"- 🟠 **High** · D6 · Old · <code>{CHECKER}:2</code>",
         "**Already open as review threads**",
-        f"- 🟡 **Medium** · D9 · Already open problem · `{CHECKER}` (existing thread)",
+        f"- 🟡 **Medium** · D9 · Already open problem · <code>{CHECKER}</code> (existing thread)",
         "<details><summary>Not counted: defects in files this follow-up did not review</summary>",
-        f"- 🟡 **Medium** · Elsewhere problem · `{OTHER}:9`",
+        f"- 🟡 **Medium** · Elsewhere problem · <code>{OTHER}:9</code>",
         "<details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>",
         "Reviewer: `small (role review, omp @smol)`.",
         "Overall summary",
@@ -182,9 +182,9 @@ def test_the_review_sections_follow_the_delivery_mode(policy: Policy) -> None:
     review = _finalize(policy, _protocol_plan(policy), verdict)
     assert comment.review is None and review.review is not None
     comment_lines, review_lines = comment.body.split("\n"), review.body.split("\n")
-    assert f"- 🟡 **Medium** · D1 · Inline problem · `{CHECKER}:2`" in comment_lines
-    assert f"- 🟡 **Medium** · D1 · Inline problem · `{CHECKER}` (thread below)" in review_lines
-    assert f"- 🟡 **Medium** · D2 · Outside problem · `{CHECKER}:40`" in review_lines
+    assert f"- 🟡 **Medium** · D1 · Inline problem · <code>{CHECKER}:2</code>" in comment_lines
+    assert f"- 🟡 **Medium** · D1 · Inline problem · <code>{CHECKER}</code> (thread below)" in review_lines
+    assert f"- 🟡 **Medium** · D2 · Outside problem · <code>{CHECKER}:40</code>" in review_lines
     assert "(thread below)" not in comment.body and review.body.count("(thread below)") == 1
     for final in (comment, review):
         _assert_shape(final.body)
@@ -371,8 +371,8 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     lines = final.review["body"].split("\n")
     assert lines[0] == "### ⏳ NOT REVIEWED · decision record too large for a review marker · shadow (advisory)"
     assert report.MARKER_LIMIT_NOTE in lines and protocol.MARKER_OPEN not in final.review["body"]
-    assert f"- 🟡 **Medium** · Already open problem · `{CHECKER}` (existing thread)" in lines
-    assert f"- 🟡 **Medium** · Far · `{CHECKER}:40`" in lines
+    assert f"- 🟡 **Medium** · Already open problem · <code>{CHECKER}</code> (existing thread)" in lines
+    assert f"- 🟡 **Medium** · Far · <code>{CHECKER}:40</code>" in lines
     assert any("DO NOT SHIP decisions on this pull request: 1 of 3." in line for line in lines)
     assert not any("review-defect" in item["body"] for item in final.review["comments"])
     thread = Finding("Medium", CHECKER, 2, "New problem", "d")
@@ -412,7 +412,10 @@ def test_a_capped_body_shortens_every_listed_detail_alike(policy: Policy, monkey
     assert "Size limit: the detail of 3 of 3 listed defect(s) was shortened" in final.body
     for title in ("Inline", "Outside", "Elsewhere"):
         assert title in final.body
-    assert f"D2 · Outside · <code>{CHECKER}:40</code>" in final.body and f"Elsewhere · `{OTHER}:9`" in final.body
+    assert (
+        f"D2 · Outside · <code>{CHECKER}:40</code>" in final.body
+        and f"Elsewhere · <code>{OTHER}:9</code>" in final.body
+    )
     _assert_shape(final.body)
 
 
@@ -656,7 +659,8 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     assert "The patch is unchanged since that head was reviewed, so no reviewer ran." in lines
     assert "**Still open**" in lines
     assert (
-        f"- 🟠 **High** · D4 · Old · `{CHECKER}:1-2`" in lines and f"- 🟠 **High** · D5 · Old · `{CHECKER}:2`" in lines
+        f"- 🟠 **High** · D4 · Old · <code>{CHECKER}:1-2</code>" in lines
+        and f"- 🟠 **High** · D5 · Old · <code>{CHECKER}:2</code>" in lines
     )
     assert sum("D4 · Old" in line for line in lines) == 1
     assert f"Fix each one, or contest it with a comment `{protocol.COMMENT_DISPUTE_GRAMMAR}`." in lines

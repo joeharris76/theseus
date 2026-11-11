@@ -219,7 +219,7 @@ def test_an_open_finding_without_a_thread_gets_one_when_its_line_is_in_the_diff(
     assert len(comments) == 1 and comments[0]["path"] == CHECKER and comments[0]["line"] == 2
     assert "<!-- review-defect: c1-D1 -->" in comments[0]["body"]
     assert comments[0]["body"].startswith("🟠 **High** · D1 · Old\n")
-    assert f"- 🟠 **High** · D1 · Old · `{CHECKER}` (thread below)" in final.review["body"]
+    assert f"- 🟠 **High** · D1 · Old · <code>{CHECKER}</code> (thread below)" in final.review["body"]
     assert "**Still open**" in final.review["body"]
 
 
@@ -247,7 +247,7 @@ def test_a_finding_outside_the_diff_gets_no_thread_and_the_body_names_the_disput
 ) -> None:
     final = _carried(policy, tmp_path, _prior("D1", line=99))
     assert final.review["comments"] == []
-    assert f"- 🟠 **High** · D1 · Old · `{CHECKER}:99`" in final.review["body"]
+    assert f"- 🟠 **High** · D1 · Old · <code>{CHECKER}:99</code>" in final.review["body"]
     assert "(thread below)" not in final.review["body"]
     assert "`Dispute: D<n> - <reason>`" in final.review["body"]
 

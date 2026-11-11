@@ -2,7 +2,7 @@
 
 **1 Medium** · reviewed aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa · changes since 8f192e3e1e596e460c67c8103a6685ee6f504735 · fixed: **D1** (resolve its thread) · fix each one, or contest it with a comment `Dispute: D<n> - <reason>`
 
-- 🟡 **Medium** · D2 · Advisory demotion compares exact path strings, so another spelling of a changed file's pa… · `benchbox/core/equivalence/checker.py` (thread below)
+- 🟡 **Medium** · D2 · Advisory demotion compares exact path strings, so another spelling of a changed file's pa… · <code>benchbox/core/equivalence/checker.py</code> (thread below)
 
 <details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>
 

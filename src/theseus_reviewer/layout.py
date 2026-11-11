@@ -33,8 +33,8 @@ THREAD_FOOTER = "<sub>Blocks merge · to contest, reply starting <code>Dispute:<
 _SEVERITY_RANK = {name: index for index, name in enumerate((*SEVERITIES, ADVISORY))}
 _RAW_TAG = re.compile(r"<(?=/?\s*(?:details|summary)\b)", re.IGNORECASE)
 _TASK_ITEM = re.compile(r"^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\]", re.MULTILINE)
-_HEADING = re.compile(r"^([ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
-_SETEXT = re.compile(r"(?<=\S)\n([ \t]{0,3})([=-])(?=[=-]*[ \t]*(?:\n|$))", re.MULTILINE)
+_HEADING = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
+_UNDERLINE = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})([=-])(?=[=-]*[ \t]*$)")
 _BREAKS = re.compile(r"[\r\n\t]+")
 _HTML_OPENER = re.compile(r"^([ \t]{0,3})<(?=[A-Za-z/!?])", re.MULTILINE)
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
@@ -59,7 +59,11 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
 
 
 def _prose(chunk: str) -> str:
-    chunk = _SETEXT.sub(lambda match: f"\n{match.group(1)}\\{match.group(2)}", chunk)
+    rows = chunk.split("\n")
+    for index in range(1, len(rows)):
+        if rows[index - 1].strip() and (found := _UNDERLINE.match(rows[index])):
+            rows[index] = f"{found.group(1)}\\{rows[index][found.end(1) :]}"
+    chunk = "\n".join(rows)
     chunk = _HTML_OPENER.sub(lambda match: f"{match.group(1)}&lt;", chunk)
     chunk = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
@@ -111,8 +115,8 @@ def plain_path(path: str) -> str:
 
 
 def shown_path(path: str) -> str:
-    """The path as a reader should see it in markdown, with comment openers and closers made inert."""
-    return display_path(plain_path(path))
+    """The path for a `<code>` element: HTML-escaped, so no character of it can open markup."""
+    return html.escape(plain_path(path), quote=False)
 
 
 def span(line: int, end_line: int | None) -> str:
@@ -169,4 +173,4 @@ def finding_line(
 ) -> str:
     named = f" · {defect_id}" if defect_id else ""
     shown = " ".join(title.split()) if full else short_title(title)
-    return f"- {severity_label(severity)}{named} · {neutralize(shown)} · `{where}`{note}"
+    return f"- {severity_label(severity)}{named} · {neutralize(shown)} · <code>{where}</code>{note}"

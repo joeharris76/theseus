@@ -218,7 +218,10 @@ def test_review_delivery_builds_line_threads_only_inside_the_diff(policy: Policy
     assert [(item["path"], item["line"], item["side"]) for item in final.review["comments"]] == [
         ("benchbox/core/equivalence/checker.py", 2, "RIGHT")
     ]
-    assert f"<code>{CHECKER}:40</code>" in final.review["body"] and f"{CHECKER}` (thread below)" in final.review["body"]
+    assert (
+        f"<code>{CHECKER}:40</code>" in final.review["body"]
+        and f"{CHECKER}</code> (thread below)" in final.review["body"]
+    )
 
 
 def test_artifact_from_another_run_or_head_is_rejected(policy: Policy, tmp_path: Path) -> None:
@@ -622,7 +625,7 @@ def test_findings_already_open_are_not_posted_again_but_still_block(policy: Poli
         "🔴 **Critical** · D2 · Critical issue"
     ]
     assert "**Already open as review threads**" in final.body
-    assert f"- 🟠 **High** · D1 · High issue · `{CHECKER}` (existing thread)" in final.body
+    assert f"- 🟠 **High** · D1 · High issue · <code>{CHECKER}</code> (existing thread)" in final.body
 
 
 def test_second_run_with_every_finding_open_adds_no_thread(policy: Policy, tmp_path: Path) -> None:
