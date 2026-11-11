@@ -5,18 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import (
-    absence,
-    adjudication,
-    credentials,
-    dedup,
-    protocol,
-    providers,
-    recovery,
-    redaction_check,
-    selection,
-    status_text,
-)
+from . import absence, adjudication, dedup, protocol, providers, redaction_check, selection, status_text, unavailable
 from .policy import SEVERITIES
 from .retry import (
     ALL_ABSENT,
@@ -61,6 +50,7 @@ MARKER_LIMIT_NOTE = (
     "decision and is not retried; push a new head with fewer or shorter findings. The defects below carry no "
     "identifiers and open no tracked threads, so they are not carried into the next review."
 )
+NOTICE_CAUSES = (ALL_ABSENT, UNAVAILABLE, UNREPORTED, STOPPED, OVERSIZE)
 STATES = {selection.PASS: SUCCESS, selection.FAIL: FAILURE, selection.PENDING: PENDING}
 STEP_BACK_NOTE = (
     "Step back: this pull request has had {rounds} review rounds with findings, so this round re-read the whole"
@@ -289,7 +279,9 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
     served = _served(plan)
     lines: list[str] = []
     if served is None and plan.get("served_error"):
-        return [f"- the gateway's served models are unknown: {plan['served_error']}"]
+        return [
+            f"- the gateway's served models are unknown: {unavailable.gateway_cause(str(plan['served_error'])).reason}"
+        ]
     if served is None:
         return lines
     unserved = [item for item in degraded if item not in served.providers]
@@ -298,9 +290,7 @@ def _availability(plan: Mapping[str, Any], attempts: Sequence[Attempt], degraded
         lines.append(f"- not served by the gateway: {', '.join(unserved)}")
     for attempt in attempts:
         if selection.provider_failed(attempt):
-            lines.append(
-                f"- excluded after {attempt.provider} failed (attempt {attempt.slot}, {attempt.reviewer}): {attempt.absence}"
-            )
+            lines.append(unavailable.excluded_line(attempt, plan))
     if degraded or excluded:
         lines.append(f"- served: {', '.join(sorted(served.providers)) or 'none'}")
     for attempt in attempts:
@@ -313,30 +303,8 @@ def _classification_lines(note: str) -> list[str]:
     return [note, ""] if note else []
 
 
-def _recovery_text(attempt: Attempt) -> str:
-    held = attempt.recovery
-    if held is None:
-        return ""
-    if held.source == recovery.JEV:
-        return f"recovery: {held.choice} (Jev, probability {held.probability:.2f}, confidence {held.confidence:.2f})"
-    return f"recovery: {held.choice} (fallback, {held.reason})"
-
-
-def _absences(attempts: list[Attempt], step: Step) -> list[str]:
-    known = credentials.known()
-    lines = []
-    for attempt in attempts:
-        if attempt.outcome != "absent":
-            continue
-        detail = absence.published_detail(attempt.detail, known)
-        lines.append(
-            f"- {attempt.reviewer} (attempt {attempt.slot}): absent ({attempt.absence})"
-            + (f": {detail}" if detail else "")
-            + (f"; {_recovery_text(attempt)}" if attempt.recovery is not None else "")
-        )
-    attempted = {attempt.reviewer for attempt in attempts}
-    lines += [f"- {reason}" for reason in step.reasons if reason.split(":", 1)[0] not in attempted]
-    return lines
+def _absences(attempts: list[Attempt], step: Step, plan: Mapping[str, Any]) -> list[str]:
+    return unavailable.lines(attempts, step, plan)
 
 
 def _review_comment(
@@ -480,6 +448,12 @@ ABSENCE_CAUSES = {
 }
 
 
+GATEWAY_SHORT = {
+    unavailable.GATEWAY_REJECTED.key: "model gateway rejected the client token",
+    unavailable.GATEWAY_ERROR.key: "model gateway unusable or misconfigured",
+}
+
+
 def _pending_description(
     cause: str, attempts: Sequence[Attempt], plan: Mapping[str, Any], degraded: Sequence[str]
 ) -> str:
@@ -490,7 +464,10 @@ def _pending_description(
     if cause == UNREPORTED:
         return status_text.UNREPORTED
     if cause == UNAVAILABLE and plan.get("served_error"):
-        return status_text.GATEWAY_DOWN
+        gateway = unavailable.gateway_cause(str(plan["served_error"]))
+        if gateway is unavailable.GATEWAY:
+            return status_text.GATEWAY_DOWN
+        return status_text.unavailable(GATEWAY_SHORT[gateway.key])
     kind = _unavailable_cause(attempts, plan)
     if kind == absence.INCOMPLETE:
         return status_text.incomplete_read(len(attempts))
@@ -499,9 +476,9 @@ def _pending_description(
     return status_text.unavailable(ABSENCE_CAUSES.get(kind, "no reviewer could run"))
 
 
-def _detail(step: Step, cause: str, unavailable: str) -> str:
+def _detail(step: Step, cause: str, gone: str) -> str:
     if cause == UNAVAILABLE:
-        return f"no reviewer available ({unavailable})"
+        return f"no reviewer available ({gone})"
     return "; ".join(step.reasons or ("no reviewer available",))
 
 
@@ -569,8 +546,13 @@ def finalize(
     note: str = "",
 ) -> Final:
     if errors:
+        withheld = (unavailable.ARTIFACTS,)
         body = "\n".join(
-            [*_header(plan, PENDING), *_section("Result withheld: the run's artifacts failed validation", errors)]
+            [
+                *_header(plan, PENDING),
+                *_section("Result withheld", [f"- {unavailable.ARTIFACTS.reason}"]),
+                *unavailable.notice(plan["head_sha"], withheld),
+            ]
         )
         review = (
             _review_payload(plan, body, Placement((), ()), commentable)
@@ -627,8 +609,10 @@ def finalize(
         opened, unanchored = [], []
         state, pending_cause = PENDING, MARKER_LIMIT
     degraded = _degraded(plan, attempts)
-    gone = plan.get("served_error") or (
-        f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change"
+    gone = (
+        unavailable.gateway_cause(str(plan["served_error"])).reason
+        if plan.get("served_error")
+        else (f"{', '.join(degraded)} unavailable" if degraded else "no served model can hold this change")
     )
     if unrecorded:
         description = MARKER_LIMIT_DESCRIPTION
@@ -645,8 +629,12 @@ def finalize(
             strikes=strikes,
             strike_limit=(rules.get("max_do_not_ship") or None),
         )
+    absent_causes = unavailable.causes(step, attempts, plan)
     detail = _detail(step, pending_cause, gone) if judgement is None else ""
     degraded_suffix = f"{status_text.DEGRADED_MARK}{', '.join(degraded)}" if degraded else ""
+    notice_causes = (
+        (unavailable.PENDING_CAUSES[pending_cause],) if pending_cause in unavailable.PENDING_CAUSES else absent_causes
+    )
     listed = [*placement.inline, *placement.summary, *(judgement.not_counted if judgement is not None else ())]
 
     def render(cap: int | None, evidence_cap: int | None = None) -> str:
@@ -727,8 +715,10 @@ def finalize(
         lines += _strike_line(
             plan, strikes if judgement is not None and not unrecorded else int(rules.get("strikes", 0))
         )
-        lines += _section("Reviewers not available", _absences(attempts, step))
+        lines += _section("Reviewers not available", _absences(attempts, step, plan))
         lines += _section("Provider availability", _availability(plan, attempts, degraded))
+        if judgement is None and not unrecorded and pending_cause in NOTICE_CAUSES:
+            lines += unavailable.notice(plan["head_sha"], notice_causes, with_next_step=pending_cause != OVERSIZE)
         body = "\n".join(lines).rstrip() + "\n"
         if marker is not None:
             body += "\n" + marker

@@ -134,8 +134,8 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     assert any(line.startswith("1 identical finding(s)") for line in lines)
     assert any(f"`{OLD}`" in line and line.startswith("Scope:") for line in lines)
     assert any("1 of 3" in line and "DO NOT SHIP" in line for line in lines)
-    assert "- max (attempt 2): absent (timeout): took too long" in lines
-    assert "- medium: not selected: pool blocked" in lines
+    assert "- max (attempt 2): the reviewer did not finish within its time limit" in lines
+    assert "- medium: no reviewer could run" in lines
     assert not any(line.startswith("- small: waits") for line in lines)
     assert any(line.startswith("Shadow mode") for line in lines)
     opener = next(index for index, line in enumerate(lines) if line.startswith("<details>"))
@@ -282,9 +282,9 @@ def test_unavailable_reviewers_are_listed_after_every_attempt(policy: Policy, mo
     final = _finalize(policy, _comment_plan(policy), verdict, kind=selection.FAIL, attempts=attempts, reasons=reasons)
     lines = final.body.split("\n")
     assert secret not in final.body
-    assert any(line.startswith("- max (attempt 2): absent (quota): token ") for line in lines)
-    assert "- max (attempt 3): absent (timeout)" in lines
-    assert "- medium: out of budget" in lines
+    assert "- max (attempt 2): the model provider's usage quota is exhausted" in lines
+    assert "- max (attempt 3): the reviewer did not finish within its time limit" in lines
+    assert "- medium: no reviewer could run" in lines
     assert not any(line.startswith(("- small: pool", "- max: retry")) for line in lines)
     _assert_shape(final.body)
 
@@ -294,7 +294,7 @@ def test_a_pending_selection_that_never_reported_names_the_selected_reviewer(pol
         policy, _comment_plan(policy), None, kind=selection.REVIEW, reviewer="small", attempts=[], reasons=()
     )
     assert final.state == "pending" and final.pending_cause == UNREPORTED
-    assert "- small: selected but did not report" in final.body.split("\n")
+    assert "- small: a selected reviewer did not report" in final.body.split("\n")
     assert final.description == status_text.UNREPORTED
     nameless = report.finalize(_comment_plan(policy), Step(selection.REVIEW, None, ()), [], [], {}, COMMENTABLE)
     assert nameless.state == "pending" and nameless.pending_cause == UNREPORTED
@@ -324,7 +324,8 @@ def test_withheld_artifacts_are_listed_in_a_pending_review(policy: Policy) -> No
     assert final.strikes is None and final.description
     lines = final.body.split("\n")
     assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
-    assert all(error in lines for error in errors)
+    assert not any(error in lines for error in errors)
+    assert "- the run's artifacts failed validation" in lines
     assert final.review is not None and final.review["body"] == final.body
     assert set(final.review) == {"commit_id", "event", "body", "comments"}
     assert final.review["event"] == "COMMENT" and final.review["commit_id"] == HEAD
@@ -736,15 +737,15 @@ def test_an_unpatterned_credential_from_the_environment_never_reaches_the_absenc
     ]
     verdict = _v("s", [_defect("Problem")])
     final = _finalize(policy, _comment_plan(policy), verdict, kind=selection.FAIL, attempts=attempts)
-    assert secret not in final.body and "- max (attempt 2): absent (error): auth " in final.body
+    assert secret not in final.body and "- max (attempt 2): the reviewer failed to run" in final.body.split("\n")
 
 
-def test_a_withheld_review_lists_its_errors_under_a_real_title(policy: Policy) -> None:
+def test_a_withheld_review_names_its_reason_under_a_real_title(policy: Policy) -> None:
     final = _finalize(policy, _protocol_plan(policy), _v("fine"), errors=["attempt 1: wrong run"])
     lines = final.body.split("\n")
     assert "None" not in final.body
-    title = lines.index("attempt 1: wrong run") - 2
-    assert lines[title].startswith("**") and lines[title].endswith("**") and lines[title + 1] == ""
+    title = lines.index("- the run's artifacts failed validation") - 2
+    assert lines[title] == "**Result withheld**" and lines[title + 1] == ""
 
 
 def test_the_thread_markers_carry_the_cycle_of_the_plan(policy: Policy) -> None:

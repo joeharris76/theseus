@@ -36,7 +36,7 @@
     "attempt/state.json": null,
     "comment.json": null,
     "review.json": {
-      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n",
+      "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n",
       "comments": [],
       "commit_id": "<sha0>",
       "event": "COMMENT"
@@ -354,7 +354,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n",
+        "body": "### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n",
         "commit_id": "<sha0>",
         "creator": "benchbox-review[bot]"
       }
@@ -404,5 +404,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: Not reviewed · review stopped, a reviewer process is blocked · see the run log · /review retries\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- stopped: the process is blocked (the reviewer output is not JSON: Expecting value)\n\n"
+  "summary": "review-verdict plan for #103: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nslot 1: medium invalid, recovery stop (jev)\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium absent (invalid: the reviewer output is not JSON: Expecting value)\nslot 2: pending\nslot 2: pending\nslot 2: pending\nslot 2: pending\nreview-verdict #103 <sha0>: pending: Not reviewed · review stopped, a reviewer process is blocked · see the run log · /review retries\n### review-verdict: pending for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Reviewers not available**\n\n- medium (attempt 1): the reviewer's answer was not a valid review; recovery: stop (Jev, probability 1.00, confidence 1.00)\n- the reviewer's process is blocked\n\nNext step: A maintainer can comment `/review` to retry.\n\n<!-- review-unavailable: v1 <sha0> blocked -->\n\n"
 }
