@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import absence, adjudication, dedup, protocol, providers, redaction_check, selection, status_text, unavailable
+from . import adjudication, dedup, protocol, providers, redaction_check, selection, status_text, unavailable
 from .policy import SEVERITIES
 from .retry import (
     ALL_ABSENT,
@@ -428,24 +428,27 @@ def decision_description(
     return status_text.refused_decision(protocol.LABELS[decision], strikes, strike_limit, tail, limit)
 
 
-def _unavailable_cause(attempts: Sequence[Attempt], plan: Mapping[str, Any]) -> str:
+def _unavailable_cause(attempts: Sequence[Attempt], plan: Mapping[str, Any]) -> unavailable.Cause | None:
     absent = [
         attempt for attempt in sorted(attempts, key=lambda item: item.slot) if attempt.outcome == selection.ABSENT
     ]
     if absent:
-        return absent[-1].absence
-    return absence.QUOTA if plan.get("pool_blocked_until") else ""
+        return unavailable.attempt_cause(absent[-1])
+    return unavailable.QUOTA if plan.get("pool_blocked_until") else None
 
 
-ABSENCE_CAUSES = {
-    absence.QUOTA: "provider quota",
-    absence.AUTH: "provider authentication",
-    absence.TIMEOUT: "reviewer timed out",
-    absence.INVALID: "reviewer returned no usable result",
-    absence.EMPTY: "reviewer returned no usable result",
-    absence.ERROR: "provider error",
-    absence.CONTEXT_OVERFLOW: "change exceeds the model context",
+SHORT_CAUSES = {
+    unavailable.QUOTA.key: "provider quota",
+    unavailable.PROVIDER_AUTH.key: "provider authentication",
+    unavailable.TIMEOUT.key: "reviewer timed out",
+    unavailable.INVALID.key: "reviewer returned no usable result",
+    unavailable.EMPTY.key: "reviewer returned no usable result",
+    unavailable.PROVIDER_ERROR.key: "provider error",
+    unavailable.RUN_FAILED.key: "reviewer failed to run",
+    unavailable.TOO_LARGE.key: "change exceeds the model context",
+    unavailable.INCOMPLETE.key: "reviewer did not read every changed hunk",
 }
+DEFAULT_SHORT_CAUSE = "no reviewer could run"
 
 
 GATEWAY_SHORT = {
@@ -469,11 +472,11 @@ def _pending_description(
             return status_text.GATEWAY_DOWN
         return status_text.unavailable(GATEWAY_SHORT[gateway.key])
     kind = _unavailable_cause(attempts, plan)
-    if kind == absence.INCOMPLETE:
+    if kind is unavailable.INCOMPLETE:
         return status_text.incomplete_read(len(attempts))
-    if cause == UNAVAILABLE and not kind:
+    if cause == UNAVAILABLE and kind is None:
         return status_text.unavailable("provider outage" if degraded else "no served model can hold this change")
-    return status_text.unavailable(ABSENCE_CAUSES.get(kind, "no reviewer could run"))
+    return status_text.unavailable(SHORT_CAUSES.get(kind.key, DEFAULT_SHORT_CAUSE) if kind else DEFAULT_SHORT_CAUSE)
 
 
 def _detail(step: Step, cause: str, gone: str) -> str:

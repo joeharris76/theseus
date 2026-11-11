@@ -105,14 +105,15 @@ def test_an_unknown_or_empty_served_set_fails_closed_as_unavailable_without_spen
 
     status = _status(harness, head)
     assert status["state"] == "pending"
-    assert status["description"].startswith(
-        (
-            status_text.GATEWAY_DOWN,
-            status_text.unavailable("provider outage"),
-            status_text.unavailable("model gateway rejected the client token"),
-            status_text.unavailable("model gateway unusable or misconfigured"),
-        )
-    )
+    expected = {
+        "down": status_text.unavailable("model gateway unusable or misconfigured"),
+        "rejected": status_text.unavailable("model gateway rejected the client token"),
+        "malformed": status_text.unavailable("model gateway unusable or misconfigured"),
+    }
+    if mode == "serve-none":
+        assert status["description"].startswith(status_text.unavailable("provider outage"))
+    else:
+        assert status["description"] == expected[mode]
     assert harness.omp_calls() == 0 and run.attempts() == []
     state = harness.github.artifact_json("review-verdict-state-303", "state.json")
     assert state["pending_cause"] == "unavailable" and state["retries"] == []

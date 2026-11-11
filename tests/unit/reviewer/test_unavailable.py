@@ -367,3 +367,22 @@ def test_no_provider_name_is_printed_when_the_plan_routes_none() -> None:
     item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, "anthropic")
     assert "anthropic" not in unavailable.lines([item], Step(selection.PENDING), {})[0]
     assert "anthropic" not in unavailable.excluded_line(item, {})
+
+
+def test_every_cause_has_a_short_status_text_or_uses_the_default() -> None:
+    reachable = {*(cause.key for cause in unavailable.ABSENCE_CAUSES.values()), unavailable.RUN_FAILED.key}
+    assert reachable <= set(report.SHORT_CAUSES)
+    assert unavailable.TOO_LARGE.key in report.SHORT_CAUSES
+    assert all(len(text) < 60 for text in report.SHORT_CAUSES.values())
+    assert report.DEFAULT_SHORT_CAUSE not in report.SHORT_CAUSES.values()
+
+
+def test_an_error_without_a_provider_is_a_failed_run_in_the_status_and_the_body(policy: Policy) -> None:
+    step = Step(selection.PENDING, None, ())
+    attempts = [_absent(1, "small", absence.ERROR, "spawn failed")]
+    final = report.finalize(_comment_plan(policy), step, [], attempts, {}, {})
+    assert final.description == status_text.unavailable("reviewer failed to run")
+    assert unavailable.RUN_FAILED.reason in final.body
+    named = [_absent(1, "small", absence.ERROR, "503", provider="anthropic")]
+    final = report.finalize(_comment_plan(policy), step, [], named, {}, {})
+    assert final.description == status_text.unavailable("provider error")
