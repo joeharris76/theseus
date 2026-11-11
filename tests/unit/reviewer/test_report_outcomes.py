@@ -860,3 +860,12 @@ def test_one_unmarked_thread_covers_only_one_of_a_new_and_a_carried_defect(polic
     assert final.review is not None
     placed = [comment["line"] for comment in final.review["comments"]]
     assert placed == [2]
+
+
+def test_a_new_finding_at_an_unthreaded_carried_location_takes_no_thread_room(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    plan["threaded"] = []
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Old"): 1}
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert final.review is not None
+    assert [comment["line"] for comment in final.review["comments"]] == []

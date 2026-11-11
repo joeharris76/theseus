@@ -594,11 +594,9 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
-    threaded_ids = frozenset(plan.get("threaded") or ())
     carried_at = {
         (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
         for entry in (judgement.carried if judgement is not None else ())
-        if f"c{cycle}-{entry['id']}" in threaded_ids
     }
     open_counts = plan.get("open_counts")
     room = {key: int(count) for key, count in open_counts.items()} if open_counts is not None else None
