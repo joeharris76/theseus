@@ -306,7 +306,10 @@ def test_hostile_text_in_every_other_body_stays_inert(policy: Policy) -> None:
         ("2) [ ] a", "2) `[ ]` a"),
         ("> - [ ] a", "> - `[ ]` a"),
         ("  - [ ] a", "  - `[ ]` a"),
-        ("[ ] a", "[ ] a"),
+        ("[ ] a", "`[ ]` a"),
+        ("- - [ ] x", "- - `[ ]` x"),
+        ("* 1. [x] y", "* 1. `[x]` y"),
+        ("a [X] b", "a `[X]` b"),
     ],
 )
 def test_neutralize_turns_task_list_items_into_code(raw: str, kept: str) -> None:
@@ -617,3 +620,44 @@ def test_fenced_code_with_tags_stays_unchanged_and_a_leading_fence_is_still_code
     code = 'intro\n```html\n<div>\n  <a href="/x">x</a>\n</div>\n- [ ] not a task\n```\nafter <b>'
     out = layout.neutralize(code)
     assert out == code.replace("after <b>", "after &lt;b>")
+
+
+def test_a_tab_indented_fence_line_does_not_close_a_fence() -> None:
+    out = layout.neutralize("```\nx\n\t```\n- [ ] still code")
+    assert out == "```\nx\n\t```\n- [ ] still code\n```"
+    assert layout.neutralize("```\nx\n   ```\ny") == "```\nx\n   ```\ny"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "~~~ x",
+        "``` y",
+        "</details> <summary>z",
+        "[ ] tick",
+        "# heading",
+        "> quote",
+        "=== x",
+        "- item",
+        "1. n",
+        "a\n```\nb",
+    ],
+)
+def test_inline_model_text_in_a_finding_line_is_inert(title: str) -> None:
+    line = layout.finding_line("High", "D1", title, layout.shown_path("a.py"))
+    assert "\n" not in line and line.count("<code>") == 1
+    assert "~~~" not in line.replace("\\~~~", "") and "```" not in line.replace("\\```", "")
+    assert "<details" not in line.lower() and "</details" not in line.lower() and "<summary" not in line.lower()
+    assert "[ ]" not in line.replace("`[ ]`", "")
+    shown = layout.neutralize_inline(title)
+    assert not re.match(r"^(?:[#>=+*-]|`{3,}|~{3,}|\d+[.)])", shown)
+    assert layout.neutralize_inline("~~~ x") == "\\~~~ x"
+
+
+def test_dispute_evidence_and_owner_reasons_are_inert_inline(policy: Policy) -> None:
+    ruling = {"action": "MAINTAIN", "id": "D4", "reason": "~~~ x\n- [ ] tick </details>"}
+    plan = {**_carry_plan(policy, _previous(), findings_delivery="review"), "adjudication": ruling}
+    body = report.adjudicated(plan).review["body"]
+    line = next(line for line in body.splitlines() if line.startswith("**Owner ruling:**"))
+    assert "\\~~~" in line and "`[ ]`" in line and "&lt;/details>" in line
+    assert body.count("~~~") == 1

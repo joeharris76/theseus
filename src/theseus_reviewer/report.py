@@ -144,7 +144,7 @@ def _bullet(finding: Finding, cap: int) -> list[str]:
     )
     if not finding.detail:
         return [head]
-    return [head, "  " + layout.neutralize(_cut(finding.detail, cap)).replace("\n", "\n  ")]
+    return [head, "  " + layout.neutralize_inline(_cut(finding.detail, cap))]
 
 
 def _add(lines: list[str], block: list[str]) -> None:
@@ -684,7 +684,9 @@ def _dispositions(plan: Mapping[str, Any], verdict: Verdict | None, evidence_cap
         if entry is None:
             lines.append(f"- {dispute['id']}: no disposition recorded")
         else:
-            shown = layout.neutralize(entry.evidence if evidence_cap is None else _cut(entry.evidence, evidence_cap))
+            shown = layout.neutralize_inline(
+                entry.evidence if evidence_cap is None else _cut(entry.evidence, evidence_cap)
+            )
             suffix = f": {shown}" if shown else ""
             lines.append(f"- {dispute['id']} ({disposition_label(effective_status(plan, entry))}){suffix}")
     return _section("Dispute dispositions", lines)
@@ -1111,7 +1113,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         if action == adjudication.WITHDRAW
         else "The finding stands and its dispute is closed; push a fix to clear it."
     )
-    reason = layout.neutralize(sanitize(ruling["reason"], adjudication.REASON_LIMIT))
+    reason = layout.neutralize_inline(sanitize(ruling["reason"], adjudication.REASON_LIMIT))
     lines = [
         *_head(plan, label, _carried_head(label, decision, len(open_defects), f"owner ruling: {action} {defect_id}")),
         f"**Owner ruling:** {action} {defect_id} - {reason}",

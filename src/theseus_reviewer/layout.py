@@ -32,14 +32,17 @@ THREAD_FOOTER = "<sub>Blocks merge · to contest, reply starting <code>Dispute:<
 
 _SEVERITY_RANK = {name: index for index, name in enumerate((*SEVERITIES, ADVISORY))}
 _RAW_TAG = re.compile(r"<(?=/?\s*(?:details|summary)\b)", re.IGNORECASE)
-_TASK_ITEM = re.compile(r"^([ \t]*(?:>[ \t]*)*(?:[-*+]|\d+[.)])[ \t]+)\[([ xX])\]", re.MULTILINE)
+# A backslash does not stop GitHub rendering "[ ]" as a checkbox (checked against its markdown API), a code span does.
+_TASK_MARK = re.compile(r"\[([ xX])\]")
+_BLOCK_START = re.compile(r"^(?:[#>=+*-]|`{3,}|~{3,}|\d+[.)])")
+_FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 _HEADING = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
 _UNDERLINE = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})([=-])(?=[=-]*[ \t]*$)")
 _BREAKS = re.compile(r"[\r\n\t]+")
 # Only a fence at column 0 opens code. An indented or prefixed fence may sit in a list item or quote, where GFM
 # judges it by container rules, so it is treated as prose and everything after it is escaped too.
 _FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})(.*)$")
-_FENCE_CLOSE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
@@ -68,7 +71,7 @@ def _prose(chunk: str) -> str:
             rows[index] = f"{found.group(1)}\\{rows[index][found.end(1) :]}"
     chunk = "\n".join(rows)
     chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
-    chunk = _TASK_ITEM.sub(lambda match: f"{match.group(1)}`[{match.group(2)}]`", chunk)
+    chunk = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 
 
@@ -110,6 +113,18 @@ def neutralize(text: str) -> str:
     list checkbox (ticking one would edit the review, and an edited review holds the pull request).
     """
     return _outside_code(_RAW_TAG.sub("&lt;", display_path(text)))
+
+
+def neutralize_inline(text: str) -> str:
+    """Make model text inert where it follows other text on the same line (a list item, a label).
+
+    No fence scanning is possible there, so the text is flattened to one line, `<` and task markers are escaped,
+    and anything that could start a block or a fence is escaped.
+    """
+    flat = " ".join(display_path(text).split())
+    flat = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", flat.replace("<", "&lt;"))
+    flat = _FENCE_RUN.sub(lambda match: f"\\{match.group(0)}", flat)
+    return f"\\{flat}" if _BLOCK_START.match(flat) else flat
 
 
 def plain_path(path: str) -> str:
@@ -176,4 +191,4 @@ def finding_line(
 ) -> str:
     named = f" · {defect_id}" if defect_id else ""
     shown = " ".join(title.split()) if full else short_title(title)
-    return f"- {severity_label(severity)}{named} · {neutralize(shown)} · <code>{where}</code>{note}"
+    return f"- {severity_label(severity)}{named} · {neutralize_inline(shown)} · <code>{where}</code>{note}"
