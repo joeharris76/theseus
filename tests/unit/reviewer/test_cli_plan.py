@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from theseus_reviewer import cli, coverage, gitdiff, github, protocol, render, sweep
+from theseus_reviewer import cli, coverage, gitdiff, github, protocol, render, status_text, sweep
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint
@@ -865,7 +865,7 @@ def test_an_isolation_scan_or_redaction_failure_is_surfaced_by_the_sweep(
     assert _surfaced_sweep(monkeypatch, tmp_path, fake) == 0
     assert fake.dispatched == []
     assert len(fake.posted) == 1
-    assert step in fake.posted[0][1]["description"]
+    assert fake.posted[0][1]["description"] == status_text.sweep_failure([step])
 
 
 def test_a_second_failure_with_no_step_listed_still_posts_a_status(
@@ -1123,9 +1123,9 @@ def _parsed(*runs: dict[str, Any]) -> tuple[sweep.Run, ...]:
 
 
 def test_the_surfaced_description_keeps_the_shared_prefix_intact() -> None:
-    assert len(github.SWEEP_FAILURE_SURFACE_PREFIX) < sweep.STATUS_DESCRIPTION_LIMIT
-    assert sweep.surface_description([]).startswith(github.SWEEP_FAILURE_SURFACE_PREFIX)
-    assert sweep.surface_description(["x" * 500]).startswith(github.SWEEP_FAILURE_SURFACE_PREFIX)
+    assert len(status_text.SWEEP_FAILURE_SURFACE_PREFIX) < status_text.DESCRIPTION_LIMIT
+    assert sweep.surface_description([]).startswith(status_text.SWEEP_FAILURE_SURFACE_PREFIX)
+    assert sweep.surface_description(["x" * 500]).startswith(status_text.SWEEP_FAILURE_SURFACE_PREFIX)
 
 
 def test_reset_spent_checks_attempt_evidence_only_for_later_matching_started_runs() -> None:
@@ -2294,7 +2294,7 @@ def test_a_degraded_sweep_does_not_redispatch_an_already_surfaced_failure(
         {
             "context": "review-verdict",
             "state": "pending",
-            "description": f"{github.SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun",
+            "description": f"{status_text.SWEEP_FAILURE_SURFACE_PREFIX}Run the attempt loop. Rerun",
             "creator": {"login": "benchbox-review[bot]", "type": "Bot"},
             "created_at": datetime.now(UTC).isoformat(),
         }

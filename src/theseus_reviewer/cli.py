@@ -48,6 +48,7 @@ from . import (
     retry,
     runner,
     selection,
+    status_text,
     sweep,
 )
 from . import (
@@ -612,7 +613,7 @@ def _plan_repost(
     plan["run_uuid"] = previous["run_uuid"]
     plan["repost"] = {
         "state": status["state"],
-        "description": edits.strip_run_suffix(status.get("description")).removesuffix(report.REPOSTED_MARK),
+        "description": status_text.strip_run_suffix(status.get("description")).removesuffix(status_text.REPOSTED_MARK),
         "label": protocol.LABELS[previous["decision"]],
     }
     plan.update({"decision": REPOST, "decision_reason": step.reason, "reviewed_head": previous["head_sha"]})
@@ -697,7 +698,7 @@ def _initial_scope_stop(
     plan["scope_reasons"] = list(scope.reasons)
     if not scope.soundness:
         plan["decision"] = SUCCESS
-        plan["decision_reason"] = "only exempt paths changed"
+        plan["decision_reason"] = status_text.EXEMPT_SUCCESS_DESCRIPTION
         return None, True
     if str((pull["head"].get("repo") or {}).get("full_name") or "").casefold() != repo.casefold():
         plan["decision"] = FORK
@@ -1898,11 +1899,11 @@ def command_finalize(args: argparse.Namespace) -> int:
         raise SystemExit("review-verdict: the plan belongs to another run")
     now = getattr(args, "now", None) or _now()
     if plan["decision"] == SUCCESS:
-        final = report.fixed(retry.SUCCESS, "only exempt paths changed")
+        final = report.fixed(retry.SUCCESS, status_text.EXEMPT_SUCCESS_DESCRIPTION)
     elif plan["decision"] == FORK:
-        final = report.fixed(retry.PENDING, "fork: owner review")
+        final = report.fixed(retry.PENDING, status_text.FORK)
     elif plan["decision"] == HOLD:
-        final = report.fixed(retry.PENDING, plan["decision_reason"])
+        final = report.fixed(retry.PENDING, status_text.not_reviewed_reason(plan["decision_reason"]))
     elif plan["decision"] == REVIEW and getattr(args, "omp_install", OMP_INSTALLED) == OMP_INSTALL_FAILED:
         previous = retry.State.from_json(plan["previous_state"]) if plan.get("previous_state") else None
         final = report.omp_install_failed()
@@ -2289,7 +2290,7 @@ def _already_surfaced(
         return False
     newest = max(mine, key=lambda status: status.get("updated_at") or status.get("created_at") or "")
     return newest.get("state") == "pending" and str(newest.get("description") or "").startswith(
-        github.SWEEP_FAILURE_SURFACE_PREFIX
+        status_text.SWEEP_FAILURE_SURFACE_PREFIX
     )
 
 

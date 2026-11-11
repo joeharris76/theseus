@@ -104,6 +104,8 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
 
+Status descriptions are at most 140 characters, lead with the decision or state and name no tier. Programs that read them match only these tokens, defined once in `theseus_reviewer.status_text`: a trailing ` [run <id>]`, ` (reposted)` before it, `SHIP WITH FIXES`, `escalated D1,D2`, `only exempt paths changed`, the prefixes `refused after`, `a review was edited` and `review-verdict failed twice without a result at: `, ` · degraded: <providers>`, and for a `review-gate` that is waiting, the prefix `Waiting for review-verdict` (the head appears only inside the quoted stand-in line `Stand-in review: APPROVE <40-hex sha>`). Anything else is prose, and a reader that cannot classify a description treats it as not passing.
+
 `theseus gate` exits with:
 
 | Exit | Meaning | `gate / gate` job |

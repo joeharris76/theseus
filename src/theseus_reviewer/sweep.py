@@ -6,7 +6,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from .github import RUN_TITLE_PULL, SWEEP_FAILURE_SURFACE_PREFIX
+from . import status_text
+from .github import RUN_TITLE_PULL
 
 COMPLETED = "completed"
 FAILED = frozenset({"failure", "timed_out"})
@@ -17,7 +18,6 @@ DISPATCH_GRACE = timedelta(minutes=2)
 DISPATCH_WINDOW = timedelta(hours=24)
 DISPATCH_EVENT = "workflow_dispatch"
 STATELESS_RETRY_REASON = "stateless-retry"
-STATUS_DESCRIPTION_LIMIT = 140
 
 
 @dataclass(frozen=True)
@@ -107,11 +107,7 @@ def recent_dispatches(runs: Iterable[Run], now: datetime) -> int:
 
 
 def surface_description(steps: Iterable[str]) -> str:
-    named = "; ".join(steps) if steps else "an earlier step"
-    description = f"{SWEEP_FAILURE_SURFACE_PREFIX}{named}. Rerun with /review or push a fix"
-    if len(description) > STATUS_DESCRIPTION_LIMIT:
-        description = description[: STATUS_DESCRIPTION_LIMIT - 1] + "…"
-    return description
+    return status_text.sweep_failure(steps)
 
 
 def reset_spent(

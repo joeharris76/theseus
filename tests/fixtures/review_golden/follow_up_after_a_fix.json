@@ -59,7 +59,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "medium: SHIP [run <run>]",
+      "description": "SHIP · D1 fixed · no open findings [run <run>]",
       "state": "success",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -414,14 +414,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "medium: SHIP [run <run>]",
+        "description": "SHIP · D1 fixed · no open findings [run <run>]",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "review: pass (review verdict for <sha0>)",
+        "description": "Pass · review-verdict: SHIP",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -462,5 +462,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #51: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nreview-verdict #51 <sha0>: success: medium: SHIP\n"
+  "summary": "review-verdict plan for #51: review (the patch changed after SHIP WITH FIXES; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nreview-verdict #51 <sha0>: success: SHIP · D1 fixed · no open findings\n"
 }
