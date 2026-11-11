@@ -85,13 +85,50 @@ def _standin(text: str) -> dict[str, Any]:
     return {"login": OWNER, "user_type": "User", "body": text, "created_at": LATER, "updated_at": LATER}
 
 
-def test_the_protocol_marker_uses_the_review_name_and_the_retired_name_is_not_read() -> None:
+def test_the_protocol_marker_is_written_with_the_review_name_and_read_under_the_retired_name() -> None:
     marker = protocol.encode_marker(_record())
     assert marker.startswith("<!-- review-protocol: v1 ")
     retired = marker.replace("review-protocol", "oracle-protocol")
     assert protocol.decode_marker(f"### verdict\n\n{marker}") is not None
-    assert protocol.decode_marker(f"### verdict\n\n{retired}") is None
-    assert protocol.marker_payload(retired) is None
+    assert protocol.decode_marker(f"### verdict\n\n{retired}") == protocol.decode_marker(marker)
+    assert protocol.marker_payload(retired) is not None
+
+
+def test_a_retired_name_record_keeps_its_open_defects_and_strikes() -> None:
+    defect = {"id": "D1", "severity": "High", "file": "a.py", "line": 3, "end_line": None, "title": "t"}
+    record = {
+        **_record(),
+        "decision": protocol.DO_NOT_SHIP,
+        "strikes_after": 1,
+        "open_defects": [defect],
+        "next_id": 2,
+    }
+    body = "### review-verdict: failure for `" + HEAD + "`\n\n" + protocol.encode_marker(record)
+    retired = body.replace("review-protocol", "oracle-protocol")
+    review = {
+        "id": 1,
+        "login": BOT,
+        "user_type": "Bot",
+        "body": retired,
+        "submitted_at": "2026-10-01T10:00:00Z",
+        "last_edited_at": None,
+        "includes_created_edit": False,
+    }
+    found = protocol.history([review], BOT.removesuffix("[bot]"))
+    assert found.error is None
+    assert [item["open_defects"] for item in found.records] == [[defect]]
+    assert protocol.strikes(found.records) == 1
+    assert "oracle" not in protocol.encode_marker(found.records[0]).lower()
+
+
+def test_a_retired_name_record_that_is_not_the_last_bytes_or_is_repeated_fails_closed() -> None:
+    marker = protocol.encode_marker(_record()).replace("review-protocol", "oracle-protocol")
+    with pytest.raises(protocol.MarkerError):
+        protocol.decode_marker(f"{marker}\ntrailing text")
+    with pytest.raises(protocol.MarkerError):
+        protocol.decode_marker(f"{marker}\n{protocol.encode_marker(_record())}")
+    with pytest.raises(protocol.MarkerError):
+        protocol.decode_marker(f"{marker}\n{marker}")
 
 
 def test_a_coverage_record_keeps_its_coverage() -> None:
@@ -100,15 +137,15 @@ def test_a_coverage_record_keeps_its_coverage() -> None:
     assert decoded is not None and decoded["coverage"] == 2
 
 
-def test_defect_thread_markers_use_the_review_name_only() -> None:
+def test_defect_thread_markers_are_read_under_both_names() -> None:
     assert protocol.thread_finding("<!-- review-defect: c2-D3 -->") == (2, "D3")
-    assert protocol.thread_finding("body\n<!-- oracle-defect: c4-D12 -->") is None
-    assert protocol.thread_finding_id("<!--oracle-defect:c1-D1-->") is None
+    assert protocol.thread_finding("body\n<!-- oracle-defect: c4-D12 -->") == (4, "D12")
+    assert protocol.thread_finding_id("<!--oracle-defect:c1-D1-->") == "D1"
     text = "**High**: x\n<!-- oracle-defect: c1-D1 -->\n<!-- review-defect: c1-D1 -->\nkept"
-    assert protocol.strip_marker_lines(text) == "**High**: x\n<!-- oracle-defect: c1-D1 -->\nkept"
+    assert protocol.strip_marker_lines(text) == "**High**: x\nkept"
 
 
-def test_the_finding_fingerprint_marker_uses_the_review_name_only() -> None:
+def test_the_finding_fingerprint_marker_is_written_as_review_and_read_under_both_names() -> None:
     from theseus_reviewer.verdict import Finding
 
     written = dedup.marker(Finding("High", "src/a.py", 3, "Title", "detail"))
@@ -116,15 +153,15 @@ def test_the_finding_fingerprint_marker_uses_the_review_name_only() -> None:
     retired = written.replace("review-finding", "oracle-finding")
     fingerprint = written.split(": ", 1)[1].split(" ", 1)[0]
     assert dedup.thread_fingerprint(None, written) == fingerprint
-    assert dedup.thread_fingerprint(None, retired) is None
+    assert dedup.thread_fingerprint(None, retired) == fingerprint
 
 
-def test_the_local_record_marker_uses_the_review_name_only() -> None:
+def test_the_local_record_marker_is_written_as_review_and_read_under_both_names() -> None:
     encoded = findings._encode({"v": findings.RECORD_VERSION, "findings": []})
     assert encoded.startswith("<!-- review-local-record: ")
     retired = encoded.replace("review-local-record", "oracle-local-record")
     assert findings.decode_body(encoded) is not None
-    assert findings.decode_body(retired) is None
+    assert findings.decode_body(retired) == findings.decode_body(encoded)
 
 
 def test_adjudication_comments_use_the_review_prefix_only() -> None:
@@ -150,13 +187,23 @@ def _reset_comments(prefix: str) -> list[dict[str, Any]]:
     ]
 
 
-def test_backoff_resets_use_the_review_prefix_only() -> None:
+def test_backoff_resets_are_written_with_the_review_prefix_and_read_under_both() -> None:
     assert reset.reset_body(HEAD, "why").startswith("Review backoff reset: ")
     attesters = frozenset({OWNER})
     assert reset.reset_moment(_reset_comments(reset.RESET_PREFIX), HEAD, attesters) == datetime(
         2026, 10, 1, 11, tzinfo=UTC
     )
-    assert reset.reset_moment(_reset_comments("Oracle backoff reset: "), HEAD, attesters) is None
+    assert reset.reset_moment(_reset_comments("Oracle backoff reset: "), HEAD, attesters) == datetime(
+        2026, 10, 1, 11, tzinfo=UTC
+    )
+
+
+def test_a_retired_name_backoff_reset_from_a_non_attester_is_rejected() -> None:
+    comments = _reset_comments("Oracle backoff reset: ")
+    comments[1]["user"] = {"login": "someone-else", "type": "User"}
+    assert reset.reset_moment(comments, HEAD, frozenset({OWNER})) is None
+    comments[1]["user"] = {"login": OWNER, "type": "Bot"}
+    assert reset.reset_moment(comments, HEAD, frozenset({OWNER})) is None
 
 
 def test_the_gate_reads_only_the_review_verdict_status_context() -> None:

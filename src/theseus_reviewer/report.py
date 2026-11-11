@@ -92,6 +92,7 @@ def _threads_to_open(
     commentable: Mapping[str, frozenset[int]],
     delivery: str,
     cycle: int,
+    shared_room: dict[str, int] | None = None,
 ) -> tuple[list[tuple[Finding, str]], list[str]]:
     """Open findings carried from earlier rounds that have no thread: thread the anchorable ones."""
     if judgement is None or judgement.decision != protocol.SHIP_WITH_FIXES:
@@ -106,6 +107,17 @@ def _threads_to_open(
     unanchored: list[str] = []
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
+    prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
+    counts = plan.get("open_counts")
+    room = (
+        shared_room
+        if shared_room is not None
+        else {key: int(count) for key, count in (counts if counts is not None else dict.fromkeys(known, 1)).items()}
+    )
+    if counts is None and shared_room is None:
+        for entry in judgement.carried:
+            if f"c{cycle}-{entry['id']}" in threaded:
+                room[prints[entry["id"]]] = room.get(prints[entry["id"]], 0) - 1
     for entry in judgement.carried:
         if f"c{cycle}-{entry['id']}" in threaded:
             continue
@@ -127,8 +139,11 @@ def _threads_to_open(
             else "",
             end if isinstance(end, int) and end > line else None,
         )
-        if dedup.fingerprint(finding.file, finding.title) not in known:
-            opened.append((finding, entry["id"]))
+        key = prints[entry["id"]]
+        if key in known and room.get(key, 0) > 0:
+            room[key] -= 1
+            continue
+        opened.append((finding, entry["id"]))
     return opened, unanchored
 
 
@@ -579,15 +594,24 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()))
+    delivery = plan.get("findings_delivery", "comment")
+    threaded_ids = plan.get("threaded")
+    widen = delivery == "review" and threaded_ids is not None
+    carried_at = {
+        (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
+        for entry in (judgement.carried if judgement is not None else ())
+        if widen or (threaded_ids is not None and f"c{cycle}-{entry['id']}" in threaded_ids)
+    }
+    open_counts = plan.get("open_counts")
+    room = {key: int(count) for key, count in open_counts.items()} if open_counts is not None else None
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), room, carried_at)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
         if judgement is not None
         else {}
     )
-    delivery = plan.get("findings_delivery", "comment")
-    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle)
+    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (
         protocol.escalated_ids(rules.get("maintained") or {}, judgement.carried, disputed)
