@@ -10,7 +10,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 from urllib.parse import quote
 
@@ -547,6 +547,93 @@ def post_file(path: str, payload: Path, token: str) -> None:
     )
     if result.returncode != 0:
         raise GitHubError(f"could not post to {path}: {result.stderr.strip()[:500]}")
+
+
+MINIMIZE_MUTATION = """
+mutation($id: ID!) {
+  minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+    minimizedComment { isMinimized minimizedReason }
+  }
+}
+"""
+MINIMIZED_QUERY = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequestReview {
+      id
+      isMinimized
+    }
+  }
+}
+"""
+
+
+MINIMIZE_CALL_SECONDS = 20
+MINIMIZE_TOTAL_SECONDS = 60
+
+
+def run_gh(argv: Sequence[str], *, token: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Run one ``gh`` command as the App, bounded in time. The seam the minimise requests are faked through."""
+    try:
+        return subprocess.run(
+            list(argv), capture_output=True, text=True, check=False, env=_token_env(token), timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(f"{' '.join(argv[:3])} timed out after {timeout} seconds") from exc
+
+
+def pull_head_sha(repo: str, pr: int, token: str) -> str:
+    result = run_gh(
+        ["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.sha"], token=token, timeout=MINIMIZE_CALL_SECONDS
+    )
+    sha = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+        raise GitHubError(f"could not read the head of #{pr}: {result.stderr.strip()[:500]}")
+    return sha
+
+
+def _graphql_as(token: str, query: str, variables: Sequence[tuple[str, str]]) -> Any:
+    argv = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for name, value in variables:
+        argv += ["-f", f"{name}={value}"]
+    result = run_gh(argv, token=token, timeout=MINIMIZE_CALL_SECONDS)
+    if result.returncode != 0:
+        raise GitHubError(f"GitHub GraphQL request failed: {(result.stderr.strip() or result.stdout.strip())[:500]}")
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError as exc:
+        raise GitHubError(f"GitHub GraphQL returned a malformed response: {exc}") from exc
+    if not isinstance(payload, Mapping) or payload.get("errors") or not isinstance(payload.get("data"), Mapping):
+        raise GitHubError(
+            f"GitHub GraphQL returned errors: {payload.get('errors') if isinstance(payload, Mapping) else payload}"
+        )
+    return payload["data"]
+
+
+def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
+    """Minimise reviews as outdated, skipping any already minimised; return one message per failure."""
+    ids = list(dict.fromkeys(node_ids))
+    if not ids:
+        return []
+    deadline = monotonic() + MINIMIZE_TOTAL_SECONDS
+    already: set[str] = set()
+    for batch in edits.batches(ids):
+        nodes = _graphql_as(token, MINIMIZED_QUERY, [("ids[]", node_id) for node_id in batch]).get("nodes")
+        for node in nodes if isinstance(nodes, list) else ():
+            if isinstance(node, Mapping) and node.get("isMinimized") is True:
+                already.add(str(node.get("id")))
+    failures: list[str] = []
+    for node_id in ids:
+        if node_id in already:
+            continue
+        if monotonic() > deadline:
+            failures.append(f"{node_id}: skipped, the {MINIMIZE_TOTAL_SECONDS}-second limit was reached")
+            continue
+        try:
+            _graphql_as(token, MINIMIZE_MUTATION, [("id", node_id)])
+        except GitHubError as exc:
+            failures.append(f"{node_id}: {exc}")
+    return failures
 
 
 def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:
