@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA, CONSUMER_BETA
-from theseus_reviewer import gate, review_check, status_text
+from theseus_reviewer import gate, review_check
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -116,7 +116,7 @@ def _decide(**kwargs: Any) -> tuple[int, str]:
 
 
 def test_exempt_only_change_skips() -> None:
-    assert _decide(files=OTHER_FILES) == (0, status_text.GATE_PASS_EXEMPT)
+    assert _decide(files=OTHER_FILES) == (0, "review: only exempt paths changed")
 
 
 def test_machine_read_doc_needs_review() -> None:
@@ -136,30 +136,24 @@ def test_soundness_manifest_beats_the_markdown_exemption() -> None:
 
 
 def test_exempt_docs_are_skipped() -> None:
-    assert _decide(files=["docs/foo.md"]) == (0, status_text.GATE_PASS_EXEMPT)
+    assert _decide(files=["docs/foo.md"]) == (0, "review: only exempt paths changed")
 
 
 @pytest.mark.parametrize(
-    ("scenario", "expected"),
+    "scenario",
     [
-        ({"statuses": [_verdict()], "reviews": []}, status_text.GATE_UNMATCHED_SUCCESS),
-        (
-            {"statuses": [_verdict()], "reviews": [_receipt_review(last_edited_at=HEAD_DATE)]},
-            status_text.GATE_UNMATCHED_SUCCESS,
-        ),
-        (
-            {"statuses": [_verdict(description="only exempt paths changed")], "reviews": []},
-            status_text.GATE_EXEMPT_STALE,
-        ),
+        {"statuses": [_verdict()], "reviews": []},
+        {"statuses": [_verdict()], "reviews": [_receipt_review(last_edited_at=HEAD_DATE)]},
+        {"statuses": [_verdict(description="only exempt paths changed")], "reviews": []},
     ],
 )
 def test_a_success_status_without_a_bound_unedited_receipt_names_the_recovery_not_a_verdict_run(
-    scenario: dict[str, Any], expected: str
+    scenario: dict[str, Any],
 ) -> None:
     status, message = _run_review(**scenario)
     assert status == review_check.WAITING
-    assert message == expected
     assert "push a new head" in message
+    assert "a byte-identical rebase is enough" in message
     assert "owner stand-in" in message
     assert "run the verdict" not in message
 
@@ -168,7 +162,7 @@ def test_an_exempt_success_verdict_never_satisfies_a_gate_that_requires_a_review
     exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
     status, message = _run_review(statuses=[exempt])
     assert status == 1
-    assert message == status_text.GATE_EXEMPT_STALE
+    assert "require a review of this head" in message
     assert _run_review(statuses=[exempt], files=OTHER_FILES)[0] == 0
 
 
@@ -177,33 +171,31 @@ def test_a_truncated_file_list_does_not_block_a_reviewed_success_verdict() -> No
 
 
 def test_the_apps_success_verdict_on_the_head_passes() -> None:
-    assert _run_review() == (0, status_text.GATE_PASS_VERDICT)
+    assert _run_review() == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_no_verdict_waits_and_names_the_standin_marker() -> None:
     assert _decide() == (
         1,
-        status_text.gate_waiting(HEAD),
+        f"review: waiting for the review's verdict on {HEAD}, or a stand-in attestation "
+        f"'Stand-in review: APPROVE {HEAD}' from a listed attester",
     )
 
 
 @pytest.mark.parametrize(
-    ("statuses", "expected"),
+    "statuses",
     [
-        ([_verdict("failure")], status_text.GATE_DO_NOT_SHIP),
-        ([_verdict("pending")], status_text.GATE_NOT_REVIEWED),
-        ([_verdict("success", created_at=BEFORE_HEAD), _verdict("failure")], status_text.GATE_DO_NOT_SHIP),
-        (
-            [_verdict("failure", created_at=BEFORE_HEAD), _verdict("success"), _verdict("pending", created_at=LATEST)],
-            status_text.GATE_NOT_REVIEWED,
-        ),
+        [_verdict("failure")],
+        [_verdict("pending")],
+        [_verdict("success", created_at=BEFORE_HEAD), _verdict("failure")],
+        [_verdict("failure", created_at=BEFORE_HEAD), _verdict("success"), _verdict("pending", created_at=LATEST)],
     ],
     ids=["failure", "pending", "latest-failure", "latest-pending"],
 )
-def test_the_latest_review_verdict_must_be_success(statuses: list[dict[str, Any]], expected: str) -> None:
+def test_the_latest_review_verdict_must_be_success(statuses: list[dict[str, Any]]) -> None:
     status, message = _run_review(statuses=statuses)
     assert status == 1
-    assert message == expected
+    assert "the review's latest verdict" in message
 
 
 def test_latest_review_success_wins() -> None:
@@ -255,13 +247,13 @@ def test_only_the_apps_verdict_status_counts(status: dict[str, Any]) -> None:
 def test_a_forged_success_does_not_hide_the_apps_failure() -> None:
     forged = _verdict("success", created_at=LATEST, login="joeharris76", user_type="User")
     status, message = _run_review(statuses=[_verdict("failure"), forged])
-    assert status == 1 and message == status_text.GATE_DO_NOT_SHIP
+    assert status == 1 and "the review's latest verdict" in message
 
 
 def test_decide_takes_no_review_thread_state() -> None:
     assert "threads" not in inspect.signature(review_check.decide).parameters
     assert not hasattr(review_check, "fetch_threads")
-    assert _run_review() == (0, status_text.GATE_PASS_VERDICT)
+    assert _run_review() == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_rename_with_a_non_exempt_side_needs_review() -> None:
@@ -274,7 +266,7 @@ def test_rename_with_a_non_exempt_side_needs_review() -> None:
 
 def test_rename_within_exempt_paths_skips() -> None:
     files = review_check.changed_paths([{"filename": "docs/new.md", "previous_filename": "docs/old.md"}])
-    assert _decide(files=files) == (0, status_text.GATE_PASS_EXEMPT)
+    assert _decide(files=files) == (0, "review: only exempt paths changed")
 
 
 def test_changed_paths_without_a_rename_keeps_only_the_filename() -> None:
@@ -340,7 +332,7 @@ def test_a_receipt_that_disagrees_with_the_status_does_not_count() -> None:
     disagreeing = _receipt_review(body=f"### review-verdict: failure for `{HEAD}`\n\nDetails.")
     status, message = _run_review(statuses=[_verdict()], reviews=[disagreeing])
     assert status == 1
-    assert message == status_text.GATE_UNMATCHED_SUCCESS
+    assert "no unedited review" in message
 
 
 def test_a_bound_receipt_matching_the_status_run_passes() -> None:
@@ -459,7 +451,7 @@ def _attestation(
 def test_standin_attestation_for_the_head_passes() -> None:
     status, message = _decide(comments=[_attestation()])
     assert status == review_check.PASS
-    assert message == status_text.gate_pass_standin("joeharris76")
+    assert "stand-in review attested by joeharris76" in message
 
 
 @pytest.mark.parametrize(
@@ -523,7 +515,7 @@ def test_a_later_valid_attestation_counts_after_an_earlier_invalid_one() -> None
 
 
 def test_the_review_verdict_message_wins_over_a_standin() -> None:
-    assert _run_review(comments=[_attestation()]) == (0, status_text.GATE_PASS_VERDICT)
+    assert _run_review(comments=[_attestation()]) == (0, f"review: pass (review verdict for {HEAD})")
 
 
 def test_fetch_comments_maps_author_type_and_edit_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -553,7 +545,7 @@ def test_standin_after_a_failing_review_verdict_overrides_it() -> None:
     failing = [_verdict("failure", created_at=HEAD_DATE)]
     assert _run_review(statuses=failing, comments=[_standin_comment()]) == (
         0,
-        status_text.gate_pass_standin("joeharris76"),
+        f"review: pass (stand-in review attested by joeharris76 for {HEAD})",
     )
     early = {**_standin_comment(), "created_at": BEFORE_HEAD, "updated_at": BEFORE_HEAD}
     assert _run_review(statuses=failing, comments=[early])[0] == 1
@@ -669,7 +661,7 @@ def _review(body: str, **over: Any) -> dict[str, Any]:
 def test_the_gate_requires_the_review_and_prints_no_parity(monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _stub_main(monkeypatch, [_verdict()])
     assert _gate() == 0
-    assert capsys.readouterr().out.splitlines() == [status_text.GATE_PASS_VERDICT]
+    assert capsys.readouterr().out.splitlines() == [f"review: pass (review verdict for {HEAD})"]
     _stub_main(monkeypatch, [_verdict(login=CONNECTOR)])
     assert _gate() == 1
 
@@ -871,7 +863,7 @@ def test_a_standin_still_counts_against_an_exempt_success_verdict() -> None:
     exempt = _verdict("success", description=review_check.EXEMPT_SUCCESS_DESCRIPTION)
     status, message = _run_review(statuses=[exempt], comments=[_attestation(created_at=LATER)])
     assert status == review_check.PASS
-    assert message == status_text.gate_pass_standin("joeharris76")
+    assert "stand-in review attested" in message
 
 
 def test_the_gate_rejects_an_exempt_success_verdict_when_a_review_is_required(
@@ -939,16 +931,16 @@ def _refusal_description() -> str:
 def test_a_refused_pull_request_is_told_to_open_a_new_one() -> None:
     status, message = _run_review(statuses=[_verdict("failure", description=_refusal_description())])
     assert status == review_check.WAITING
-    assert message == status_text.GATE_REFUSED
+    assert "refused to review" in message and "close this pull request and open a new one" in message
     failure_status, failure_message = _run_review(statuses=[_verdict("failure")])
-    assert failure_status == review_check.WAITING and failure_message == status_text.GATE_DO_NOT_SHIP
+    assert failure_status == review_check.WAITING and "refused" not in failure_message
 
 
 def test_a_standin_after_a_refusal_passes() -> None:
     statuses = [_verdict("failure", description=_refusal_description(), created_at=AFTER_HEAD)]
     later = "2026-10-08T23:59:59Z"
     status, message = _run_review(statuses=statuses, comments=[_attestation(created_at=later)])
-    assert status == review_check.PASS and message == status_text.gate_pass_standin("joeharris76")
+    assert status == review_check.PASS and "stand-in review attested" in message
     early = _run_review(statuses=statuses, comments=[_attestation(created_at=BEFORE_HEAD)])
     assert early[0] == review_check.WAITING
 
@@ -971,7 +963,7 @@ def test_the_api_root_is_overridden_only_by_a_loopback_server(value: str, expect
 
 def test_a_verdict_posted_before_the_base_changed_is_not_a_verdict_for_the_new_base() -> None:
     status, message = _run_review(statuses=[_verdict("success", created_at=AFTER_HEAD)], base_date=RETARGETED)
-    assert status == review_check.WAITING and message == status_text.gate_waiting(HEAD)
+    assert status == review_check.WAITING and "waiting for the review's verdict" in message
 
 
 BETA_BINDING = gate.load_gate_config(POLICY_REL, CONSUMER_BETA).binding

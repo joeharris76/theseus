@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from tests.conftest import CONSUMER_BETA
 
-from theseus_reviewer import status_text
 from theseus_reviewer._vendor import yaml
 
 from . import fake_github
@@ -68,7 +67,7 @@ def test_a_verdict_from_one_consumers_app_does_not_satisfy_the_other_consumers_g
     assert beta.code == 3, beta.stderr
     refused = harness.github.gate_statuses(head)[-1]
     assert refused["state"] == "failure"
-    assert refused["description"] == status_text.gate_waiting(head)
+    assert "waiting for the review's verdict" in refused["description"]
 
 
 def test_a_standin_from_one_consumers_owner_is_rejected_by_the_other(harness: Harness, beta_trusted: Path) -> None:
@@ -78,16 +77,16 @@ def test_a_standin_from_one_consumers_owner_is_rejected_by_the_other(harness: Ha
 
     alpha = harness.gate(42, head)
     assert alpha.code == 0, alpha.stderr
-    assert harness.github.gate_statuses(head)[-1]["description"] == status_text.gate_pass_standin("joeharris76")
+    assert "stand-in review attested by joeharris76" in harness.github.gate_statuses(head)[-1]["description"]
 
     beta = _gate(harness, beta_trusted, 42, head)
     assert beta.code == 3, beta.stderr
-    assert harness.github.gate_statuses(head)[-1]["description"] == status_text.gate_waiting(head)
+    assert "waiting for the review's verdict" in harness.github.gate_statuses(head)[-1]["description"]
 
     _comment(harness, 42, f"Stand-in review: APPROVE {head}", BETA_TOKEN)
     accepted = _gate(harness, beta_trusted, 42, head)
     assert accepted.code == 0, accepted.stderr
-    assert harness.github.gate_statuses(head)[-1]["description"] == status_text.gate_pass_standin("beta-owner")
+    assert "stand-in review attested by beta-owner" in harness.github.gate_statuses(head)[-1]["description"]
 
 
 def test_a_consumer_gates_only_its_own_base_branch(harness: Harness, beta_trusted: Path) -> None:

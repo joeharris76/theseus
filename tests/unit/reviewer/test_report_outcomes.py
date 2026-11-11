@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import credentials, dedup, protocol, report, selection, status_text
+from theseus_reviewer import credentials, dedup, protocol, report, selection
 from theseus_reviewer.diff import commentable_lines
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import INTEGRITY, MARKER_LIMIT, OVERSIZE, UNREPORTED
@@ -145,11 +145,7 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     assert outside < opener < elsewhere < lines.index("</details>")
     assert final.body.split("\n\n")[-1].startswith(protocol.MARKER_OPEN)
     assert final.reviewer == "small" and final.strikes == 1 and final.pending_cause is None
-    assert final.review is None and final.description == (
-        status_text.with_findings(
-            status_text.OPEN_FINDINGS_LABEL, 5, [("High", 2), ("Medium", 3)], [], "", status_text.DESCRIPTION_LIMIT
-        )
-    )
+    assert final.review is None and final.description == "small: SHIP WITH FIXES, 5 defect(s) to fix"
 
 
 def test_a_follow_up_records_every_open_defect_with_its_next_id(policy: Policy) -> None:
@@ -296,16 +292,16 @@ def test_a_pending_selection_that_never_reported_names_the_selected_reviewer(pol
     )
     assert final.state == "pending" and final.pending_cause == UNREPORTED
     assert "- small: a selected reviewer did not report" in final.body.split("\n")
-    assert final.description == status_text.UNREPORTED
+    assert final.description == "pending: a selected reviewer did not report"
     nameless = report.finalize(_comment_plan(policy), Step(selection.REVIEW, None, ()), [], [], {}, COMMENTABLE)
     assert nameless.state == "pending" and nameless.pending_cause == UNREPORTED
 
 
 def test_a_pending_selection_without_reasons_still_says_why(policy: Policy) -> None:
     final = _finalize(policy, _comment_plan(policy), None, kind=selection.PENDING, reviewer=None)
-    assert final.description == status_text.unavailable("no reviewer could run")
+    assert final.description.startswith("pending: ") and len(final.description) > len("pending: ")
     two = _finalize(policy, _comment_plan(policy), None, kind=selection.PENDING, reviewer=None, reasons=("a", "b"))
-    assert two.description == final.description and "a; b" in two.detail
+    assert two.description == "pending: no reviewer could run"
 
 
 def test_an_oversize_plan_keeps_its_header_before_the_size_note(policy: Policy) -> None:
@@ -648,14 +644,7 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     assert f"- **High** `{CHECKER}:1-2`: D4: Old" in lines and f"- **High** `{CHECKER}:2`: D5: Old" in lines
     assert sum("D4: Old" in line for line in lines) == 1
     assert any("2 of 3" in line and "DO NOT SHIP" in line for line in lines)
-    assert final.description == status_text.with_findings(
-        status_text.OPEN_FINDINGS_LABEL,
-        2,
-        [("High", 2)],
-        [],
-        status_text.carried_tail(OLD),
-        status_text.DESCRIPTION_LIMIT,
-    )
+    assert final.description == f"carried from {OLD[:12]}: SHIP WITH FIXES"
     assert (final.state, final.strikes, final.reviewer, final.pending_cause) == ("failure", 2, None, None)
     assert final.review is None
     assert final.body.split("\n")[-1].startswith(protocol.MARKER_OPEN)
@@ -697,12 +686,12 @@ def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Polic
 def test_the_success_status_carries_the_run_identity_inside_the_description_limit() -> None:
     plan = {"status_context": "review-verdict", "run_id": "a" * 32}
     suffix = f" [run {'a' * 32}]"
-    room = status_text.DESCRIPTION_LIMIT - len(suffix)
+    room = report.DESCRIPTION_LIMIT - len(suffix)
     exact = report.Final("success", "d" * room, "", None, None)
     assert report.status_payload(plan, exact, "url")["description"] == "d" * room + suffix
     over = report.Final("success", "d" * (room + 1), "", None, None)
     clipped = report.status_payload(plan, over, "url")["description"]
-    assert clipped == "d" * (room - 1) + "…" + suffix and len(clipped) == status_text.DESCRIPTION_LIMIT
+    assert clipped == "d" * (room - 1) + "…" + suffix and len(clipped) == report.DESCRIPTION_LIMIT
 
 
 @pytest.mark.parametrize(

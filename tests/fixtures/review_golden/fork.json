@@ -7,7 +7,7 @@
     "state/state.json": null,
     "status.json": {
       "context": "review-verdict",
-      "description": "Not reviewed · fork PR · needs an owner stand-in",
+      "description": "fork: owner review",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -76,14 +76,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "Not reviewed · fork PR · needs an owner stand-in",
+        "description": "fork: owner review",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "Waiting · not reviewed yet · see the review-verdict status · owner may post a stand-in",
+        "description": "review: the review's latest verdict for <sha1> is pending, not success; fix the findings, or post a stand…",
         "state": "failure",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -115,5 +115,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #81: fork (fork: owner review)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #81 <sha1>: pending: Not reviewed · fork PR · needs an owner stand-in\n"
+  "summary": "review-verdict plan for #81: fork (fork: owner review)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #81 <sha1>: pending: fork: owner review\n"
 }

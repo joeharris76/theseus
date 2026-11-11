@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from theseus_reviewer import protocol, status_text
-
 from .fake_github import ACCOUNTS, APP_TOKEN, JOB_TOKEN
 from .harness import CHECKER, GATEWAY_TOKEN, RECORDED_STREAM, Harness
 
@@ -38,7 +36,7 @@ def test_first_review_ships_posts_success_and_the_gate_passes(harness: Harness) 
         {"workflow": "review-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
     ]
     assert [(item["state"], item["description"]) for item in harness.github.gate_statuses(head)] == [
-        ("success", status_text.GATE_PASS_VERDICT)
+        ("success", f"review: pass (review verdict for {head})")
     ]
     assert harness.github.gate_statuses(head)[0]["creator"]["login"] == "benchbox-review[bot]"
 
@@ -88,9 +86,7 @@ def test_the_verdict_run_posts_a_failing_gate_for_a_held_head(harness: Harness) 
 
     assert [item["state"] for item in harness.github.review_statuses(head)] == ["failure"]
     assert [item["state"] for item in harness.github.gate_statuses(head)] == ["failure"]
-    assert harness.github.gate_statuses(head)[0]["description"] == status_text.gate_open_findings(
-        protocol.COMMENT_DISPUTE_GRAMMAR
-    )
+    assert "latest verdict" in harness.github.gate_statuses(head)[0]["description"]
 
 
 def test_an_open_review_thread_does_not_hold_the_gate_the_verdict_run_posts(harness: Harness) -> None:

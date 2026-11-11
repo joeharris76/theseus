@@ -81,8 +81,8 @@ def refusals(
     ]
     if extra or without_pin(base_text) != without_pin(head_text):
         reasons.append(
-            f"this PR also changes {', '.join(extra) if extra else 'other reviewer policy settings'}; "
-            "an omp pin bump changes only the omp section of the reviewer policy and the captured fixtures"
+            "an omp pin bump changes only the omp section of the reviewer policy and the captured fixtures; "
+            f"this PR also changes {', '.join(extra) if extra else 'other reviewer policy settings'}"
         )
     version = head_pin.get("version")
     build = (head_pin.get("builds") or {}).get(EVIDENCE_PLATFORM)

@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from theseus_reviewer import status_text, sweep
-from theseus_reviewer.status_text import SWEEP_FAILURE_SURFACE_PREFIX
+from theseus_reviewer import sweep
+from theseus_reviewer.github import SWEEP_FAILURE_SURFACE_PREFIX
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -65,9 +65,10 @@ def test_the_surfaced_description_names_every_failed_step_or_an_earlier_step() -
 
 
 def test_the_surfaced_description_is_kept_at_the_limit_and_clipped_beyond_it() -> None:
-    suffix = sweep.surface_description(["x"]).removeprefix(f"{SWEEP_FAILURE_SURFACE_PREFIX}x")
-    room = status_text.DESCRIPTION_LIMIT - len(SWEEP_FAILURE_SURFACE_PREFIX) - len(suffix)
+    bare = sweep.surface_description([""])
+    suffix = bare.removeprefix(SWEEP_FAILURE_SURFACE_PREFIX)
+    room = sweep.STATUS_DESCRIPTION_LIMIT - len(bare)
     assert sweep.surface_description(["x" * room]) == f"{SWEEP_FAILURE_SURFACE_PREFIX}{'x' * room}{suffix}"
     clipped = sweep.surface_description(["x" * (room + 1)])
-    assert clipped == f"{SWEEP_FAILURE_SURFACE_PREFIX}{'x' * (room - 1)}…{suffix}"
-    assert len(clipped) == status_text.DESCRIPTION_LIMIT
+    full = f"{SWEEP_FAILURE_SURFACE_PREFIX}{'x' * (room + 1)}{suffix}"
+    assert clipped == full[: sweep.STATUS_DESCRIPTION_LIMIT - 1] + "…"

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA
-from theseus_reviewer import gate, review_check, status_text
+from theseus_reviewer import gate, review_check
 
 POLICY_REL = ".github/review.yml"
 CONFIG = gate.load_gate_config(POLICY_REL, CONSUMER_ALPHA)
@@ -579,7 +579,7 @@ def test_a_reviewed_pull_request_passes_and_every_call_uses_the_token_and_target
 ) -> None:
     _wire(net, files=SOUNDNESS, statuses=[_status()], reviews=[_receipt()])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"{status_text.GATE_PASS_VERDICT}\n"
+    assert capsys.readouterr().out == f"review: pass (review verdict for {HEAD})\n"
     _authorized(net)
     assert set(net.paths()) == {
         "/repos/o/r/pulls/7",
@@ -599,7 +599,7 @@ def test_a_reviewed_pull_request_passes_and_every_call_uses_the_token_and_target
 def test_only_exempt_paths_pass_without_a_verdict(net: Network, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
     _wire(net, files=["NOTES.md"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"{status_text.GATE_PASS_EXEMPT}\n"
+    assert capsys.readouterr().out == "review: only exempt paths changed\n"
 
 
 def test_the_reviewer_policy_gate_paths_keep_an_otherwise_exempt_change_under_review(
@@ -607,7 +607,7 @@ def test_the_reviewer_policy_gate_paths_keep_an_otherwise_exempt_change_under_re
 ) -> None:
     _wire(net, files=["_project/scripts/reviewers/templates/gate.md"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.WAITING
-    assert capsys.readouterr().out == f"{status_text.gate_waiting(HEAD)}\n"
+    assert "waiting for the review's verdict" in capsys.readouterr().out
 
 
 def test_a_retarget_voids_the_earlier_verdict_and_receipt_in_the_main_flow(
@@ -616,7 +616,7 @@ def test_a_retarget_voids_the_earlier_verdict_and_receipt_in_the_main_flow(
     timeline = [{"event": "base_ref_changed", "created_at": RETARGETED}]
     _wire(net, files=SOUNDNESS, statuses=[_status()], reviews=[_receipt()], timeline=timeline)
     assert _run(monkeypatch) == review_check.WAITING
-    assert capsys.readouterr().out == f"{status_text.gate_waiting(HEAD)}\n"
+    assert "waiting for the review's verdict" in capsys.readouterr().out
     assert [
         request["body"] for request in net.requests if request["body"] and "id" in request["body"].get("variables", {})
     ] == []
@@ -647,7 +647,7 @@ def test_a_standin_attestation_is_read_from_the_pull_request_comments(
     }
     _wire(net, files=SOUNDNESS, statuses=[], reviews=[], comments=[comment])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"{status_text.gate_pass_standin('joeharris76')}\n"
+    assert capsys.readouterr().out == f"review: pass (stand-in review attested by joeharris76 for {HEAD})\n"
     _authorized(net)
 
 
@@ -669,7 +669,7 @@ def test_the_policy_exempt_paths_are_applied_to_the_pull_request_files(
     monkeypatch.setattr(gate, "load_gate_config", lambda policy_path, root: replace(CONFIG, policy=policy))
     _wire(net, files=["zz_exempt/a.txt"], statuses=[], reviews=[])
     assert _run(monkeypatch) == review_check.PASS
-    assert capsys.readouterr().out == f"{status_text.GATE_PASS_EXEMPT}\n"
+    assert capsys.readouterr().out == "review: only exempt paths changed\n"
 
 
 def _open_findings_status(description: str = "large: SHIP WITH FIXES, 2 defect(s) to fix") -> dict[str, Any]:

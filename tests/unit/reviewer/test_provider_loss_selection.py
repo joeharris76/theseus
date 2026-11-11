@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from theseus_reviewer import attempts as attempt_files
-from theseus_reviewer import cli, providers, report, retry, status_text
+from theseus_reviewer import cli, providers, report, retry
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.absence import AUTH, ERROR, Absence, classify
 from theseus_reviewer.classify import SIZE_BUCKETS, fallback_classification
@@ -376,9 +376,9 @@ def _final(description: str, degraded: str) -> report.Final:
 def test_the_run_suffix_never_cuts_the_degraded_suffix_of_a_success_status() -> None:
     degraded = " \u00b7 degraded: google-antigravity"
     base = "large: " + "x" * 200
-    final = _final(status_text.hard_clip(base, status_text.SUCCESS_LIMIT - len(degraded)), degraded)
+    final = _final(report._clip(base, report.DESCRIPTION_LIMIT - len(degraded)), degraded)
     payload = report.status_payload({"status_context": "review-verdict", "run_uuid": "r" * 36}, final, "https://x")
-    assert len(payload["description"]) <= status_text.DESCRIPTION_LIMIT
+    assert len(payload["description"]) <= report.DESCRIPTION_LIMIT
     assert degraded in payload["description"] and payload["description"].endswith(f"[run {'r' * 36}]")
 
 
