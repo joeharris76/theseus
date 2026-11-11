@@ -4,8 +4,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from theseus_reviewer import unavailable
-
 from .harness import CHECKER, Harness
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
@@ -64,7 +62,7 @@ def test_a_primary_providers_quota_reset_blocks_the_pool_for_at_most_the_backoff
     assert list(run.plan["pool_blocked_until"]) == ["claude"]
     [status] = harness.github.review_statuses(head)
     assert status["state"] == "pending"
-    assert unavailable.QUOTA.reason in status["description"]
+    assert "claude pool blocked until" in status["description"] and "anthropic" in status["description"]
     assert block["provider"] == "anthropic"
     held = datetime.fromisoformat(block["until"]) - datetime.fromisoformat(block["recorded_at"])
     assert timedelta(minutes=59) < held <= timedelta(hours=1)

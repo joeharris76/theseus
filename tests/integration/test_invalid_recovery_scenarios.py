@@ -5,8 +5,6 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import unavailable
-
 from .harness import CHECKER, REPO_ROOT, Harness
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
@@ -46,7 +44,7 @@ def test_a_stop_answer_ends_the_run_pending_without_another_reviewer(harness: Ha
     assert (recorded["choice"], recorded["source"], recorded["probability"]) == ("stop", "jev", 1.0)
     assert [item["state"] for item in harness.github.review_statuses(head)] == ["pending"]
     status = json.loads((run.temp / "review-final" / "status.json").read_text(encoding="utf-8"))
-    assert unavailable.BLOCKED.reason in status["description"]
+    assert "stopped: the process is blocked (the reviewer output is not JSON" in status["description"]
     assert run.steps["resume-1"].outputs["attempts"] == "1"
 
 
