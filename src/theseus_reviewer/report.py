@@ -92,6 +92,7 @@ def _threads_to_open(
     commentable: Mapping[str, frozenset[int]],
     delivery: str,
     cycle: int,
+    shared_room: dict[str, int] | None = None,
 ) -> tuple[list[tuple[Finding, str]], list[str]]:
     """Open findings carried from earlier rounds that have no thread: thread the anchorable ones."""
     if judgement is None or judgement.decision != protocol.SHIP_WITH_FIXES:
@@ -108,8 +109,12 @@ def _threads_to_open(
     moved = previous_head is not None and previous_head != plan.get("head_sha")
     prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
     counts = plan.get("open_counts")
-    room = {key: int(count) for key, count in (counts if counts is not None else dict.fromkeys(known, 1)).items()}
-    if counts is None:
+    room = (
+        shared_room
+        if shared_room is not None
+        else {key: int(count) for key, count in (counts if counts is not None else dict.fromkeys(known, 1)).items()}
+    )
+    if counts is None and shared_room is None:
         for entry in judgement.carried:
             if f"c{cycle}-{entry['id']}" in threaded:
                 room[prints[entry["id"]]] = room.get(prints[entry["id"]], 0) - 1
@@ -595,7 +600,9 @@ def finalize(
         for entry in (judgement.carried if judgement is not None else ())
         if f"c{cycle}-{entry['id']}" in threaded_ids
     }
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), plan.get("open_counts"), carried_at)
+    open_counts = plan.get("open_counts")
+    room = {key: int(count) for key, count in open_counts.items()} if open_counts is not None else None
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), room, carried_at)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}
@@ -603,7 +610,7 @@ def finalize(
         else {}
     )
     delivery = plan.get("findings_delivery", "comment")
-    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle)
+    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (
         protocol.escalated_ids(rules.get("maintained") or {}, judgement.carried, disputed)

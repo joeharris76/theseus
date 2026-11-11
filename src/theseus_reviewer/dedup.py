@@ -105,7 +105,7 @@ def split(
     fresh: list[Finding] = []
     repeated: list[Finding] = []
     placed: dict[tuple[str, int], str] = {}
-    room = dict(counts or {})
+    room = counts if isinstance(counts, dict) else dict(counts or {})
     for finding in findings:
         key = fingerprint(finding.file, finding.title)
         posted = known.get(key)

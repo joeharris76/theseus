@@ -850,3 +850,13 @@ def test_a_carried_defect_reported_again_at_another_line_gets_its_own_thread(pol
 def test_a_fixed_defects_open_thread_does_not_suppress_a_new_finding_with_its_fingerprint(policy: Policy) -> None:
     final = _finalize(policy, _located_plan(policy), _located_verdict("fixed", 2))
     assert _thread_lines(final) == [2]
+
+
+def test_one_unmarked_thread_covers_only_one_of_a_new_and_a_carried_defect(policy: Policy) -> None:
+    plan = _located_plan(policy)
+    plan["threaded"] = []
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Old"): 1}
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 1))
+    assert final.review is not None
+    placed = [comment["line"] for comment in final.review["comments"]]
+    assert placed == [2]
