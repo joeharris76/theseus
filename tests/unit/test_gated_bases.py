@@ -13,7 +13,7 @@ from tests.conftest import CONSUMER_ALPHA
 from theseus_reviewer import bases, cli, driver, gate, github
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.policy import PolicyError, parse_policy
-from theseus_reviewer.review_check import PASS, WAITING
+from theseus_reviewer.review_check import OUTSTANDING, PASS
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -163,7 +163,7 @@ def test_a_pull_request_into_a_release_branch_is_gated_with_that_branchs_own_pol
     assert "release-owner" in message
 
     monkeypatch.setattr(gate, "fetch_comments", lambda *a: [_attestation("develop-owner")])
-    assert gate.evaluate("acme/r", 7, "token", config)[1] == WAITING
+    assert gate.evaluate("acme/r", 7, "token", config)[1] == OUTSTANDING
 
 
 def test_develop_is_gated_exactly_as_before_when_the_policy_lists_release_branches_too(
@@ -176,7 +176,7 @@ def test_develop_is_gated_exactly_as_before_when_the_policy_lists_release_branch
     monkeypatch.setattr(gate, "fetch_comments", lambda *a: [_attestation("develop-owner")])
     assert gate.evaluate("acme/r", 7, "token", config)[1] == PASS
     monkeypatch.setattr(gate, "fetch_comments", lambda *a: [_attestation("release-owner")])
-    assert gate.evaluate("acme/r", 7, "token", config)[1] == WAITING
+    assert gate.evaluate("acme/r", 7, "token", config)[1] == OUTSTANDING
 
 
 @pytest.mark.parametrize("base", ["main", "feature/x", "release/0.5.x/hotfix", "hotfix/0.5.x"])

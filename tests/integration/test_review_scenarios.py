@@ -7,7 +7,7 @@ import pytest
 
 from theseus_reviewer import protocol, status_text
 
-from .fake_github import ACCOUNTS, APP_TOKEN, JOB_TOKEN
+from .fake_github import ACCOUNTS, APP_TOKEN, JOB_TOKEN, now_text
 from .harness import CHECKER, GATEWAY_TOKEN, RECORDED_STREAM, Harness
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
@@ -129,8 +129,42 @@ def test_a_head_change_marks_the_gate_pending_before_it_is_evaluated(harness: Ha
     assert [item["state"] for item in harness.github.gate_statuses(head)] == [
         "success",
         "pending",
-        "failure" if held else "success",
+        "pending" if held else "success",
     ]
+
+
+def test_a_fresh_head_with_no_verdict_gets_a_pending_gate_and_the_gate_exits_waiting(harness: Harness) -> None:
+    head = harness.branch("feat/checker", {CHECKER: FIXED_CHECKER}, "guard None operands")
+    harness.github.open_pull(46, "feat/checker")
+
+    gate = harness.gate(46, head)
+
+    assert gate.code == 3, gate.stderr
+    posted = harness.github.gate_statuses(head)
+    assert [item["state"] for item in posted] == ["pending"]
+    assert posted[0]["description"] == status_text.gate_waiting(head)
+    assert len(posted[0]["description"]) <= 140
+
+
+def test_a_head_with_a_blocking_verdict_keeps_a_failing_gate_on_the_gate_run(harness: Harness) -> None:
+    head = harness.branch("feat/checker", {CHECKER: FIXED_CHECKER}, "guard None operands")
+    harness.github.open_pull(47, "feat/checker")
+    harness.github.statuses[head] = [
+        {
+            "context": "review-verdict",
+            "state": "failure",
+            "description": "large: DO NOT SHIP",
+            "creator": REVIEW_BOT,
+            "id": next(harness.github.ids),
+            "created_at": now_text(),
+            "updated_at": now_text(),
+        }
+    ]
+
+    gate = harness.gate(47, head)
+
+    assert gate.code == 3, gate.stderr
+    assert [item["state"] for item in harness.github.gate_statuses(head)] == ["failure"]
 
 
 def test_a_failed_review_post_leaves_no_verdict_status_so_the_sweep_retries_the_head(harness: Harness) -> None:

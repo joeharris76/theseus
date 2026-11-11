@@ -67,7 +67,7 @@ def test_a_verdict_from_one_consumers_app_does_not_satisfy_the_other_consumers_g
     beta = _gate(harness, beta_trusted, 41, head)
     assert beta.code == 3, beta.stderr
     refused = harness.github.gate_statuses(head)[-1]
-    assert refused["state"] == "failure"
+    assert refused["state"] == "pending"
     assert refused["description"] == status_text.gate_waiting(head)
 
 

@@ -67,6 +67,7 @@ PAGE_SIZE = 100
 PASS = 0
 WAITING = 1
 ERROR = 2
+OUTSTANDING = 4
 
 _HEAD_OID_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
@@ -230,7 +231,7 @@ def _open_findings_message(verdicts: list[dict[str, Any]]) -> str:
     decisive = _latest_decisive(verdicts)
     match = ESCALATED.search((decisive or {}).get("description") or "")
     if match:
-        return status_text.gate_escalated(match.group("ids").split(","), GRAMMAR)
+        return status_text.gate_escalated(match.group("ids").split(","), GRAMMAR, int(match.group("more") or 0))
     return status_text.gate_open_findings(COMMENT_DISPUTE_GRAMMAR)
 
 
@@ -283,7 +284,7 @@ def decide(
             return WAITING, status_text.GATE_DO_NOT_SHIP
         return WAITING, status_text.gate_state(verdict)
     if not (latest or standin):
-        return WAITING, status_text.gate_waiting(head_sha)
+        return OUTSTANDING, status_text.gate_waiting(head_sha)
 
     if verdict == "success":
         if strip_run_suffix(latest.get("description")) == EXEMPT_SUCCESS_DESCRIPTION:
