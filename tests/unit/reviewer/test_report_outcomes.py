@@ -74,6 +74,7 @@ def _kitchen_plan(policy: Policy, **over: Any) -> dict[str, Any]:
         policy, kind="follow-up", round=2, prior=prior, changed=[CHECKER], next_id=7, strikes=1, **over
     )
     plan["open_findings"] = {dedup.fingerprint(CHECKER, "Already open problem"): "Medium"}
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Already open problem"): 1}
     plan.update(scope="changed", reviewed_head=OLD)
     return plan
 
@@ -348,6 +349,7 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     monkeypatch.setattr(protocol, "MARKER_LIMIT", 10)
     plan = _protocol_plan(policy, strikes=1)
     plan["open_findings"] = {dedup.fingerprint(CHECKER, "Already open problem"): "Medium"}
+    plan["open_counts"] = {dedup.fingerprint(CHECKER, "Already open problem"): 1}
     verdict = _v("s", [_defect("New problem", 2, "d"), _defect("Already open problem", 1), _defect("Far", 40)])
     final = _finalize(policy, plan, verdict)
     assert final.state == "pending" and final.pending_cause == MARKER_LIMIT and final.strikes is None
@@ -804,3 +806,36 @@ def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_f
     plan["open_counts"] = {}
     opened, _ = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
     assert [defect_id for _, defect_id in opened] == ["D2"]
+
+
+def _located_plan(policy: Policy) -> dict[str, Any]:
+    plan = _protocol_plan(policy, kind="follow-up", round=2, prior=[_prior("D1")], changed=[CHECKER], next_id=2)
+    key = dedup.fingerprint(CHECKER, "Old")
+    plan.update(open_findings={key: "High"}, open_counts={}, threaded=["c1-D1"], scope="changed", reviewed_head=OLD)
+    return plan
+
+
+def _located_verdict(status: str, *lines: int) -> dict[str, Any]:
+    verdict = _v("s", [_defect("Old", line, "d") for line in lines])
+    verdict["prior_defects"] = [{"id": "D1", "status": status, "evidence": "e"}]
+    return verdict
+
+
+def _thread_lines(final: report.Final) -> list[int]:
+    assert final.review is not None
+    return [comment["line"] for comment in final.review["comments"]]
+
+
+def test_a_carried_defect_reported_again_at_its_own_line_gets_no_second_thread(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("not_fixed", 2))
+    assert _thread_lines(final) == []
+
+
+def test_a_carried_defect_reported_again_at_another_line_gets_its_own_thread(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("not_fixed", 1))
+    assert _thread_lines(final) == [1]
+
+
+def test_a_fixed_defects_open_thread_does_not_suppress_a_new_finding_with_its_fingerprint(policy: Policy) -> None:
+    final = _finalize(policy, _located_plan(policy), _located_verdict("fixed", 2))
+    assert _thread_lines(final) == [2]

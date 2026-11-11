@@ -525,7 +525,13 @@ def finalize(
     ids = defect_ids(plan, defects)
     cycle = rules.get("cycle", 1)
     markers = {finding: f"<!-- review-defect: c{cycle}-{defect_id} -->" for finding, defect_id in ids.items()}
-    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), plan.get("open_counts"))
+    threaded_ids = frozenset(plan.get("threaded") or ())
+    carried_at = {
+        (dedup.fingerprint(entry["file"], entry["title"]), entry["line"]): entry["severity"]
+        for entry in (judgement.carried if judgement is not None else ())
+        if f"c{cycle}-{entry['id']}" in threaded_ids
+    }
+    fresh, repeated = dedup.split(defects, plan.get("open_findings", ()), plan.get("open_counts"), carried_at)
     placement = place(fresh, commentable)
     advisory_ids = (
         {finding: f"D{next_id + len(defects) + index}" for index, finding in enumerate(judgement.advisory)}

@@ -99,6 +99,7 @@ def split(
     findings: Iterable[Finding],
     already_open: Mapping[str, str] | Iterable[str],
     counts: Mapping[str, int] | None = None,
+    carried_at: Mapping[tuple[str, int], str] | None = None,
 ) -> tuple[tuple[Finding, ...], tuple[Finding, ...]]:
     known = dict(already_open) if isinstance(already_open, Mapping) else dict.fromkeys(already_open, SEVERITIES[0])
     fresh: list[Finding] = []
@@ -109,7 +110,10 @@ def split(
         key = fingerprint(finding.file, finding.title)
         posted = known.get(key)
         covered = posted is not None and SEVERITIES.index(posted) <= SEVERITIES.index(finding.severity)
-        if covered and counts is not None:
+        held = (carried_at or {}).get((key, finding.line))
+        if held is not None and SEVERITIES.index(held) <= SEVERITIES.index(finding.severity):
+            covered = True
+        elif covered and counts is not None:
             covered = room.get(key, 0) > 0
             room[key] = room.get(key, 0) - 1
         here = (key, finding.line)
