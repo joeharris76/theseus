@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
-
-from .status_text import run_suffix
 
 BATCH_SIZE = 100
 REVIEW_EDITS_QUERY = """
@@ -22,6 +21,8 @@ SHIP = "SHIP"
 SUCCESS = "success"
 FAILURE = "failure"
 DECISIVE = (SUCCESS, FAILURE)
+EDITED_REASON = "a review was edited"
+_RUN_SUFFIX = re.compile(r" \[run (?P<run>[0-9a-z]+)\]$")
 
 
 class EditStateError(RuntimeError):
@@ -60,6 +61,15 @@ def parse_review_edits(payload: Any, node_ids: Iterable[str]) -> dict[str, tuple
     if missing:
         raise EditStateError(f"GitHub GraphQL returned no edit state for {len(missing)} review(s)")
     return found
+
+
+def run_suffix(description: str | None) -> str | None:
+    match = _RUN_SUFFIX.search(description or "")
+    return match.group("run") if match else None
+
+
+def strip_run_suffix(description: str | None) -> str:
+    return _RUN_SUFFIX.sub("", description or "")
 
 
 def _is_app(creator: Any, bot_login: str) -> bool:

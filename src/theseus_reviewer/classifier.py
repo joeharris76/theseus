@@ -7,7 +7,6 @@ from typing import Any
 
 from .matchers import Matchers
 from .policy import ClassifierRules
-from .status_text import EXEMPT_SUCCESS_DESCRIPTION
 
 
 @dataclass(frozen=True)
@@ -90,7 +89,7 @@ def soundness_scope(
 ) -> SoundnessScope:
     in_scope = [item for item in files if any(_in_scope(path, rules, matchers) for path in item.paths)]
     if not in_scope:
-        return SoundnessScope(False, (EXEMPT_SUCCESS_DESCRIPTION,), (), (), ())
+        return SoundnessScope(False, ("only exempt paths changed",), (), (), ())
     gate = sorted({path for item in in_scope for path in item.paths if _matches(path, rules.gate_paths)})
     code = [item for item in in_scope if not all(_matches(path, rules.data_paths) for path in item.paths)]
     logic = sorted({path for item in code for path in item.paths if _matches(path, rules.logic_paths)})

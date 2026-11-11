@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from conftest import ALPHA_POLICY, CONSUMER_ALPHA
-from theseus_reviewer import gate, review_check, status_text
+from theseus_reviewer import gate, review_check
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -271,7 +271,7 @@ def test_an_unloadable_config_posts_nothing_when_the_head_cannot_be_read(
 
 def test_exempt_only_change_passes() -> None:
     expected = review_check.decide(HEAD, OTHER_FILES, [], _matcher(), binding=BINDING)
-    assert expected == (review_check.PASS, status_text.GATE_PASS_EXEMPT)
+    assert expected == (review_check.PASS, "review: only exempt paths changed")
     assert gate.decide(HEAD, OTHER_FILES, [], _matcher(), binding=BINDING) == expected
 
 
@@ -286,7 +286,7 @@ def test_ship_without_a_same_pr_receipt_waits() -> None:
     statuses = [_success_status()]
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, statuses, _matcher(), binding=BINDING)
     assert expected[0] == review_check.WAITING
-    assert expected[1] == status_text.GATE_UNMATCHED_SUCCESS
+    assert "no unedited review" in expected[1]
     assert gate.decide(HEAD, SOUNDNESS_FILES, statuses, _matcher(), binding=BINDING) == expected
 
 
@@ -299,7 +299,7 @@ def test_exact_standin_for_the_head_passes() -> None:
     comments = [_attestation()]
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING)
     assert expected[0] == review_check.PASS
-    assert expected[1] == status_text.gate_pass_standin("joeharris76")
+    assert "stand-in review attested by joeharris76" in expected[1]
     assert gate.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING) == expected
 
 
@@ -323,11 +323,11 @@ def test_gate_state_maps_pass_to_success_and_everything_else_to_failure() -> Non
 
 
 def test_status_payload_posts_the_gate_context() -> None:
-    payload = gate.status_payload(gate.PASS, status_text.GATE_PASS_VERDICT)
+    payload = gate.status_payload(gate.PASS, "review: pass (review verdict for " + HEAD + ")")
     assert payload == {
         "state": "success",
         "context": "review-gate",
-        "description": status_text.GATE_PASS_VERDICT,
+        "description": "review: pass (review verdict for " + HEAD + ")",
     }
 
 
@@ -335,7 +335,7 @@ def test_status_payload_clips_long_descriptions_to_the_api_limit() -> None:
     payload = gate.status_payload(gate.WAITING, "x" * 200, "https://example.invalid/run")
     assert payload["state"] == "failure"
     assert payload["context"] == "review-gate"
-    assert len(payload["description"]) == status_text.DESCRIPTION_LIMIT
+    assert len(payload["description"]) == gate.DESCRIPTION_LIMIT
     assert payload["target_url"] == "https://example.invalid/run"
 
 
@@ -496,7 +496,7 @@ def test_main_posts_failure_when_evaluation_errors_after_the_head_is_known(monke
     assert len(posts) == 1
     head, status, message = posts[0]
     assert head == HEAD and gate.gate_state(status) == "failure"
-    assert "no policy" in message and len(gate.gate_description(message)) <= status_text.DESCRIPTION_LIMIT
+    assert "no policy" in message and len(gate.gate_description(message)) <= gate.DESCRIPTION_LIMIT
 
 
 def test_main_posts_failure_when_a_status_fetch_raises_a_key_error(monkeypatch: pytest.MonkeyPatch) -> None:

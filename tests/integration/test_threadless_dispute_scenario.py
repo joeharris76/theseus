@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from theseus_reviewer import adjudication, protocol, status_text
-
 from .fake_github import OWNER_TOKEN
 from .harness import CHECKER, Harness
 
@@ -48,9 +46,7 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
 
     gate_step = harness.gate(pr, head)
     assert gate_step.code == 3, gate_step.stderr
-    assert harness.github.gate_statuses(head)[-1]["description"] == status_text.gate_open_findings(
-        protocol.COMMENT_DISPUTE_GRAMMAR
-    )
+    assert "open findings" in harness.github.gate_statuses(head)[-1]["description"]
 
     harness.github.comment(pr, DISPUTE_ONE, token=OWNER_TOKEN)
     rerun_cmd_1 = harness.github.comment(pr, "/review", token=OWNER_TOKEN)
@@ -110,15 +106,13 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
 
     latest_status = harness.github.review_statuses(head)[-1]
     assert latest_status["state"] == "failure"
-    assert "escalated D1" in latest_status["description"]
+    assert latest_status["description"].endswith("; escalated D1")
     assert "Escalated to the owner: D1" in harness.github.reviews[pr][-1]["body"]
     assert "Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in harness.github.reviews[pr][-1]["body"]
 
     gate_step_2 = harness.gate(pr, head)
     assert gate_step_2.code == 3
-    assert harness.github.gate_statuses(head)[-1]["description"] == status_text.gate_escalated(
-        ["D1"], adjudication.GRAMMAR
-    )
+    assert "need the owner's ruling" in harness.github.gate_statuses(head)[-1]["description"]
 
     rerun_cmd_3 = harness.github.comment(pr, "/review", token=OWNER_TOKEN)
     run_refused = harness.review(pr, event_name="issue_comment", action="created", comment=rerun_cmd_3)
@@ -139,9 +133,9 @@ def test_threadless_finding_dispute_escalation_adjudication_gate_flow(harness: H
     assert "Owner adjudication: **WITHDRAW D1** - verified as dead code by owner" in latest_review["body"]
     latest_verdict_status = harness.github.review_statuses(head)[-1]
     assert latest_verdict_status["state"] == "success"
-    assert status_text.ruling_tail("WITHDRAW", "D1") in latest_verdict_status["description"]
+    assert "owner adjudication: WITHDRAW D1; SHIP" in latest_verdict_status["description"]
 
     gate_final = harness.gate(pr, head)
     assert gate_final.code == 0, gate_final.stderr
     assert harness.github.gate_statuses(head)[-1]["state"] == "success"
-    assert status_text.GATE_PASS_VERDICT in harness.github.gate_statuses(head)[-1]["description"]
+    assert f"review: pass (review verdict for {head})" in harness.github.gate_statuses(head)[-1]["description"]

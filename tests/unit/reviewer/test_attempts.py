@@ -10,18 +10,7 @@ from typing import Any
 import pytest
 
 from conftest import CONSUMER_ALPHA
-from theseus_reviewer import (
-    attempts,
-    capacity,
-    cli,
-    omp_pin,
-    protocol,
-    report,
-    retry,
-    review_check,
-    selection,
-    status_text,
-)
+from theseus_reviewer import attempts, capacity, cli, omp_pin, protocol, report, retry, review_check, selection
 from theseus_reviewer.absence import Absence
 from theseus_reviewer.classify import Classification
 from theseus_reviewer.dedup import fingerprint, marker
@@ -185,10 +174,10 @@ def test_absence_then_clean_verdict_passes(policy: Policy, tmp_path: Path) -> No
     assert step.kind == selection.PASS
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "success"
-    assert final.description == status_text.shipped([], "", status_text.DESCRIPTION_LIMIT)
+    assert final.description.endswith(": SHIP")
     assert final.review is not None and final.review["comments"] == []
     assert "Decision: **SHIP**." in final.review["body"]
-    assert "small (attempt 1): the reviewer did not finish within its time limit" in final.review["body"]
+    assert "small (attempt 1): absent (timeout)" in final.review["body"]
 
 
 def test_ship_with_fixes_fails_and_splits_defects(policy: Policy, tmp_path: Path) -> None:
@@ -199,7 +188,7 @@ def test_ship_with_fixes_fails_and_splits_defects(policy: Policy, tmp_path: Path
     assert step.kind == selection.FAIL
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert final.state == "failure"
-    assert final.description == "SHIP WITH FIXES · 2 to fix (1 High, 1 Low) · see review threads"
+    assert final.description == "small: SHIP WITH FIXES, 2 defect(s) to fix"
     inline, outside = final.body.split("**Defects outside the diff**")
     assert "checker.py:2`" in inline and "checker.py:40`" in outside
     assert "@someone" not in final.body and "https://" not in final.body
@@ -279,11 +268,10 @@ def test_all_absent_is_pending_and_names_every_reviewer(policy: Policy, tmp_path
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "pending"
-    assert final.description == status_text.unavailable("provider quota")
+    assert final.description.startswith("pending: small: absent (timeout")
     assert len(final.description) <= 140
-    assert "small (attempt 1): the reviewer did not finish within its time limit" in final.body
-    assert "medium (attempt 2): the model provider's usage quota is exhausted" in final.body
-    assert "slow" not in final.body
+    assert "small (attempt 1): absent (timeout): slow" in final.body
+    assert "medium (attempt 2): absent (quota): limit" in final.body
     assert final.pending_cause == ALL_ABSENT
 
 
@@ -293,7 +281,7 @@ def test_selected_reviewer_that_never_reported_is_pending(policy: Policy, tmp_pa
     assert step.kind == selection.REVIEW
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "pending"
-    assert "a selected reviewer did not report" in final.body
+    assert "selected but did not report" in final.body
     assert final.pending_cause == UNREPORTED
 
 
@@ -450,7 +438,7 @@ def test_cli_finalize_fixed_decisions(
     assert out["state"] == state and out["has_state"] == "false" and out["comment"] == "false"
     status = json.loads((tmp_path / "o" / "status.json").read_text(encoding="utf-8"))
     assert status["description"] == (
-        f"{status_text.EXEMPT_SUCCESS_DESCRIPTION} [run {RUN_ID}]" if decision == "success" else status_text.FORK
+        f"only exempt paths changed [run {RUN_ID}]" if decision == "success" else "fork: owner review"
     )
 
 
@@ -482,10 +470,10 @@ def test_a_finalized_exempt_success_never_satisfies_a_gate_whose_rules_require_a
     rules = review_check.path_matcher(2, 2, matchers, policy.classifier.exempt_paths, policy.classifier.gate_paths)
     binding = policy.binding()
     code, message = review_check.decide(HEAD, [CHECKER], [posted], rules, binding=binding)
-    assert code == review_check.WAITING and message == status_text.GATE_EXEMPT_STALE
+    assert code == review_check.WAITING and "reports only exempt paths changed" in message
     assert review_check.decide(HEAD, ["notes.md"], [posted], rules, binding=binding) == (
         review_check.PASS,
-        status_text.GATE_PASS_EXEMPT,
+        "review: only exempt paths changed",
     )
 
 
@@ -659,11 +647,7 @@ def test_a_pending_run_posts_its_diagnostics_as_a_review(
     assert out["state"] == "pending" and out["review"] == "true" and out["comment"] == "false"
     review = json.loads((tmp_path / "o" / "review.json").read_text(encoding="utf-8"))
     assert review["body"].startswith(f"### review-verdict: pending for `{HEAD}`")
-    assert (
-        review["comments"] == []
-        and "small (attempt 1): the model provider rejected the review's credentials" in review["body"]
-    )
-    assert "bad key" not in review["body"]
+    assert review["comments"] == [] and "small (attempt 1): absent (auth)" in review["body"]
 
 
 def test_withheld_result_is_posted_as_a_pending_review(policy: Policy, tmp_path: Path) -> None:
@@ -745,7 +729,7 @@ def test_a_held_plan_finalizes_to_a_pending_status_with_no_decision_or_marker(
     )
     assert out == {"state": "pending", "comment": "false", "review": "false", "has_state": "false"}
     status = json.loads((tmp_path / "o" / "status.json").read_text(encoding="utf-8"))
-    assert status["state"] == "pending" and status["description"] == status_text.not_reviewed_reason(reason)
+    assert status["state"] == "pending" and status["description"] == reason
     assert sorted(path.name for path in (tmp_path / "o").iterdir()) == [
         "status.json",
         "summary.json",
@@ -758,11 +742,10 @@ def test_a_long_status_description_is_cut_to_the_status_limit(policy: Policy, tm
     _write(tmp_path, 2, "medium", missing=Absence("auth", "bad key"))
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
-    assert len(" ".join(step.reasons)) > status_text.DESCRIPTION_LIMIT
-    assert final.description == status_text.unavailable("provider authentication")
-    assert len(final.description) <= status_text.DESCRIPTION_LIMIT
-    assert "limit " * 60 not in final.description
-    assert "bad key" not in final.description
+    full = "pending: " + "; ".join(step.reasons)
+    assert len(full) > report.DESCRIPTION_LIMIT
+    assert len(final.description) == report.DESCRIPTION_LIMIT == 140
+    assert final.description == full[:139] + "…"
     assert report.status_payload(plan, final, "u")["description"] == final.description
 
 
@@ -894,14 +877,13 @@ def test_the_review_body_gives_each_absent_attempt_its_slot_and_reason(policy: P
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert (
-        "- small (attempt 1): the reviewer's answer was not a valid review;"
+        "- small (attempt 1): absent (invalid): the reviewer output is not JSON: Expecting value;"
         " recovery: retry (Jev, probability 0.90, confidence 0.80)" in final.body
     )
-    assert "- small (attempt 2): the reviewer returned no answer" in final.body
-    assert "Expecting value" not in final.body
+    assert "- small (attempt 2): absent (empty): the reviewer ended without a final answer" in final.body
 
 
-def test_a_published_absence_detail_never_reaches_the_body(policy: Policy, tmp_path: Path) -> None:
+def test_a_published_absence_detail_is_redacted_and_bounded(policy: Policy, tmp_path: Path) -> None:
     plan = _plan(policy)
     secret = "sk-" + "a1B2c3D4" * 6
     detail = f"bad token {secret}\nand more " + "x " * 200
@@ -910,8 +892,9 @@ def test_a_published_absence_detail_never_reaches_the_body(policy: Policy, tmp_p
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     line = next(row for row in final.body.splitlines() if row.startswith("- small (attempt 1)"))
-    assert secret not in final.body and "bad token" not in final.body and "x x x" not in final.body
-    assert line.startswith("- small (attempt 1): the reviewer's answer was not a valid review")
+    assert secret not in final.body and "[redacted]" in line
+    assert "\n" not in line and line.partition(";")[0].endswith("\u2026")
+    assert len(line.partition("absent (invalid): ")[2].partition(";")[0]) <= 160
 
 
 def test_identical_findings_are_listed_once_and_stored_with_unique_ids(policy: Policy, tmp_path: Path) -> None:
@@ -967,7 +950,7 @@ def test_cli_finalize_after_a_failed_install_posts_a_distinct_pending_status_wit
     assert out == {"state": "pending", "comment": "false", "review": "false", "has_state": "true"}
     status = json.loads((final_dir / "status.json").read_text(encoding="utf-8"))
     assert status["state"] == "pending"
-    assert status["description"] == status_text.OMP_INSTALL
+    assert status["description"] == "the pinned omp build could not be installed; no reviewer ran"
     state = json.loads((final_dir / "state" / "state.json").read_text(encoding="utf-8"))
     assert state["outcome"] == "pending" and state["pending_cause"] == "omp-install"
     assert not (final_dir / "attempt").exists()

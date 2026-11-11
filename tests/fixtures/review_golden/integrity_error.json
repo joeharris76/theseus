@@ -33,7 +33,7 @@
     "attempt/state.json": null,
     "comment.json": null,
     "review.json": {
-      "body": "### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld**\n\n- the run's artifacts failed validation\n\nNext step: Push a new head to run the review again.\n\n<!-- review-unavailable: v1 <sha1> artifacts-invalid -->",
+      "body": "### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld: the run's artifacts failed validation**\n\nattempt-1.json: names another head\n",
       "comments": [],
       "commit_id": "<sha1>",
       "event": "COMMENT"
@@ -50,7 +50,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "Not reviewed · run artifacts failed validation · push a new head",
+      "description": "result withheld: artifacts failed validation",
       "state": "pending",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -352,7 +352,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld**\n\n- the run's artifacts failed validation\n\nNext step: Push a new head to run the review again.\n\n<!-- review-unavailable: v1 <sha1> artifacts-invalid -->",
+        "body": "### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld: the run's artifacts failed validation**\n\nattempt-1.json: names another head\n",
         "commit_id": "<sha1>",
         "creator": "benchbox-review[bot]"
       }
@@ -361,14 +361,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "Not reviewed · run artifacts failed validation · push a new head",
+        "description": "result withheld: artifacts failed validation",
         "state": "pending",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "Waiting · not reviewed yet · see the review-verdict status · owner may post a stand-in",
+        "description": "review: the review's latest verdict for <sha1> is pending, not success; fix the findings, or post a stand…",
         "state": "failure",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -402,5 +402,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #86: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nartifact validation: attempt-1.json: names another head\nreview-verdict #86 <sha1>: pending: Not reviewed · run artifacts failed validation · push a new head\n### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld**\n\n- the run's artifacts failed validation\n\nNext step: Push a new head to run the review again.\n\n<!-- review-unavailable: v1 <sha1> artifacts-invalid -->\n"
+  "summary": "review-verdict plan for #86: review (first review of this pull request; pull request event)\n<omp-version>\nreviewer capacity: {\"huge\": 936000, \"large\": 936000, \"max\": 872000, \"medium\": 936000, \"small\": 336000, \"trivial\": 336000}\nredaction check: 0 file(s) rewritten, no secret value remains\ngateway serves anthropic, google-antigravity, openai-codex\nslot 1: medium\nslot 1: medium verdict\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nslot 2: pass\nreview-verdict #86 <sha1>: pending: result withheld: artifacts failed validation\n### review-verdict: pending for `<sha1>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\n**Result withheld: the run's artifacts failed validation**\n\nattempt-1.json: names another head\n\n"
 }

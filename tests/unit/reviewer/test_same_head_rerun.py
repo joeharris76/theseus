@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import protocol, report, status_text
+from theseus_reviewer import protocol, report
 from theseus_reviewer.retry import State
 
 from .test_cli_plan import (
@@ -65,10 +65,10 @@ def test_the_repost_returns_the_existing_status_and_says_how_to_get_a_rejudgemen
     _, plan = _comment(monkeypatch, tmp_path, _fake(_decided("SHIP", run_uuid=RUN)))
     final = report.reposted(plan)
     assert final.state == "success" and final.review is None
-    assert final.description.endswith(status_text.REPOSTED_MARK)
+    assert final.description.endswith(report.REPOSTED_MARK)
     assert "Dispute:" in final.body and "push a change" in final.body
     payload = report.status_payload(plan, final, "https://example.test/run")
-    assert payload["description"].endswith(f"{status_text.REPOSTED_MARK} [run {RUN}]")
+    assert payload["description"].endswith(f"{report.REPOSTED_MARK} [run {RUN}]")
 
 
 def test_a_repost_is_free_even_when_the_retry_budget_is_used(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_a_status_that_disagrees_with_the_record_holds_instead_of_reposting(
 
 def test_a_reposted_failure_keeps_a_long_escalation_list_whole() -> None:
     ids = ",".join(f"D{n}" for n in range(1, 13))
-    description = f"SHIP WITH FIXES · 12 to fix · escalated {ids} · owner ruling needed"
+    description = f"large: SHIP WITH FIXES, 12 defect(s) to fix; escalated {ids}"
     plan = {"head_sha": HEAD, "repost": {"state": "failure", "description": description, "label": "SHIP WITH FIXES"}}
     final = report.reposted(plan)
-    assert final.description == description + status_text.REPOSTED_MARK
+    assert final.description == description + report.REPOSTED_MARK

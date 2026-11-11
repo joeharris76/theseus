@@ -491,6 +491,9 @@ def run_timed_out(repo: str, run_id: int) -> bool:
     return False
 
 
+SWEEP_FAILURE_SURFACE_PREFIX = "review-verdict failed twice without a result at: "
+
+
 def commit_statuses(repo: str, sha: str) -> list[dict[str, Any]]:
     statuses = get_paginated(f"repos/{repo}/commits/{sha}/statuses?per_page=100")
     return [status for status in statuses if isinstance(status, dict)]

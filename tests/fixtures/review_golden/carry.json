@@ -21,7 +21,7 @@
     },
     "status.json": {
       "context": "review-verdict",
-      "description": "SHIP · carried from <sha1:12> (same patch) [run <run>]",
+      "description": "carried from <sha1:12>: SHIP [run <run>]",
       "state": "success",
       "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
     }
@@ -170,14 +170,14 @@
       {
         "context": "review-verdict",
         "creator": "benchbox-review[bot]",
-        "description": "SHIP · carried from <sha1:12> (same patch) [run <run>]",
+        "description": "carried from <sha1:12>: SHIP [run <run>]",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       },
       {
         "context": "review-gate",
         "creator": "benchbox-review[bot]",
-        "description": "Pass · review-verdict: SHIP",
+        "description": "review: pass (review verdict for <sha0>)",
         "state": "success",
         "target_url": "https://github.localhost/BenchBox-dev/BenchBox/actions/runs/<run>"
       }
@@ -211,5 +211,5 @@
       "skip": "false"
     }
   },
-  "summary": "review-verdict plan for #71: carry (the patch is unchanged since head <sha1>)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #71 <sha0>: success: SHIP · carried from <sha1:12> (same patch)\n### review-verdict: success for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\nDecision: **SHIP**, carried from head `<sha1>`.\n\nThe patch is unchanged since head `<sha1>` was reviewed, so its decision is carried to this head without running a reviewer. Its open review threads still apply.\n\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": true, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"carry\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"0e0101aadfc01475f8e5f6e594b052f2\", \"patch_map\": {\"5b21f32d\": \"6327e9b5e5fcdc28\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->\n"
+  "summary": "review-verdict plan for #71: carry (the patch is unchanged since head <sha1>)\nredaction check: 0 file(s) rewritten, no secret value remains\nreview-verdict #71 <sha0>: success: carried from <sha1:12>: SHIP\n### review-verdict: success for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\nDecision: **SHIP**, carried from head `<sha1>`.\n\nThe patch is unchanged since head `<sha1>` was reviewed, so its decision is carried to this head without running a reviewer. Its open review threads still apply.\n\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": true, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"carry\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"0e0101aadfc01475f8e5f6e594b052f2\", \"patch_map\": {\"5b21f32d\": \"6327e9b5e5fcdc28\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->\n"
 }
