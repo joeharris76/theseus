@@ -1,4 +1,4 @@
-### ⏳ NOT REVIEWED YET · reviewers unavailable · shadow (advisory)
+### ⏳ NOT REVIEWED YET · reviewers unavailable (no reviewer could run) · shadow (advisory)
 
 Next step: The hourly sweep retries this head; a maintainer can comment `/review` to retry now.
 

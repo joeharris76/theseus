@@ -119,7 +119,7 @@ def test_the_headline_is_the_decision_and_the_one_fact_that_tells_the_author_wha
     assert bodies["do-not-ship"].startswith("### ⛔ DO NOT SHIP · rework needed · strike 2 of 3")
     assert bodies["oversize"].startswith("### ⏳ NOT REVIEWED · too large to review")
     assert bodies["unavailable"].startswith("### ⏳ NOT REVIEWED YET · reviewers unavailable")
-    assert bodies["withheld"].startswith("### ⏳ NOT REVIEWED YET · run artifacts failed validation")
+    assert bodies["withheld"].startswith("### ⏳ NOT REVIEWED · run artifacts failed validation")
     assert bodies["carried-ship"].startswith(f"### ✅ SHIP · carried from {OLD}")
     assert bodies["carried-with-findings"].startswith(
         f"### 🔧 SHIP WITH FIXES · 2 findings still block merge · carried from {OLD}"
@@ -206,7 +206,10 @@ def test_a_marker_limit_result_lists_findings_without_ids_and_ends_with_a_pendin
     final = _finalize(policy, _protocol_plan(policy), verdict, kind=selection.FAIL)
     body = final.review["body"]
     assert final.pending_cause == MARKER_LIMIT
-    assert body.splitlines()[0] == "### ⏳ NOT REVIEWED YET · SHIP WITH FIXES could not be recorded · shadow (advisory)"
+    assert (
+        body.splitlines()[0]
+        == "### ⏳ NOT REVIEWED · decision record too large for a review marker · shadow (advisory)"
+    )
     assert report.MARKER_LIMIT_NOTE in body and protocol.MARKER_OPEN not in body
     assert body.endswith(layout.verdict_marker("pending", HEAD))
     assert "D1" not in body and "Dispute" not in body
@@ -456,3 +459,46 @@ def test_code_inside_a_fence_is_left_alone_and_the_same_lines_outside_it_are_esc
     assert mixed == f"\\# a\n```\n{lines}\n```\n\\# b\n- `[x]` c"
     unclosed = layout.neutralize(f"```\n{lines}")
     assert unclosed == f"```\n{lines}\n```"
+
+
+def _headline_cases(policy: Policy) -> dict[str, report.Final]:
+    from theseus_reviewer import absence
+    from theseus_reviewer.selection import Attempt, Step
+
+    plan = _protocol_plan(policy)
+    none = Step(selection.PENDING, None, ())
+
+    def pending(over: dict | None = None, attempts: list | None = None, step: Step = none, **kw):
+        return report.finalize({**plan, **(over or {})}, step, kw.get("errors", []), attempts or [], {}, {})
+
+    cases = {
+        "oversize": pending({"brief_mode": "oversize"}),
+        "withheld": pending(errors=["attempt-1.json: bad"]),
+        "blocked": pending(step=Step(selection.PENDING, None, ("stopped: the process is blocked (x)",), stopped=True)),
+        "no-report": report.finalize(plan, Step(selection.REVIEW, policy.reviewers["small"], ()), [], [], {}, {}),
+        "gateway": pending(
+            {"served_error": "gateway unreachable: down"}, step=Step(selection.PENDING, None, (), unavailable=True)
+        ),
+        "none": pending(),
+    }
+    for name in (
+        absence.ALL
+        if hasattr(absence, "ALL")
+        else ("quota", "auth", "timeout", "invalid", "empty", "error", "incomplete")
+    ):
+        cases[f"absent-{name}"] = pending(
+            attempts=[Attempt(1, "small", selection.ABSENT, absence=name, provider="anthropic")]
+        )
+    return cases
+
+
+def test_a_not_reviewed_headline_and_the_status_description_state_the_same_fact(policy: Policy) -> None:
+    for name, final in _headline_cases(policy).items():
+        assert final.state == "pending", name
+        headline = _body(final).splitlines()[0].removeprefix("### ⏳ ").removesuffix(" · shadow (advisory)")
+        lead, _, rest = final.description.partition(" · ")
+        fact = rest.split(" · ")[0]
+        assert headline == f"{lead.upper()} · {fact}", (name, headline, final.description)
+    blocked = _headline_cases(policy)
+    for name in ("withheld", "blocked", "no-report"):
+        assert " YET" not in _body(blocked[name]).splitlines()[0], name

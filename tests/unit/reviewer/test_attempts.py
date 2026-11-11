@@ -674,7 +674,7 @@ def test_withheld_result_is_posted_as_a_pending_review(policy: Policy, tmp_path:
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "pending" and final.review is not None
-    assert final.review["body"].startswith("### ⏳ NOT REVIEWED YET · run artifacts failed validation")
+    assert final.review["body"].startswith("### ⏳ NOT REVIEWED · run artifacts failed validation")
 
 
 def test_an_oversize_plan_finalizes_pending_for_its_size_and_names_the_ways_forward(

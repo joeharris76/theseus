@@ -330,7 +330,7 @@ def test_withheld_artifacts_are_listed_in_a_pending_review(policy: Policy) -> No
     assert final.state == "pending" and final.pending_cause == INTEGRITY and final.reviewer is None
     assert final.strikes is None and final.description
     lines = final.body.split("\n")
-    assert lines[0] == "### ⏳ NOT REVIEWED YET · run artifacts failed validation · shadow (advisory)"
+    assert lines[0] == "### ⏳ NOT REVIEWED · run artifacts failed validation · shadow (advisory)"
     assert not any(error in lines for error in errors)
     assert "- the run's artifacts failed validation" in lines
     assert final.review is not None and final.review["body"] == final.body
@@ -369,7 +369,7 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     assert final.description == report.MARKER_LIMIT_DESCRIPTION
     assert final.review is not None
     lines = final.review["body"].split("\n")
-    assert lines[0] == "### ⏳ NOT REVIEWED YET · SHIP WITH FIXES could not be recorded · shadow (advisory)"
+    assert lines[0] == "### ⏳ NOT REVIEWED · decision record too large for a review marker · shadow (advisory)"
     assert report.MARKER_LIMIT_NOTE in lines and protocol.MARKER_OPEN not in final.review["body"]
     assert f"- 🟡 **Medium** · Already open problem · `{CHECKER}` (existing thread)" in lines
     assert f"- 🟡 **Medium** · Far · `{CHECKER}:40`" in lines
@@ -813,14 +813,14 @@ def _judged(*entries: dict[str, Any]) -> Any:
 def test_carried_defects_with_one_fingerprint_each_get_a_thread_or_a_notice() -> None:
     lines = {"a.py": frozenset({3, 40})}
     entries = (_carried("D1", 3), _carried("D2", 40))
-    opened, unanchored = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
-    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")] and unanchored == []
-    opened, unanchored = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
-    assert [defect_id for _, defect_id in opened] == ["D2"] and unanchored == []
-    opened, unanchored = report._threads_to_open(
+    opened = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
+    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")]
+    opened = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"]
+    opened = report._threads_to_open(
         _thread_plan([]), _judged(_carried("D1", 3), _carried("D2", 41)), lines, "review", 1
     )
-    assert [defect_id for _, defect_id in opened] == [] and unanchored == ["D2"]
+    assert [defect_id for _, defect_id in opened] == []
 
 
 def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_fingerprint() -> None:
@@ -828,9 +828,9 @@ def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_f
     entries = (_carried("D1", 3), _carried("D2", 40))
     key = dedup.fingerprint("a.py", "Unchecked size")
     plan = {**_thread_plan(["c1-D1"]), "open_counts": {key: 1}}
-    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == ([], [])
+    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == []
     plan["open_counts"] = {}
-    opened, _ = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
+    opened = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
     assert [defect_id for _, defect_id in opened] == ["D2"]
 
 

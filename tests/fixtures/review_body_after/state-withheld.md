@@ -1,4 +1,4 @@
-### ⏳ NOT REVIEWED YET · run artifacts failed validation · shadow (advisory)
+### ⏳ NOT REVIEWED · run artifacts failed validation · shadow (advisory)
 
 Next step: Push a new head to run the review again.
 

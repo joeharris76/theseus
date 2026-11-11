@@ -171,18 +171,15 @@ def _threads_to_open(
     delivery: str,
     cycle: int,
     shared_room: dict[str, int] | None = None,
-) -> tuple[list[tuple[Finding, str]], list[str]]:
+) -> list[tuple[Finding, str]]:
     """Open findings carried from earlier rounds that have no thread: thread the anchorable ones."""
     if judgement is None or judgement.decision != protocol.SHIP_WITH_FIXES:
-        return [], []
-    if delivery == "review" and plan.get("threaded") is None:
-        return [], []
-    if delivery != "review":
-        return [], [entry["id"] for entry in judgement.carried]
+        return []
+    if delivery != "review" or plan.get("threaded") is None:
+        return []
     threaded = frozenset(plan["threaded"])
     known = plan.get("open_findings") or {}
     opened: list[tuple[Finding, str]] = []
-    unanchored: list[str] = []
     previous_head = (plan.get("protocol") or {}).get("previous_head")
     moved = previous_head is not None and previous_head != plan.get("head_sha")
     prints = {entry["id"]: dedup.fingerprint(entry["file"], entry["title"]) for entry in judgement.carried}
@@ -204,7 +201,6 @@ def _threads_to_open(
         if moved or line not in lines:
             # The recorded line belongs to an earlier head: open on the file's first changed line instead.
             if not moved or not lines:
-                unanchored.append(entry["id"])
                 continue
             line, end = min(lines), None
         finding = Finding(
@@ -222,7 +218,7 @@ def _threads_to_open(
             room[key] -= 1
             continue
         opened.append((finding, entry["id"]))
-    return opened, unanchored
+    return opened
 
 
 def _entry_item(entry: Mapping[str, Any], threaded: bool = False) -> list[str]:
@@ -689,8 +685,15 @@ def _blocks(count: int) -> str:
     return f"{layout.noun(count)} {'blocks' if count == 1 else 'block'} merge"
 
 
+def _not_reviewed_headline(description: str) -> str:
+    """The headline of a not-reviewed body: the status description's own wording, so the two never disagree."""
+    lead, _, rest = description.partition(status_text.SEP)
+    fact = rest.split(status_text.SEP)[0]
+    return f"{lead.upper()}{status_text.SEP}{fact}"
+
+
 def _headline(
-    judgement: protocol.Judgement | None, cause: str, unrecorded: bool, strikes: int, limit: Any
+    judgement: protocol.Judgement | None, description: str, unrecorded: bool, strikes: int, limit: Any
 ) -> tuple[str, str]:
     """The first line of the body: the decision and the one fact that says what happens next."""
     if judgement is not None and not unrecorded:
@@ -702,11 +705,7 @@ def _headline(
         else:
             fact = "no open findings"
         return label, f"{label} · {fact}"
-    if judgement is not None:
-        return "NOT REVIEWED", f"NOT REVIEWED YET · {judgement.label} could not be recorded"
-    if cause == OVERSIZE:
-        return "NOT REVIEWED", "NOT REVIEWED · too large to review"
-    return "NOT REVIEWED", "NOT REVIEWED YET · reviewers unavailable"
+    return "NOT REVIEWED", _not_reviewed_headline(description)
 
 
 def _rework(summary: str, limit: Any) -> list[str]:
@@ -814,7 +813,7 @@ def finalize(
     if errors:
         withheld = (unavailable.ARTIFACTS,)
         lines = [
-            *_head(plan, "NOT REVIEWED", "NOT REVIEWED YET · run artifacts failed validation"),
+            *_head(plan, "NOT REVIEWED", _not_reviewed_headline(status_text.INTEGRITY)),
             f"Next step: {unavailable.next_step(withheld)}",
             "",
             *layout.collapsible(
@@ -866,7 +865,7 @@ def finalize(
         if judgement is not None
         else {}
     )
-    opened, unanchored = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
+    opened = _threads_to_open(plan, judgement, commentable, delivery, cycle, room)
     disputed = sorted(item["id"] for item in protocol.bound_disputes(plan)) if rules.get("forced") else []
     escalated = (
         protocol.escalated_ids(rules.get("maintained") or {}, judgement.carried, disputed)
@@ -921,7 +920,7 @@ def finalize(
     decided = judgement is not None and not unrecorded
     shown_strikes = strikes if decided else int(rules.get("strikes", 0))
     limit = rules.get("max_do_not_ship")
-    mark, headline = _headline(judgement, pending_cause, unrecorded, shown_strikes, limit)
+    mark, headline = _headline(judgement, description, unrecorded, shown_strikes, limit)
     ran = terminal.target if terminal is not None and terminal.target != terminal.nominal else ""
     rework = decided and judgement.decision == protocol.DO_NOT_SHIP
 

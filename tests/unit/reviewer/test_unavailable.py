@@ -194,7 +194,10 @@ def test_a_verdict_body_carries_neither_the_marker_nor_a_next_step(policy: Polic
 def test_the_headline_the_collapsed_section_and_the_local_prefix_are_kept(policy: Policy) -> None:
     final = _pending(policy, _payload_attempts())
     lines = final.body.split("\n")
-    assert lines[0] == "### ⏳ NOT REVIEWED YET · reviewers unavailable · shadow (advisory)"
+    assert (
+        lines[0]
+        == "### ⏳ NOT REVIEWED YET · reviewer did not read every changed hunk (3 attempts) · shadow (advisory)"
+    )
     assert any(line.startswith("<details><summary>What happened") for line in lines)
     assert local.AVAILABILITY_PREFIX == "availability: "
     gone = _pending(policy, [], reasons=(f"small: {providers.UNAVAILABLE_PREFIX} {GATEWAY_PAYLOAD}",))
