@@ -302,7 +302,7 @@ def test_promotion_refusal_and_is_promotion_still_hold_even_if_exempt_matcher_re
         comments=[_standin()],
         force_exempt_matcher=True,
     )
-    assert no_status_code == review_check.WAITING
+    assert no_status_code == review_check.OUTSTANDING
 
 
 def test_missing_promotion_record_is_refused_even_with_ship_verdict_and_standin(

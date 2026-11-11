@@ -62,6 +62,7 @@ PAGE_SIZE = 100
 PASS = 0
 WAITING = 1
 ERROR = 2
+OUTSTANDING = 4
 
 _HEAD_OID_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
@@ -293,7 +294,7 @@ def decide(
             "findings, or post a stand-in attestation after that verdict"
         )
     if not (latest or standin):
-        return WAITING, (
+        return OUTSTANDING, (
             f"review: waiting for the review's verdict on {head_sha}, or a stand-in attestation "
             f"'Stand-in review: APPROVE {head_sha}' from a listed attester"
         )

@@ -131,7 +131,7 @@ def test_a_verdict_posted_exactly_at_the_retarget_does_not_count() -> None:
     receipt = _receipt(submitted_at=AFTER_RETARGET)
     assert (
         _decide(statuses=[_status(created_at=RETARGETED)], reviews=[receipt], base_date=RETARGETED)[0]
-        == review_check.WAITING
+        == review_check.OUTSTANDING
     )
     assert (
         _decide(statuses=[_status(created_at=AFTER_RETARGET)], reviews=[receipt], base_date=RETARGETED)[0]
@@ -146,7 +146,7 @@ def test_a_standin_posted_exactly_at_the_last_decisive_verdict_does_not_count() 
 
 
 def test_a_standin_posted_exactly_at_the_retarget_does_not_count() -> None:
-    assert _decide(statuses=[], comments=[_standin(RETARGETED)], base_date=RETARGETED)[0] == review_check.WAITING
+    assert _decide(statuses=[], comments=[_standin(RETARGETED)], base_date=RETARGETED)[0] == review_check.OUTSTANDING
     assert _decide(statuses=[], comments=[_standin(AFTER_RETARGET)], base_date=RETARGETED)[0] == review_check.PASS
 
 
@@ -606,7 +606,7 @@ def test_the_reviewer_policy_gate_paths_keep_an_otherwise_exempt_change_under_re
     net: Network, monkeypatch: pytest.MonkeyPatch, capsys: Any
 ) -> None:
     _wire(net, files=["_project/scripts/reviewers/templates/gate.md"], statuses=[], reviews=[])
-    assert _run(monkeypatch) == review_check.WAITING
+    assert _run(monkeypatch) == review_check.OUTSTANDING
     assert "waiting for the review's verdict" in capsys.readouterr().out
 
 
@@ -615,7 +615,7 @@ def test_a_retarget_voids_the_earlier_verdict_and_receipt_in_the_main_flow(
 ) -> None:
     timeline = [{"event": "base_ref_changed", "created_at": RETARGETED}]
     _wire(net, files=SOUNDNESS, statuses=[_status()], reviews=[_receipt()], timeline=timeline)
-    assert _run(monkeypatch) == review_check.WAITING
+    assert _run(monkeypatch) == review_check.OUTSTANDING
     assert "waiting for the review's verdict" in capsys.readouterr().out
     assert [
         request["body"] for request in net.requests if request["body"] and "id" in request["body"].get("variables", {})
@@ -734,3 +734,59 @@ def test_a_genuinely_new_decisive_status_still_invalidates_an_earlier_standin() 
     failing = _status("failure", created_at=RETARGETED, description="large: DO NOT SHIP")
     newer = _status("failure", created_at="2026-10-01T16:00:00Z", description="large: DO NOT SHIP")
     assert _decide(statuses=[failing, newer], comments=[_standin(AFTER_RETARGET)])[0] == review_check.WAITING
+
+
+def test_only_a_head_with_no_verdict_status_and_no_standin_is_outstanding() -> None:
+    code, message = _decide(statuses=[])
+    assert code == review_check.OUTSTANDING
+    assert message.endswith(f"'Stand-in review: APPROVE {HEAD}' from a listed attester")
+
+
+@pytest.mark.parametrize(
+    "statuses",
+    [
+        pytest.param([_status("pending", description="pending: no reviewer available")], id="pending-verdict"),
+        pytest.param([_status("pending", description="a review was edited")], id="edit-hold"),
+        pytest.param([_status("pending", description="pending: sweep retry queued")], id="sweep-pending-verdict"),
+        pytest.param([_status("failure", description="large: DO NOT SHIP")], id="do-not-ship"),
+        pytest.param(
+            [_status("failure", description="large: SHIP WITH FIXES, 2 defect(s) to fix")], id="open-findings"
+        ),
+        pytest.param(
+            [_status("failure", description="large: SHIP WITH FIXES, 2 defect(s) to fix; escalated D1")], id="escalated"
+        ),
+        pytest.param(
+            [_status("failure", description="refused after 3 DO NOT SHIP decisions: open a new one")], id="refused"
+        ),
+        pytest.param([_status("error", description="large: error")], id="error"),
+        pytest.param([_status("success", description="only exempt paths changed")], id="stale-exempt"),
+        pytest.param([_status("success")], id="unmatched-success"),
+    ],
+)
+def test_every_other_waiting_branch_stays_waiting(statuses: list[dict[str, Any]]) -> None:
+    kwargs: dict[str, Any] = {"statuses": statuses, "reviews": []}
+    assert _decide(**kwargs)[0] == review_check.WAITING
+
+
+def _decide_with(**over: Any) -> tuple[int, str]:
+    return review_check.decide(
+        HEAD,
+        SOUNDNESS,
+        [],
+        review_check.path_matcher(
+            2, 2, CONFIG.matchers, CONFIG.policy.classifier.exempt_paths, CONFIG.policy.classifier.gate_paths
+        ),
+        None,
+        [],
+        binding=BINDING,
+        reviews=[],
+        **over,
+    )
+
+
+def test_a_refused_omp_pin_bump_stays_waiting_even_without_a_verdict() -> None:
+    assert _decide_with(bump_refusals=["pin moved"])[0] == review_check.WAITING
+
+
+def test_a_refused_promotion_stays_waiting_even_without_a_verdict() -> None:
+    assert _decide_with(promotion_refusals=["lock changed"])[0] == review_check.WAITING

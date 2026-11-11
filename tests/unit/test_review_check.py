@@ -120,19 +120,19 @@ def test_exempt_only_change_skips() -> None:
 
 
 def test_machine_read_doc_needs_review() -> None:
-    assert _decide(files=["README.md"])[0] == 1
+    assert _decide(files=["README.md"])[0] == review_check.OUTSTANDING
 
 
 def test_code_outside_the_soundness_list_needs_review() -> None:
-    assert _decide(files=["benchbox/utils/row_compare.py"])[0] == 1
+    assert _decide(files=["benchbox/utils/row_compare.py"])[0] == review_check.OUTSTANDING
 
 
 def test_gate_template_matching_the_markdown_exemption_needs_review() -> None:
-    assert _decide(files=["_project/scripts/reviewers/templates/gate.md"])[0] == 1
+    assert _decide(files=["_project/scripts/reviewers/templates/gate.md"])[0] == review_check.OUTSTANDING
 
 
 def test_soundness_manifest_beats_the_markdown_exemption() -> None:
-    assert _decide(files=[".github/PULL_REQUEST_TEMPLATE.md"])[0] == 1
+    assert _decide(files=[".github/PULL_REQUEST_TEMPLATE.md"])[0] == review_check.OUTSTANDING
 
 
 def test_exempt_docs_are_skipped() -> None:
@@ -176,7 +176,7 @@ def test_the_apps_success_verdict_on_the_head_passes() -> None:
 
 def test_no_verdict_waits_and_names_the_standin_marker() -> None:
     assert _decide() == (
-        1,
+        review_check.OUTSTANDING,
         f"review: waiting for the review's verdict on {HEAD}, or a stand-in attestation "
         f"'Stand-in review: APPROVE {HEAD}' from a listed attester",
     )
@@ -241,7 +241,7 @@ def test_verdicts_posted_in_the_same_second_are_ordered_by_id() -> None:
     ],
 )
 def test_only_the_apps_verdict_status_counts(status: dict[str, Any]) -> None:
-    assert _run_review(statuses=[status])[0] == 1
+    assert _run_review(statuses=[status])[0] == review_check.OUTSTANDING
 
 
 def test_a_forged_success_does_not_hide_the_apps_failure() -> None:
@@ -261,7 +261,7 @@ def test_rename_with_a_non_exempt_side_needs_review() -> None:
         [{"filename": "docs/moved.py", "previous_filename": "benchbox/core/equivalence/checker.py"}]
     )
     assert files == ["docs/moved.py", "benchbox/core/equivalence/checker.py"]
-    assert _decide(files=files)[0] == 1
+    assert _decide(files=files)[0] == review_check.OUTSTANDING
 
 
 def test_rename_within_exempt_paths_skips() -> None:
@@ -276,7 +276,7 @@ def test_changed_paths_without_a_rename_keeps_only_the_filename() -> None:
 def test_truncated_file_list_needs_review() -> None:
     matcher = review_check.path_matcher(3000, 3001, CONFIG.matchers)
     assert matcher(OTHER_FILES) is True
-    assert _decide(files=OTHER_FILES, paths=matcher)[0] == 1
+    assert _decide(files=OTHER_FILES, paths=matcher)[0] == review_check.OUTSTANDING
 
 
 def test_complete_file_list_uses_the_exempt_paths() -> None:
@@ -292,7 +292,7 @@ def test_gate_paths_beat_the_exemption() -> None:
 
 
 def test_verdict_before_a_retarget_waits() -> None:
-    assert _run_review(base_date=RETARGETED)[0] == review_check.WAITING
+    assert _run_review(base_date=RETARGETED)[0] == review_check.OUTSTANDING
 
 
 def test_verdict_after_a_retarget_passes() -> None:
@@ -503,11 +503,11 @@ def test_standin_attestation_for_the_head_passes() -> None:
 )
 def test_standin_attestation_must_be_exact_current_and_authorized(comment: dict[str, Any]) -> None:
     status, _ = _decide(comments=[comment])
-    assert status == review_check.WAITING
+    assert status == review_check.OUTSTANDING
 
 
 def test_standin_attestation_before_a_retarget_waits() -> None:
-    assert _decide(comments=[_attestation(created_at=AFTER_HEAD)], base_date=RETARGETED)[0] == 1
+    assert _decide(comments=[_attestation(created_at=AFTER_HEAD)], base_date=RETARGETED)[0] == review_check.OUTSTANDING
 
 
 def test_a_later_valid_attestation_counts_after_an_earlier_invalid_one() -> None:
@@ -663,13 +663,13 @@ def test_the_gate_requires_the_review_and_prints_no_parity(monkeypatch: pytest.M
     assert _gate() == 0
     assert capsys.readouterr().out.splitlines() == [f"review: pass (review verdict for {HEAD})"]
     _stub_main(monkeypatch, [_verdict(login=CONNECTOR)])
-    assert _gate() == 1
+    assert _gate() == review_check.OUTSTANDING
 
 
 @pytest.mark.parametrize(
     ("statuses", "expected_status"),
     [
-        ([], review_check.WAITING),
+        ([], review_check.OUTSTANDING),
         ([_verdict("pending")], review_check.WAITING),
         ([_verdict("failure")], review_check.WAITING),
         ([_verdict("success")], review_check.PASS),
@@ -702,13 +702,13 @@ def test_deleting_a_later_do_not_ship_review_does_not_revive_an_earlier_ship(mon
 
 def test_a_ship_review_with_no_app_verdict_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_main(monkeypatch, [], reviews=[_review(SHIP_BODY)])
-    assert _gate() == review_check.WAITING
+    assert _gate() == review_check.OUTSTANDING
 
 
 def test_a_ship_review_with_a_non_app_verdict_status_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     forged = _verdict("success", login="joeharris76", user_type="User")
     _stub_main(monkeypatch, [forged], reviews=[_review(SHIP_BODY)])
-    assert _gate() == review_check.WAITING
+    assert _gate() == review_check.OUTSTANDING
 
 
 def test_an_edited_receipt_over_a_success_verdict_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -879,9 +879,9 @@ def test_the_gate_rejects_an_exempt_success_verdict_when_a_review_is_required(
 def test_a_shadow_header_review_does_not_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     shadow = _review(f"### review-shadow: success for `{HEAD}`\n\nDecision: **SHIP**.\n")
     _stub_main(monkeypatch, [], reviews=[shadow])
-    assert _gate() == review_check.WAITING
+    assert _gate() == review_check.OUTSTANDING
     _stub_main(monkeypatch, [_verdict(context="review-shadow")], reviews=[shadow])
-    assert _gate() == review_check.WAITING
+    assert _gate() == review_check.OUTSTANDING
 
 
 def test_fetch_statuses_reads_the_head_commit_and_keeps_the_creator_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -963,7 +963,7 @@ def test_the_api_root_is_overridden_only_by_a_loopback_server(value: str, expect
 
 def test_a_verdict_posted_before_the_base_changed_is_not_a_verdict_for_the_new_base() -> None:
     status, message = _run_review(statuses=[_verdict("success", created_at=AFTER_HEAD)], base_date=RETARGETED)
-    assert status == review_check.WAITING and "waiting for the review's verdict" in message
+    assert status == review_check.OUTSTANDING and "waiting for the review's verdict" in message
 
 
 BETA_BINDING = gate.load_gate_config(POLICY_REL, CONSUMER_BETA).binding
@@ -984,7 +984,7 @@ def _beta(**kwargs: Any) -> tuple[int, str]:
 
 def test_the_review_identity_comes_from_the_binding() -> None:
     assert _run_review()[0] == review_check.PASS
-    assert _beta(statuses=[_verdict()], reviews=[_receipt_review()])[0] == review_check.WAITING
+    assert _beta(statuses=[_verdict()], reviews=[_receipt_review()])[0] == review_check.OUTSTANDING
     beta_login = "beta-review[bot]"
     status, _ = _beta(statuses=[_verdict(login=beta_login)], reviews=[_receipt_review(login=beta_login)])
     assert status == review_check.PASS
@@ -993,7 +993,7 @@ def test_the_review_identity_comes_from_the_binding() -> None:
 def test_the_attesters_come_from_the_binding() -> None:
     comment = _attestation()
     assert _decide(comments=[comment])[0] == review_check.PASS
-    assert _beta(comments=[comment])[0] == review_check.WAITING
+    assert _beta(comments=[comment])[0] == review_check.OUTSTANDING
     for attester in ("beta-owner", "beta-deputy"):
         status, message = _beta(comments=[{**comment, "login": attester}])
         assert status == review_check.PASS and attester in message

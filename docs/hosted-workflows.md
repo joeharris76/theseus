@@ -102,14 +102,14 @@ The `gate.yml` workflow has a single pin: the gate runs from the lock at the tip
 
 ## What to require, and what the job exit means
 
-Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it stays `failure` while a review is pending and turns `success` only on a pass.
+Branch protection and rulesets MUST require the App-posted commit status context (`review-gate`), never the `gate / gate` check-run. The check-run is the workflow job's own result: it reports whether the job ran without error, not whether the review passed, and a refresh run can leave a stale check-run on a different SHA. The App-posted status is the only authoritative verdict; it is `pending` while the head has no review-verdict status yet, `failure` for every other not-yet-passing outcome (a pending, failed, refused or escalated verdict, open findings, a refused bump or promotion, a gate error), and `success` only on a pass.
 
 `theseus gate` exits with:
 
 | Exit | Meaning | `gate / gate` job |
 |---|---|---|
 | 0 | Posted `success`. | Green. |
-| 3 | Posted, waiting: the status was posted as not-yet-passing (`failure`) because the review is pending or blocking. | Green; the step summary says `posted, waiting`. A green job here is not a pass. |
+| 3 | Posted, waiting: the status was posted as not-yet-passing: `pending` when the head has no review-verdict status yet, `failure` when a verdict or other rule blocks it. | Green; the step summary says `posted, waiting`. A green job here is not a pass. |
 | 2 | Error: the gate could not decide or could not post. | Red. |
 | any other non-zero | Crash or spawn failure. | Red. |
 
@@ -117,7 +117,7 @@ The required `review-gate` context MUST be restricted to the review App as its s
 
 The job treats exit 3 as waiting only when the gate's result file (`REVIEW_GATE_RESULT_FILE`) also records 3, exactly as the sweep does; an unreported 3, or a failed summary write, fails the job.
 
-The status the App posts does not depend on the job result: a waiting gate still posts `failure` on the required context. The hourly sweep applies the same rule (exit 0 and 3 are accepted).
+The status the App posts does not depend on the job result: a waiting gate still posts a non-success state on the required context (`pending` for a head with no verdict yet, otherwise `failure`). The hourly sweep applies the same rule (exit 0 and 3 are accepted).
 
 Concurrency stays with the caller. The example `review-gate.yml` still cancels an in-progress gate when a newer event arrives for the same pull request, because that guarantees the newest head's gate is the one that runs and posts; a cancelled run is grey, not red, and never posts a status.
 

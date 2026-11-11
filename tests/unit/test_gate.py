@@ -113,10 +113,11 @@ def test_gate_reuses_the_checker_decision_and_helpers() -> None:
     assert gate.decide is review_check.decide
     assert gate.path_matcher is review_check.path_matcher
     assert gate.changed_paths is review_check.changed_paths
-    assert (gate.PASS, gate.WAITING, gate.ERROR) == (
+    assert (gate.PASS, gate.WAITING, gate.ERROR, gate.OUTSTANDING) == (
         review_check.PASS,
         review_check.WAITING,
         review_check.ERROR,
+        review_check.OUTSTANDING,
     )
 
 
@@ -306,20 +307,50 @@ def test_exact_standin_for_the_head_passes() -> None:
 def test_standin_with_extra_text_waits() -> None:
     comments = [_attestation(f"note: Stand-in review: APPROVE {HEAD} thanks")]
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING)
-    assert expected[0] == review_check.WAITING
+    assert expected[0] == review_check.OUTSTANDING
     assert gate.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), None, comments, binding=BINDING) == expected
 
 
 def test_absent_verdict_waits() -> None:
     expected = review_check.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), binding=BINDING)
-    assert expected[0] == review_check.WAITING
+    assert expected[0] == review_check.OUTSTANDING
     assert gate.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), binding=BINDING) == expected
 
 
-def test_gate_state_maps_pass_to_success_and_everything_else_to_failure() -> None:
-    assert gate.gate_state(gate.PASS) == "success"
-    assert gate.gate_state(gate.WAITING) == "failure"
-    assert gate.gate_state(gate.ERROR) == "failure"
+@pytest.mark.parametrize(
+    ("status", "state"),
+    [
+        (gate.PASS, "success"),
+        (gate.OUTSTANDING, "pending"),
+        (gate.WAITING, "failure"),
+        (gate.ERROR, "failure"),
+        (99, "failure"),
+    ],
+)
+def test_gate_state_maps_pass_to_success_outstanding_to_pending_and_everything_else_to_failure(
+    status: int, state: str
+) -> None:
+    assert gate.gate_state(status) == state
+
+
+def test_the_outcome_codes_are_distinct() -> None:
+    assert len({gate.PASS, gate.WAITING, gate.ERROR, gate.OUTSTANDING}) == 4
+
+
+def test_a_fresh_head_without_a_verdict_posts_pending_with_the_waiting_description() -> None:
+    code, message = gate.decide(HEAD, SOUNDNESS_FILES, [], _matcher(), binding=BINDING)
+    assert code == gate.OUTSTANDING
+    assert f"Stand-in review: APPROVE {HEAD}" in message
+    payload = gate.status_payload(code, message)
+    assert payload["state"] == "pending" and payload["context"] == "review-gate"
+    assert payload["description"] == gate.gate_description(message)
+
+
+def test_the_error_path_still_posts_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, gate_api: GateApi) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    assert gate.main(_unloadable_argv(_unloadable_root(tmp_path, "policy"), "--head-sha", HEAD)) == gate.ERROR
+    assert gate_api.statuses == [(HEAD, "failure")]
+    assert gate.status_payload(gate.ERROR, "evaluation error")["state"] == "failure"
 
 
 def test_status_payload_posts_the_gate_context() -> None:
@@ -421,6 +452,17 @@ def test_main_posts_success_and_exits_zero(monkeypatch: pytest.MonkeyPatch) -> N
 def test_main_posts_failure_and_exits_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_evaluate(monkeypatch, gate.WAITING, "review: waiting")
     assert gate.main([*BASE_ARGS]) == gate.WAITING
+
+
+def test_outstanding_posts_pending_and_exits_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    posted = _stub_evaluate(monkeypatch, gate.OUTSTANDING, "review: waiting")
+    assert gate.process_exit(gate.main([*BASE_ARGS])) == gate.WAITING_EXIT
+    assert posted["state"] == "pending" and posted["context"] == "review-gate"
+
+
+def test_outstanding_with_no_post_exits_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_evaluate(monkeypatch, gate.OUTSTANDING, "review: waiting")
+    assert gate.process_exit(gate.main([*BASE_ARGS, "--no-post"])) == gate.WAITING_EXIT
 
 
 def test_waiting_still_posts_failure_on_the_required_context_while_the_process_exits_three(
@@ -712,7 +754,7 @@ def test_pull_read_that_fails_twice_then_succeeds_evaluates_normally(
 ) -> None:
     calls = _stub_unreadable_pull(monkeypatch, failures=2)
     posts = _record_posts(monkeypatch)
-    assert gate.main([*BASE_ARGS]) in (gate.PASS, gate.WAITING)
+    assert gate.main([*BASE_ARGS]) in (gate.PASS, gate.WAITING, gate.OUTSTANDING)
     assert len(calls) == 4
     assert sleeps == [2, 4]
     assert [head for head, _, _ in posts] == [HEAD]
@@ -884,6 +926,7 @@ def test_process_exit_gives_waiting_a_code_distinct_from_crashes() -> None:
     assert gate.process_exit(gate.PASS) == 0
     assert gate.process_exit(gate.ERROR) == gate.ERROR
     assert gate.process_exit(gate.WAITING) == gate.WAITING_EXIT
+    assert gate.process_exit(gate.OUTSTANDING) == gate.WAITING_EXIT
     assert gate.WAITING_EXIT not in (0, 1, gate.ERROR)
 
 
@@ -903,7 +946,7 @@ def test_script_entry_point_exits_through_the_process_mapping(entry: list[str]) 
 
 @pytest.mark.parametrize(
     ("status", "expected"),
-    [("PASS", "0"), ("WAITING", "3"), ("ERROR", "2")],
+    [("PASS", "0"), ("WAITING", "3"), ("OUTSTANDING", "3"), ("ERROR", "2")],
 )
 def test_run_reports_the_process_exit_in_the_result_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str, expected: str
@@ -1028,5 +1071,5 @@ def test_the_gated_base_comes_from_the_consumer_policy(monkeypatch: pytest.Monke
     monkeypatch.setattr(gate, "fetch_base_change_date", lambda repo, pr, token: None)
     monkeypatch.setattr(gate, "fetch_comments", lambda repo, pr, token: [])
     monkeypatch.setattr(gate, "fetch_reviews", lambda repo, pr, token: [])
-    assert gate.main(beta_args) == gate.WAITING
+    assert gate.main(beta_args) == gate.OUTSTANDING
     assert [head for head, _, _ in posts] == [HEAD]
