@@ -395,3 +395,18 @@ def test_every_defined_name_is_a_needle_and_an_oversized_cited_file_blocks(polic
     (tmp_path / "big.py").write_text("x = 1\n" + "#" * 300000, encoding="utf-8")
     (tmp_path / "user.py").write_text("unrelated\n", encoding="utf-8")
     assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_changed_file_that_the_cited_file_imports_is_a_possible_trigger(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "ratio.py").write_text(
+        "from src.helpers import denominator\ndef ratio(v):\n    return v / denominator()\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "helpers.py").write_text("def denominator():\n    return 0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"src/helpers.py": [[2, 2]]}, changed_paths=["src/helpers.py"])
+    finding = _old(detail="src/ratio.py:3 divides by zero", file="src/ratio.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+    (tmp_path / "src" / "other.py").write_text("x = 1\n", encoding="utf-8")
+    unrelated = _plan(policy, tmp_path, added_lines={"src/other.py": [[1, 1]]}, changed_paths=["src/other.py"])
+    assert _judged(unrelated, finding).decision == protocol.SHIP

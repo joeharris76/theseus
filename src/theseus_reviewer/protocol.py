@@ -890,8 +890,13 @@ class KnownScope:
             return True
         packages = {_clean_path(item).split("/", 1)[0] if "/" in _clean_path(item) else "" for item in files}
         names = {_clean_path(item).rsplit("/", 1)[-1].casefold() for item in files}
+        cited_text = self._cited_text(files)
+        if cited_text is None:
+            return True
         for path in scanned:
             if self._non_source_trigger(path, packages):
+                return True
+            if self._depended_on(path, cited_text):
                 return True
             full = os.path.realpath(os.path.join(root, path))
             if not (full.startswith(root + os.sep) and os.path.isfile(full)):
@@ -906,6 +911,30 @@ class KnownScope:
             if pattern.search(content) or any(name in content.casefold() for name in names):
                 return True
         return False
+
+    def _cited_text(self, files: Sequence[str]) -> str | None:
+        root = os.path.realpath(str(self.workspace))
+        chunks: list[str] = []
+        for path in files:
+            full = os.path.realpath(os.path.join(root, path))
+            try:
+                if not (full.startswith(root + os.sep) and os.path.isfile(full)):
+                    continue
+                if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
+                    return None
+                with open(full, encoding="utf-8", errors="replace") as handle:
+                    chunks.append(handle.read().casefold())
+            except OSError:
+                return None
+        return "\n".join(chunks)
+
+    @staticmethod
+    def _depended_on(path: str, cited_text: str) -> bool:
+        parts = _plain(path).rsplit(".", 1)[0].split("/")
+        if parts[-1] == "__init__" and len(parts) > 1:
+            parts = parts[:-1]
+        names = {parts[-1], ".".join(parts), _plain(path).rsplit("/", 1)[-1]}
+        return any(re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", cited_text) for name in names if name)
 
     @staticmethod
     def _non_source_trigger(path: str, packages: set[str]) -> bool:
