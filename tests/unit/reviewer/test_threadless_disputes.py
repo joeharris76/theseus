@@ -218,9 +218,9 @@ def test_an_open_finding_without_a_thread_gets_one_when_its_line_is_in_the_diff(
     comments = final.review["comments"]
     assert len(comments) == 1 and comments[0]["path"] == CHECKER and comments[0]["line"] == 2
     assert "<!-- review-defect: c1-D1 -->" in comments[0]["body"]
-    assert "**High**: Old" in comments[0]["body"]
-    assert "**Review threads opened for earlier findings that had none**\n\n- D1" in final.review["body"]
-    assert "No review thread exists" not in final.review["body"]
+    assert comments[0]["body"].startswith("🟠 **High** · D1 · Old\n")
+    assert f"- 🟠 **High** · D1 · Old · <code>{CHECKER}</code> (thread below)" in final.review["body"]
+    assert "**Still open**" in final.review["body"]
 
 
 def test_a_finding_that_already_has_a_thread_is_not_threaded_again(policy: Policy, tmp_path: Path) -> None:
@@ -247,10 +247,8 @@ def test_a_finding_outside_the_diff_gets_no_thread_and_the_body_names_the_disput
 ) -> None:
     final = _carried(policy, tmp_path, _prior("D1", line=99))
     assert final.review["comments"] == []
-    assert (
-        "No review thread exists for D1. An attester can dispute one with a pull request comment:"
-        in (final.review["body"])
-    )
+    assert f"- 🟠 **High** · D1 · Old · <code>{CHECKER}:99</code>" in final.review["body"]
+    assert "(thread below)" not in final.review["body"]
     assert "`Dispute: D<n> - <reason>`" in final.review["body"]
 
 
@@ -266,7 +264,8 @@ def test_a_fresh_defect_outside_the_diff_is_also_disputable_by_comment(policy: P
 
     final = _final(policy, tmp_path, plan, _v("s", [{**_finding("High", 400)}]))
     assert final.review["comments"] == []
-    assert "No review thread exists for D1" in final.review["body"]
+    assert "<details><summary>🟠 <b>High</b> · D1 · High issue" in final.review["body"]
+    assert "(thread below)" not in final.review["body"]
 
 
 def test_the_plan_reads_which_findings_already_have_an_open_thread() -> None:

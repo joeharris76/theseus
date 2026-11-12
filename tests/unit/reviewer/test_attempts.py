@@ -187,8 +187,10 @@ def test_absence_then_clean_verdict_passes(policy: Policy, tmp_path: Path) -> No
     assert final.state == "success"
     assert final.description == status_text.shipped([], "", status_text.DESCRIPTION_LIMIT)
     assert final.review is not None and final.review["comments"] == []
-    assert "Decision: **SHIP**." in final.review["body"]
-    assert "small (attempt 1): the reviewer did not finish within its time limit" in final.review["body"]
+    body = final.review["body"]
+    assert body.startswith("### ✅ SHIP · no open findings")
+    assert "<details><summary>Run details · 1 earlier attempt did not finish</summary>" in body
+    assert "small (attempt 1): the reviewer did not finish within its time limit" in body
 
 
 def test_ship_with_fixes_fails_and_splits_defects(policy: Policy, tmp_path: Path) -> None:
@@ -200,10 +202,10 @@ def test_ship_with_fixes_fails_and_splits_defects(policy: Policy, tmp_path: Path
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert final.state == "failure"
     assert final.description == "SHIP WITH FIXES · 2 to fix (1 High, 1 Low) · see review threads"
-    inline, outside = final.body.split("**Defects outside the diff**")
-    assert "checker.py:2`" in inline and "checker.py:40`" in outside
+    assert "checker.py:2<" in final.body and "checker.py:40<" in final.body
+    assert final.body.index("🟠 <b>High</b>") < final.body.index("🔵 <b>Low</b>")
     assert "@someone" not in final.body and "https://" not in final.body
-    assert "Shadow mode" in final.body
+    assert final.body.splitlines()[0].endswith(" · shadow (advisory)")
 
 
 def test_review_delivery_builds_line_threads_only_inside_the_diff(policy: Policy, tmp_path: Path) -> None:
@@ -216,7 +218,10 @@ def test_review_delivery_builds_line_threads_only_inside_the_diff(policy: Policy
     assert [(item["path"], item["line"], item["side"]) for item in final.review["comments"]] == [
         ("benchbox/core/equivalence/checker.py", 2, "RIGHT")
     ]
-    assert "checker.py:40`" in final.review["body"]
+    assert (
+        f"<code>{CHECKER}:40</code>" in final.review["body"]
+        and f"{CHECKER}</code> (thread below)" in final.review["body"]
+    )
 
 
 def test_artifact_from_another_run_or_head_is_rejected(policy: Policy, tmp_path: Path) -> None:
@@ -385,7 +390,7 @@ def test_cli_select_finalize_and_ensure_attempt(
     assert state["head_sha"] == HEAD and state["outcome"] == "failure"
     assert state["pending_cause"] is None
     comment = json.loads((final_dir / "comment.json").read_text(encoding="utf-8"))
-    assert "Defects on diff lines" in comment["body"]
+    assert "<details><summary>🔴 <b>Critical</b>" in comment["body"]
 
 
 def test_cli_finalize_keeps_carriage_returns_inside_diff_lines(
@@ -415,7 +420,7 @@ def test_cli_finalize_keeps_carriage_returns_inside_diff_lines(
         str(plan_dir / "classification.json"),
     )
     comment = json.loads((final_dir / "comment.json").read_text(encoding="utf-8"))
-    assert "Defects on diff lines" not in comment["body"]
+    assert comment["body"].startswith("### 🔧 SHIP WITH FIXES · 1 finding blocks merge")
 
 
 def test_cli_finalize_refuses_a_plan_from_another_run(
@@ -498,7 +503,7 @@ def test_verdict_comes_from_the_terminal_reviewer_slot(policy: Policy, tmp_path:
     final = report.finalize(plan, small, [], attempts_list, {1: decisive, 2: later}, commentable_lines(DIFF))
     assert final.state == "failure"
     assert "decisive" in final.body and "later" not in final.body
-    assert "checker.py:2`" in final.body and "checker.py:40`" not in final.body
+    assert "checker.py:2<" in final.body and "checker.py:40<" not in final.body
     assert final.pending_cause is None
 
 
@@ -509,9 +514,8 @@ def test_defect_outside_the_diff_still_fails(policy: Policy, tmp_path: Path) -> 
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert step.kind == selection.FAIL
     assert final.state == "failure"
-    assert "Defects on diff lines" not in final.body
-    assert "checker.py:400`" in final.body.split("**Defects outside the diff**")[1]
-    assert OUTSIDE_NOTE in final.body
+    assert f"<code>{CHECKER}:400</code>" in final.body
+    assert final.body.splitlines()[0].startswith("### 🔧 SHIP WITH FIXES · 1 finding blocks merge")
 
 
 def _review_final(policy: Policy, tmp_path: Path, findings: list[dict[str, Any]], bucket: str = "small"):
@@ -526,26 +530,26 @@ def test_review_delivery_opens_a_thread_for_every_defect_on_a_diff_line(policy: 
     final = _review_final(policy, tmp_path, findings)
     assert final.review is not None
     assert [item["body"].split("\n", 1)[0] for item in final.review["comments"]] == [
-        "**Critical**: Critical issue",
-        "**High**: High issue",
-        "**Medium**: Medium issue",
-        "**Low**: Low issue",
+        "🔴 **Critical** · D1 · Critical issue",
+        "🟠 **High** · D2 · High issue",
+        "🟡 **Medium** · D3 · Medium issue",
+        "🔵 **Low** · D4 · Low issue",
     ]
-    assert OUTSIDE_NOTE not in final.body
+    assert all(line.endswith("(thread below)") for line in final.body.splitlines() if line.startswith("- "))
 
 
 @pytest.mark.parametrize("bucket", ["small", "medium"])
 def test_severity_never_gates_a_listed_defect(policy: Policy, tmp_path: Path, bucket: str) -> None:
     final = _review_final(policy, tmp_path, [_finding("Low", 2)], bucket=bucket)
     assert final.state == "failure"
-    assert "Decision: **SHIP WITH FIXES**." in final.body
+    assert final.body.startswith("### 🔧 SHIP WITH FIXES · 1 finding blocks merge")
 
 
 def test_review_delivery_keeps_a_defect_outside_the_diff_in_the_body(policy: Policy, tmp_path: Path) -> None:
     final = _review_final(policy, tmp_path, [_finding("High", 400)])
     assert final.review is not None and final.review["comments"] == []
     assert final.state == "failure"
-    assert OUTSIDE_NOTE in final.body
+    assert f"<code>{CHECKER}:400</code>" in final.body and "(thread below)" not in final.body
 
 
 def test_comment_delivery_still_lists_every_finding_on_a_diff_line(policy: Policy, tmp_path: Path) -> None:
@@ -554,9 +558,9 @@ def test_comment_delivery_still_lists_every_finding_on_a_diff_line(policy: Polic
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert final.review is None
-    assert "Defects on diff lines" in final.body
-    assert "Defects outside the diff" not in final.body and "Defects without a review thread" not in final.body
-    assert "checker.py:1`: D2: Low issue" in final.body
+    assert "<details><summary>🟠 <b>High</b>" in final.body and "<details><summary>🔵 <b>Low</b>" in final.body
+    assert "(thread below)" not in final.body
+    assert f"<code>{CHECKER}:1</code>" in final.body and "Low issue" in final.body
 
 
 def test_review_comment_spans_a_fully_commentable_range(policy: Policy, tmp_path: Path) -> None:
@@ -591,7 +595,7 @@ def test_a_finding_without_end_line_posts_one_line(policy: Policy, tmp_path: Pat
 
 def test_finding_lines_show_the_range_in_the_body(policy: Policy, tmp_path: Path) -> None:
     final = _review_final(policy, tmp_path, [{**_finding("High", 400), "end_line": 410}])
-    assert f"`{CHECKER}:400-410`" in final.body
+    assert f"<code>{CHECKER}:400-410</code>" in final.body
 
 
 def test_the_fingerprint_ignores_the_line_range() -> None:
@@ -617,9 +621,11 @@ def test_findings_already_open_are_not_posted_again_but_still_block(policy: Poli
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, commentable_lines(DIFF))
     assert final.state == "failure"
     assert final.review is not None
-    assert [item["body"].split("\n", 1)[0] for item in final.review["comments"]] == ["**Critical**: Critical issue"]
-    assert "**Defects already open as review threads, not posted again**" in final.body
-    assert f"- **High** `{CHECKER}`: D1: High issue" in final.body
+    assert [item["body"].split("\n", 1)[0] for item in final.review["comments"]] == [
+        "🔴 **Critical** · D2 · Critical issue"
+    ]
+    assert "**Already open as review threads**" in final.body
+    assert f"- 🟠 **High** · D1 · High issue · <code>{CHECKER}</code> (existing thread)" in final.body
 
 
 def test_second_run_with_every_finding_open_adds_no_thread(policy: Policy, tmp_path: Path) -> None:
@@ -658,11 +664,10 @@ def test_a_pending_run_posts_its_diagnostics_as_a_review(
     )
     assert out["state"] == "pending" and out["review"] == "true" and out["comment"] == "false"
     review = json.loads((tmp_path / "o" / "review.json").read_text(encoding="utf-8"))
-    assert review["body"].startswith(f"### review-verdict: pending for `{HEAD}`")
-    assert (
-        review["comments"] == []
-        and "small (attempt 1): the model provider rejected the review's credentials" in review["body"]
-    )
+    assert review["body"].startswith("### ⏳ NOT REVIEWED YET · reviewers unavailable")
+    assert f"<!-- review-verdict: v2 pending {HEAD} -->" in review["body"]
+    assert review["comments"] == []
+    assert "small (attempt 1): the model provider rejected the review's credentials" in review["body"]
     assert "bad key" not in review["body"]
 
 
@@ -672,7 +677,7 @@ def test_withheld_result_is_posted_as_a_pending_review(policy: Policy, tmp_path:
     loaded, step, errors = _decide(policy, plan, tmp_path)
     final = report.finalize(plan, step, errors, loaded.attempts, loaded.verdicts, {})
     assert final.state == "pending" and final.review is not None
-    assert final.review["body"].startswith(f"### review-verdict: pending for `{HEAD}`")
+    assert final.review["body"].startswith("### ⏳ NOT REVIEWED · run artifacts failed validation")
 
 
 def test_an_oversize_plan_finalizes_pending_for_its_size_and_names_the_ways_forward(

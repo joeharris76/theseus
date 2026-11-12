@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import credentials, dedup, protocol, report, selection, status_text
+from theseus_reviewer import credentials, dedup, layout, protocol, report, selection, status_text
 from theseus_reviewer.diff import commentable_lines
 from theseus_reviewer.policy import Policy
 from theseus_reviewer.retry import INTEGRITY, MARKER_LIMIT, OVERSIZE, UNREPORTED
@@ -52,7 +52,9 @@ def _comment_plan(policy: Policy, **over: Any) -> dict[str, Any]:
 
 
 def _assert_shape(text: str) -> None:
-    lines = [line for line in text.split("\n") if not line.startswith(protocol.MARKER_OPEN)]
+    lines = [
+        line for line in text.split("\n") if not line.startswith((protocol.MARKER_OPEN, "<!-- review-unavailable:"))
+    ]
 
     def listing(line: str) -> bool:
         return line.startswith(("- ", "  "))
@@ -116,34 +118,35 @@ def test_a_follow_up_body_lists_every_part_of_the_decision_in_order(policy: Poli
     body = final.body
     _assert_shape(body)
     lines = body.split("\n")
-    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
-    for line in (
-        f"- **Medium** `{CHECKER}:2`: D7: Inline problem",
-        "  inline detail",
-        f"- **Medium** `{CHECKER}:40`: D8: Outside problem",
-        f"- **Medium** `{CHECKER}`: D9: Already open problem",
-        f"- **High** `{CHECKER}:1-2`: D5: Old",
-        f"- **High** `{CHECKER}:2`: D6: Old",
-        f"- **Medium** `{OTHER}:9`: Elsewhere problem",
-    ):
-        assert line in lines
-    assert "Decision: **SHIP WITH FIXES**." in lines
-    assert "Overall summary" in lines
-    assert "Reviewer: small (role review, omp @smol)." in lines
-    assert any("Verified fixed: D1, D2." in line for line in lines)
-    assert any("Withdrawn as never defects: D3, D4." in line for line in lines)
-    assert any(line.startswith("1 identical finding(s)") for line in lines)
-    assert any(f"`{OLD}`" in line and line.startswith("Scope:") for line in lines)
+    assert lines[0] == "### 🔧 SHIP WITH FIXES · 5 findings block merge · shadow (advisory)"
+    assert lines[2].startswith(f"**2 High · 3 Medium** · reviewed {HEAD} · changes since {OLD} · fixed: **D1**, **D2**")
+    assert "(resolve their threads) · withdrawn as never defects: **D3**, **D4** (resolve their threads)" in lines[2]
+    assert lines[2].endswith(f"fix each one, or contest it with a comment `{protocol.COMMENT_DISPUTE_GRAMMAR}`")
+    expected = (
+        f"<details><summary>🟡 <b>Medium</b> · D7 · Inline problem · <code>{CHECKER}:2</code></summary>",
+        "inline detail",
+        f"- 🟡 **Medium** · D8 · Outside problem · <code>{CHECKER}:40</code>",
+        "**Still open**",
+        f"- 🟠 **High** · D5 · Old · <code>{CHECKER}:1-2</code>",
+        f"- 🟠 **High** · D6 · Old · <code>{CHECKER}:2</code>",
+        "**Already open as review threads**",
+        f"- 🟡 **Medium** · D9 · Already open problem · <code>{CHECKER}</code> (existing thread)",
+        "<details><summary>Not counted: defects in files this follow-up did not review</summary>",
+        f"- 🟡 **Medium** · Elsewhere problem · <code>{OTHER}:9</code>",
+        "<details><summary>Reviewer notes · <code>small (omp @smol)</code></summary>",
+        "Reviewer: `small (role review, omp @smol)`.",
+        "Overall summary",
+        "1 identical finding(s) were reported more than once and are listed once.",
+        "<details><summary>Run details · 1 earlier attempt did not finish</summary>",
+        "- max (attempt 2): the reviewer did not finish within its time limit",
+        "- medium: no reviewer could run",
+    )
+    positions = [lines.index(line) for line in expected]
+    assert positions == sorted(positions)
     assert any("1 of 3" in line and "DO NOT SHIP" in line for line in lines)
-    assert "- max (attempt 2): the reviewer did not finish within its time limit" in lines
-    assert "- medium: no reviewer could run" in lines
     assert not any(line.startswith("- small: waits") for line in lines)
-    assert any(line.startswith("Shadow mode") for line in lines)
-    opener = next(index for index, line in enumerate(lines) if line.startswith("<details>"))
-    outside = lines.index(f"- **Medium** `{CHECKER}:40`: D8: Outside problem")
-    elsewhere = lines.index(f"- **Medium** `{OTHER}:9`: Elsewhere problem")
-    assert outside < opener < elsewhere < lines.index("</details>")
-    assert final.body.split("\n\n")[-1].startswith(protocol.MARKER_OPEN)
+    assert "Verified fixed" not in body and "supersedes" not in body and "Decision: **" not in body
+    assert lines[-2].startswith(layout.VERDICT_MARKER_OPEN) and lines[-1].startswith(protocol.MARKER_OPEN)
     assert final.reviewer == "small" and final.strikes == 1 and final.pending_cause is None
     assert final.review is None and final.description == (
         status_text.with_findings(
@@ -160,7 +163,9 @@ def test_a_follow_up_records_every_open_defect_with_its_next_id(policy: Policy) 
     assert record["next_id"] == 10 and record["run_uuid"] == "a" * 32
     assert record["forced"] is False and record["summary"] == "" and record["carried"] is False
     assert final.review is not None
-    assert sorted(item["body"].split("\n")[0] for item in final.review["comments"]) == ["**Medium**: Inline problem"]
+    assert sorted(item["body"].split("\n")[0] for item in final.review["comments"]) == [
+        "🟡 **Medium** · D7 · Inline problem"
+    ]
 
 
 def test_a_forced_round_records_that_it_was_forced(policy: Policy) -> None:
@@ -176,12 +181,11 @@ def test_the_review_sections_follow_the_delivery_mode(policy: Policy) -> None:
     comment = _finalize(policy, _comment_plan(policy), verdict)
     review = _finalize(policy, _protocol_plan(policy), verdict)
     assert comment.review is None and review.review is not None
-    assert f"- **Medium** `{CHECKER}:2`: D1: Inline problem" in comment.body.split("\n")
-    assert f"- **Medium** `{CHECKER}:2`: D1: Inline problem" not in review.body.split("\n")
-    assert f"- **Medium** `{CHECKER}:40`: D2: Outside problem" in review.body.split("\n")
-    assert "Defects on diff lines" in comment.body and "Defects on diff lines" not in review.body
-    assert "Defects without a review thread" in review.body
-    assert "Defects outside the diff" in comment.body
+    comment_lines, review_lines = comment.body.split("\n"), review.body.split("\n")
+    assert f"- 🟡 **Medium** · D1 · Inline problem · <code>{CHECKER}:2</code>" in comment_lines
+    assert f"- 🟡 **Medium** · D1 · Inline problem · <code>{CHECKER}</code> (thread below)" in review_lines
+    assert f"- 🟡 **Medium** · D2 · Outside problem · <code>{CHECKER}:40</code>" in review_lines
+    assert "(thread below)" not in comment.body and review.body.count("(thread below)") == 1
     for final in (comment, review):
         _assert_shape(final.body)
 
@@ -193,7 +197,7 @@ def test_a_plan_without_protocol_or_delivery_uses_the_documented_defaults(policy
     plan["protocol"] = {}
     final = _finalize(policy, plan, _v("s", [_finding("Medium")]), kind=selection.FAIL)
     assert final.review is None and final.strikes == 0 and final.pending_cause is None
-    assert f"- **Medium** `{CHECKER}:2`: D1: Medium issue" in final.body.split("\n")
+    assert f"<details><summary>🟡 <b>Medium</b> · D1 · Medium issue · <code>{CHECKER}:2</code></summary>" in final.body
     assert protocol.MARKER_OPEN not in final.body
     review = _finalize(policy, {**plan, "findings_delivery": "review"}, _v("s", [_finding("Medium")]))
     assert review.review is not None
@@ -227,7 +231,7 @@ def test_a_clean_ship_posts_an_empty_body_but_every_other_result_posts_one(polic
     plan = _protocol_plan(policy)
     ship = _finalize(policy, plan, _v("fine"))
     assert ship.state == "success" and ship.body == "" and ship.reviewer == "small"
-    assert ship.review is not None and ship.review["body"].startswith("### review-verdict: success")
+    assert ship.review is not None and ship.review["body"].startswith("### ✅ SHIP · no open findings")
     fixes = _finalize(policy, plan, _v("s", [_defect("Problem")]), kind=selection.FAIL)
     assert fixes.body != "" and fixes.state == "failure"
     refused = _v("no", [], decision="DO_NOT_SHIP")
@@ -235,7 +239,7 @@ def test_a_clean_ship_posts_an_empty_body_but_every_other_result_posts_one(polic
     assert forced_state.state == "success" and forced_state.body != ""
     pending = _finalize(policy, plan, None, kind=selection.PENDING, reviewer=None)
     assert pending.body != "" and pending.state == "pending" and pending.reviewer is None
-    assert pending.body.endswith("\n") and not pending.body.endswith("\n\n")
+    assert f"<!-- review-verdict: v2 pending {HEAD} -->" in pending.body
     shipped_pending = _finalize(policy, plan, _v("fine"), kind=selection.PENDING)
     assert shipped_pending.state == "pending" and shipped_pending.body != ""
 
@@ -245,8 +249,10 @@ def test_a_do_not_ship_explains_that_no_defects_are_listed(policy: Policy) -> No
     final = _finalize(policy, _protocol_plan(policy, strikes=1), verdict, kind=selection.FAIL)
     lines = final.body.split("\n")
     _assert_shape(final.body)
-    assert "Rework everything" in lines and "Decision: **DO NOT SHIP**." in lines
-    assert any(line.startswith("No defects are listed for this decision") for line in lines)
+    assert "Rework everything" in lines
+    assert lines[0] == "### ⛔ DO NOT SHIP · rework needed · strike 2 of 3 · shadow (advisory)"
+    assert any(line.startswith("**Next:** rework and push. A new head gets a full review.") for line in lines)
+    assert not any(line.startswith("No defects are listed") for line in lines)
     assert f"{CHECKER}:2" not in final.body
     ship = _finalize(policy, _protocol_plan(policy), _v("fine"))
     assert ship.review is not None
@@ -259,7 +265,7 @@ def test_a_failing_attempt_after_an_absence_uses_the_failing_attempt(policy: Pol
     verdicts = {2: validate(_v("s", [_defect("Problem")]))}
     step = Step(selection.FAIL, policy.reviewers["small"], ())
     final = report.finalize(_comment_plan(policy), step, [], attempts, verdicts, COMMENTABLE)
-    assert final.state == "failure" and "D1: Problem" in final.body and final.reviewer == "small"
+    assert final.state == "failure" and "D1 · Problem" in final.body and final.reviewer == "small"
 
 
 def test_a_pass_followed_by_another_reviewer_keeps_the_terminal_reviewers_verdict(policy: Policy) -> None:
@@ -313,7 +319,7 @@ def test_an_oversize_plan_keeps_its_header_before_the_size_note(policy: Policy) 
     final = _finalize(policy, plan, None, kind=selection.PENDING, reviewer=None)
     assert final.pending_cause == OVERSIZE and final.description == report.OVERSIZE_DESCRIPTION
     lines = final.body.split("\n")
-    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
+    assert lines[0] == "### ⏳ NOT REVIEWED · too large to review · shadow (advisory)"
     assert report.OVERSIZE_NOTE in lines
     _assert_shape(final.body)
 
@@ -324,7 +330,7 @@ def test_withheld_artifacts_are_listed_in_a_pending_review(policy: Policy) -> No
     assert final.state == "pending" and final.pending_cause == INTEGRITY and final.reviewer is None
     assert final.strikes is None and final.description
     lines = final.body.split("\n")
-    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
+    assert lines[0] == "### ⏳ NOT REVIEWED · run artifacts failed validation · shadow (advisory)"
     assert not any(error in lines for error in errors)
     assert "- the run's artifacts failed validation" in lines
     assert final.review is not None and final.review["body"] == final.body
@@ -340,11 +346,14 @@ def test_review_threads_carry_the_defect_and_fingerprint_markers_in_order(policy
     assert set(final.review) == {"commit_id", "event", "body", "comments"} and final.review["event"] == "COMMENT"
     finding = Finding("Medium", CHECKER, 2, "No detail", "")
     assert final.review["comments"][0]["body"] == (
-        f"**Medium**: No detail\n\n<!-- review-defect: c1-D1 -->\n\n{dedup.marker(finding)}"
+        f"🟡 **Medium** · D1 · No detail\n\n{layout.THREAD_FOOTER}\n\n<!-- review-defect: c1-D1 -->\n\n"
+        f"{dedup.marker(finding)}"
     )
     detailed = _finalize(policy, _protocol_plan(policy), _v("s", [_defect("With detail", 2, "more")]))
     assert detailed.review is not None
-    assert detailed.review["comments"][0]["body"].startswith("**Medium**: With detail\n\nmore\n\n<!-- review-defect")
+    assert detailed.review["comments"][0]["body"].startswith(
+        f"🟡 **Medium** · D1 · With detail\n\nmore\n\n{layout.THREAD_FOOTER}\n\n<!-- review-defect"
+    )
 
 
 def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
@@ -360,10 +369,10 @@ def test_a_marker_that_cannot_be_recorded_withholds_the_decision(
     assert final.description == report.MARKER_LIMIT_DESCRIPTION
     assert final.review is not None
     lines = final.review["body"].split("\n")
-    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
+    assert lines[0] == "### ⏳ NOT REVIEWED · decision record too large for a review marker · shadow (advisory)"
     assert report.MARKER_LIMIT_NOTE in lines and protocol.MARKER_OPEN not in final.review["body"]
-    assert f"- **Medium** `{CHECKER}`: Already open problem" in lines
-    assert f"- **Medium** `{CHECKER}:40`: Far" in lines
+    assert f"- 🟡 **Medium** · Already open problem · <code>{CHECKER}</code> (existing thread)" in lines
+    assert f"- 🟡 **Medium** · Far · <code>{CHECKER}:40</code>" in lines
     assert any("DO NOT SHIP decisions on this pull request: 1 of 3." in line for line in lines)
     assert not any("review-defect" in item["body"] for item in final.review["comments"])
     thread = Finding("Medium", CHECKER, 2, "New problem", "d")
@@ -403,7 +412,10 @@ def test_a_capped_body_shortens_every_listed_detail_alike(policy: Policy, monkey
     assert "Size limit: the detail of 3 of 3 listed defect(s) was shortened" in final.body
     for title in ("Inline", "Outside", "Elsewhere"):
         assert title in final.body
-    assert f"`{CHECKER}:40`: D2: Outside" in final.body and f"`{OTHER}:9`: Elsewhere" in final.body
+    assert (
+        f"D2 · Outside · <code>{CHECKER}:40</code>" in final.body
+        and f"Elsewhere · <code>{OTHER}:9</code>" in final.body
+    )
     _assert_shape(final.body)
 
 
@@ -643,10 +655,15 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     final = report.carried(_carry_plan(policy, _previous(summary="Rework it"), findings_delivery="comment"))
     lines = final.body.split("\n")
     _assert_shape(final.body)
-    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
-    assert f"Decision: **SHIP WITH FIXES**, carried from head `{OLD}`." in lines
-    assert f"- **High** `{CHECKER}:1-2`: D4: Old" in lines and f"- **High** `{CHECKER}:2`: D5: Old" in lines
-    assert sum("D4: Old" in line for line in lines) == 1
+    assert lines[0] == f"### 🔧 SHIP WITH FIXES · 2 findings still block merge · carried from {OLD} · shadow (advisory)"
+    assert "The patch is unchanged since that head was reviewed, so no reviewer ran." in lines
+    assert "**Still open**" in lines
+    assert (
+        f"- 🟠 **High** · D4 · Old · <code>{CHECKER}:1-2</code>" in lines
+        and f"- 🟠 **High** · D5 · Old · <code>{CHECKER}:2</code>" in lines
+    )
+    assert sum("D4 · Old" in line for line in lines) == 1
+    assert f"Fix each one, or contest it with a comment `{protocol.COMMENT_DISPUTE_GRAMMAR}`." in lines
     assert any("2 of 3" in line and "DO NOT SHIP" in line for line in lines)
     assert final.description == status_text.with_findings(
         status_text.OPEN_FINDINGS_LABEL,
@@ -659,6 +676,7 @@ def test_a_carried_decision_repeats_the_previous_decision_without_running_a_revi
     assert (final.state, final.strikes, final.reviewer, final.pending_cause) == ("failure", 2, None, None)
     assert final.review is None
     assert final.body.split("\n")[-1].startswith(protocol.MARKER_OPEN)
+    assert final.body.split("\n")[-2] == layout.verdict_marker("failure", HEAD)
 
 
 def test_a_carried_decision_in_review_mode_posts_an_empty_review_with_the_record(policy: Policy) -> None:
@@ -672,7 +690,7 @@ def test_a_carried_decision_in_review_mode_posts_an_empty_review_with_the_record
     assert record["summary"] == "Rework it" and record["carried"] is True and record["kind"] == "carry"
     assert record["reviewer"] == "small" and record["strikes_after"] == 2 and record["next_id"] == 6
     ship = report.carried(_carry_plan(policy, _previous("SHIP"), findings_delivery="review"))
-    assert ship.state == "success" and ship.body.startswith(f"### review-verdict: success for `{HEAD}`")
+    assert ship.state == "success" and ship.body.startswith(f"### ✅ SHIP · carried from {OLD}")
 
 
 def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Policy) -> None:
@@ -681,8 +699,8 @@ def test_a_refusal_states_the_strike_count_and_records_no_reviewer(policy: Polic
     final = report.refused(plan)
     lines = final.body.split("\n")
     _assert_shape(final.body)
-    assert lines[0] == f"### review-verdict: failure for `{HEAD}`"
-    assert any("3 of 3" in line and "DO NOT SHIP" in line for line in lines)
+    assert lines[0] == "### 🚫 REFUSED · 3 DO NOT SHIP decisions · shadow (advisory)"
+    assert any("Close this pull request and open a new one" in line for line in lines)
     assert (final.state, final.strikes, final.reviewer, final.pending_cause) == ("failure", 3, None, None)
     assert "refused" in final.description and "3" in final.description
     record = _record(final)
@@ -719,10 +737,10 @@ def test_a_reviewer_effort_is_named_only_when_the_chain_sets_one(policy: Policy)
     plan["chain"] = [{**plan["chain"][0], "effort": "high"}]
     verdict = _v("s", [_defect("Problem")])
     final = _finalize(policy, plan, verdict, kind=selection.FAIL)
-    assert "Reviewer: small (role review, omp @smol, effort high)." in final.body.split("\n")
+    assert "Reviewer: `small (role review, omp @smol, effort high)`." in final.body.split("\n")
     plan["chain"] = [{**plan["chain"][0], "effort": ""}]
     quiet = _finalize(policy, plan, verdict, kind=selection.FAIL)
-    assert "Reviewer: small (role review, omp @smol)." in quiet.body.split("\n")
+    assert "Reviewer: `small (role review, omp @smol)`." in quiet.body.split("\n")
     plan["chain"] = [{**plan["chain"][0], "name": "other"}]
     unlisted = _finalize(policy, plan, verdict, kind=selection.FAIL)
     assert "Reviewer:" not in unlisted.body
@@ -747,7 +765,7 @@ def test_a_withheld_review_names_its_reason_under_a_real_title(policy: Policy) -
     lines = final.body.split("\n")
     assert "None" not in final.body
     title = lines.index("- the run's artifacts failed validation") - 2
-    assert lines[title] == "**Result withheld**" and lines[title + 1] == ""
+    assert lines[title] == "<details><summary>What happened · 1 validation error</summary>" and lines[title + 1] == ""
 
 
 def test_the_thread_markers_carry_the_cycle_of_the_plan(policy: Policy) -> None:
@@ -770,7 +788,8 @@ def test_a_protocol_decision_separates_its_text_from_the_record_by_one_blank_lin
     else:
         final = report.refused({**_protocol_plan(policy, kind="refused", strikes=3, round=0), "decision": "refused"})
     lines = final.body.split("\n")
-    assert lines[-1].startswith(protocol.MARKER_OPEN) and lines[-2] == "" and lines[-3] != ""
+    assert lines[-1].startswith(protocol.MARKER_OPEN) and lines[-2].startswith(layout.VERDICT_MARKER_OPEN)
+    assert lines[-3] == "" and lines[-4] != ""
 
 
 def _carried(defect_id: str, line: int) -> dict[str, Any]:
@@ -798,14 +817,14 @@ def _judged(*entries: dict[str, Any]) -> Any:
 def test_carried_defects_with_one_fingerprint_each_get_a_thread_or_a_notice() -> None:
     lines = {"a.py": frozenset({3, 40})}
     entries = (_carried("D1", 3), _carried("D2", 40))
-    opened, unanchored = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
-    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")] and unanchored == []
-    opened, unanchored = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
-    assert [defect_id for _, defect_id in opened] == ["D2"] and unanchored == []
-    opened, unanchored = report._threads_to_open(
+    opened = report._threads_to_open(_thread_plan(["c1-D1"]), _judged(*entries), lines, "review", 1)
+    assert [(finding.line, defect_id) for finding, defect_id in opened] == [(40, "D2")]
+    opened = report._threads_to_open(_thread_plan([]), _judged(*entries), lines, "review", 1)
+    assert [defect_id for _, defect_id in opened] == ["D2"]
+    opened = report._threads_to_open(
         _thread_plan([]), _judged(_carried("D1", 3), _carried("D2", 41)), lines, "review", 1
     )
-    assert [defect_id for _, defect_id in opened] == [] and unanchored == ["D2"]
+    assert [defect_id for _, defect_id in opened] == []
 
 
 def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_fingerprint() -> None:
@@ -813,9 +832,9 @@ def test_a_carried_defect_is_covered_only_while_an_open_thread_remains_for_its_f
     entries = (_carried("D1", 3), _carried("D2", 40))
     key = dedup.fingerprint("a.py", "Unchecked size")
     plan = {**_thread_plan(["c1-D1"]), "open_counts": {key: 1}}
-    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == ([], [])
+    assert report._threads_to_open(plan, _judged(*entries), lines, "review", 1) == []
     plan["open_counts"] = {}
-    opened, _ = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
+    opened = report._threads_to_open(plan, _judged(*entries), lines, "review", 1)
     assert [defect_id for _, defect_id in opened] == ["D2"]
 
 
@@ -881,8 +900,11 @@ def test_a_same_line_re_report_still_gets_a_thread_when_threads_were_not_read(po
 
 def test_comment_delivery_does_not_call_a_same_line_re_report_an_open_thread(policy: Policy) -> None:
     plan = {**_located_plan(policy), "findings_delivery": "comment"}
-    del plan["threaded"]
+    plan["threaded"] = []
     plan.update(open_findings={}, open_counts={})
     final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
-    assert "Defects already open as review threads" not in final.body
+    assert "(existing thread)" not in final.body and "Already open as review threads" not in final.body
     assert "Old" in final.body
+    del plan["threaded"]
+    final = _finalize(policy, plan, _located_verdict("not_fixed", 2))
+    assert "(existing thread)" not in final.body and "Old" in final.body

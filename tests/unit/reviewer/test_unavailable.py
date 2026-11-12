@@ -191,11 +191,14 @@ def test_a_verdict_body_carries_neither_the_marker_nor_a_next_step(policy: Polic
     assert unavailable.MARKER_OPEN not in final.body and "Next step:" not in final.body
 
 
-def test_the_heading_the_section_title_and_the_local_prefix_are_kept(policy: Policy) -> None:
+def test_the_headline_the_collapsed_section_and_the_local_prefix_are_kept(policy: Policy) -> None:
     final = _pending(policy, _payload_attempts())
     lines = final.body.split("\n")
-    assert lines[0] == f"### review-verdict: pending for `{HEAD}`"
-    assert "**Reviewers not available**" in lines
+    assert (
+        lines[0]
+        == "### ⏳ NOT REVIEWED YET · reviewer did not read every changed hunk (3 attempts) · shadow (advisory)"
+    )
+    assert any(line.startswith("<details><summary>What happened") for line in lines)
     assert local.AVAILABILITY_PREFIX == "availability: "
     gone = _pending(policy, [], reasons=(f"small: {providers.UNAVAILABLE_PREFIX} {GATEWAY_PAYLOAD}",))
     assert not LEAKS.search(gone.description)
@@ -210,6 +213,12 @@ def _notice(key: str, head: str = HEAD) -> str:
 
 
 def _verdict_post(at: str) -> dict[str, Any]:
+    """A verdict comment as written now: no heading, no commit id, only the v2 marker names the head."""
+    body = f"### ✅ SHIP · no open findings\n\nReviewed {HEAD}\n\n<!-- review-verdict: v2 success {HEAD} -->"
+    return _post(BOT, body, at)
+
+
+def _old_verdict_post(at: str) -> dict[str, Any]:
     return _post(BOT, f"### review-verdict: success for `{HEAD}`\n\nok", at)
 
 
@@ -229,6 +238,15 @@ EARLY, LATE = "2026-11-10T10:00:00Z", "2026-11-10T11:00:00Z"
         ([_post(BOT, _notice("quota"), EARLY), _post(BOT, _notice("timeout"), LATE)], _notice("quota"), False),
         ([_post(BOT, _notice("timeout"), EARLY), _post(BOT, _notice("quota"), LATE)], _notice("quota"), True),
         ([_post(BOT, _notice("quota"), EARLY), _verdict_post(LATE)], _notice("quota"), False),
+        ([_post(BOT, _notice("quota"), EARLY), _old_verdict_post(LATE)], _notice("quota"), False),
+        (
+            [
+                _post(BOT, _notice("quota"), EARLY),
+                _post(BOT, "### 🔧 SHIP WITH FIXES · unchanged (no reviewer ran)\n\nReviewed " + HEAD, LATE),
+            ],
+            _notice("quota"),
+            False,
+        ),
         ([_post(BOT, _notice("quota"), "not a time")], _notice("quota"), False),
         ([_post("someone", _notice("quota"), EARLY)], _notice("quota"), False),
         ([{**_post(BOT, _notice("quota"), EARLY), "user_type": "User"}], _notice("quota"), False),
@@ -367,6 +385,37 @@ def test_no_provider_name_is_printed_when_the_plan_routes_none() -> None:
     item = _absent(1, "small", absence.QUOTA, QUOTA_PAYLOAD, "anthropic")
     assert "anthropic" not in unavailable.lines([item], Step(selection.PENDING), {})[0]
     assert "anthropic" not in unavailable.excluded_line(item, {})
+
+
+HEX = "b" * 40
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"### ✅ SHIP · no open findings\n\nReviewed {HEAD}\n\nrest",
+        f"### 🔧 SHIP WITH FIXES · 2 findings block merge · shadow (advisory)\n\n**1 High · 1 Low** · reviewed {HEAD} · fix",
+        f"### 🔧 SHIP WITH FIXES · unchanged (no reviewer ran)\n\nReviewed {HEAD}\n\nnote",
+    ],
+    ids=["ship", "ship-with-fixes", "repost"],
+)
+def test_the_reviewed_line_of_the_apps_layouts_names_the_head(body: str) -> None:
+    posts = [_post(BOT, _notice("quota"), EARLY), _post(BOT, body, LATE)]
+    assert not unavailable.repeats(posts, HEAD, _notice("quota"), BOT)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"### 🔧 SHIP WITH FIXES · 1 finding blocks merge\n\nintro\n\nReviewed {HEAD}",
+        f"### ✅ SHIP · no open findings\n\n**x** · reviewed {HEX}\n\nReviewed {HEAD}",
+        f"text\n### ✅ SHIP · no open findings\n\nReviewed {HEAD}",
+    ],
+    ids=["model-text-deeper", "meta-names-another-head", "not-at-start"],
+)
+def test_a_reviewed_line_that_is_not_the_apps_meta_line_does_not_count(body: str) -> None:
+    posts = [_post(BOT, _notice("quota"), EARLY), _post(BOT, body, LATE)]
+    assert unavailable.repeats(posts, HEAD, _notice("quota"), BOT)
 
 
 def test_every_cause_has_a_short_status_text_or_uses_the_default() -> None:

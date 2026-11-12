@@ -48,7 +48,7 @@ def test_a_rebase_with_an_identical_merge_base_diff_carries_the_decision(harness
     assert status["description"].startswith(
         status_text.SEP.join((status_text.SHIP_LABEL, status_text.carried_tail(first)))
     )
-    assert f"carried from head `{first}`" in harness.github.reviews[71][-1]["body"]
+    assert f"### ✅ SHIP · carried from {first}" in harness.github.reviews[71][-1]["body"]
 
 
 def test_a_rebase_onto_a_develop_that_changed_the_same_file_is_reviewed_again(harness: Harness) -> None:

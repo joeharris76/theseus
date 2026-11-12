@@ -33,7 +33,7 @@
     "attempt/state.json": null,
     "comment.json": null,
     "review.json": {
-      "body": "### review-verdict: success for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\nDecision: **SHIP**.\n\nReviewer: medium (role review, omp @default).\n\nThe change keeps checker semantics; no defects.\n\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"721ec4ecb31e7211ab9f04edfe290ebd\", \"patch_map\": {\"5b21f32d\": \"76119d103787b015\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
+      "body": "### ✅ SHIP · no open findings\n\nReviewed <sha0>\n\n<details><summary>Reviewer notes · <code>medium (omp @default)</code></summary>\n\nReviewer: `medium (role review, omp @default)`.\n\nThe change keeps checker semantics; no defects.\n\n</details>\n\n<!-- review-verdict: v2 success <sha0> -->\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"721ec4ecb31e7211ab9f04edfe290ebd\", \"patch_map\": {\"5b21f32d\": \"76119d103787b015\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
       "comments": [],
       "commit_id": "<sha0>",
       "event": "COMMENT"
@@ -352,7 +352,7 @@
     ],
     "reviews": [
       {
-        "body": "### review-verdict: success for `<sha0>`\n\nThis result supersedes those for earlier heads; their open review threads still apply.\n\nDecision: **SHIP**.\n\nReviewer: medium (role review, omp @default).\n\nThe change keeps checker semantics; no defects.\n\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"721ec4ecb31e7211ab9f04edfe290ebd\", \"patch_map\": {\"5b21f32d\": \"76119d103787b015\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
+        "body": "### ✅ SHIP · no open findings\n\nReviewed <sha0>\n\n<details><summary>Reviewer notes · <code>medium (omp @default)</code></summary>\n\nReviewer: `medium (role review, omp @default)`.\n\nThe change keeps checker semantics; no defects.\n\n</details>\n\n<!-- review-verdict: v2 success <sha0> -->\n<!-- review-protocol: {\"base_ref\": \"develop\", \"carried\": false, \"coverage\": 1, \"cycle\": 1, \"decision\": \"SHIP\", \"forced\": false, \"head_sha\": \"<sha0>\", \"kind\": \"first\", \"next_id\": 1, \"open_defects\": [], \"patch_digest\": \"721ec4ecb31e7211ab9f04edfe290ebd\", \"patch_map\": {\"5b21f32d\": \"76119d103787b015\"}, \"reviewer\": \"medium\", \"round\": 1, \"run_uuid\": \"<volatile>\", \"strikes_after\": 0, \"summary\": \"\", \"tier\": \"medium\", \"v\": 1} -->",
         "commit_id": "<sha0>",
         "creator": "benchbox-review[bot]"
       }
