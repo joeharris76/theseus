@@ -56,6 +56,7 @@ uv build
 - [docs/gateway-host.md](docs/gateway-host.md): installed `install-omp` and `gateway-clients` for the gateway host
 - [docs/hosted-workflows.md](docs/hosted-workflows.md): reusable review and gate workflows, pinned ref, environment secrets
 - [docs/review-evals.md](docs/review-evals.md): incident corpus, reviewer scoring, the no-lower-score rule and the weekly live run
+- [docs/review-comment-format-proposal.md](docs/review-comment-format-proposal.md): format audit and redesign proposal for reviewer comments, statuses and check output
 - [examples/consumer/.github/workflows/](examples/consumer/.github/workflows/): consumer caller workflows
 
 ## Maintaining the extraction
