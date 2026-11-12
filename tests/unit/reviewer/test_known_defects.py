@@ -540,3 +540,16 @@ def test_a_function_defined_in_a_package_init_is_followed_to_the_cited_module(po
     plan = _plan(policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, changed_paths=["app/new.py"])
     finding = _old(detail="lib/parser.py:2 divides by zero", file="lib/parser.py")
     assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_dependency_chain_longer_than_the_walk_depth_blocks(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "chain").mkdir()
+    (tmp_path / "chain" / "m0.py").write_text("def f(v):\n    return 1 / v\n", encoding="utf-8")
+    for number in range(1, 6):
+        (tmp_path / "chain" / f"m{number}.py").write_text(f"import m{number - 1}\n", encoding="utf-8")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "standalone.py").write_text("print('x')\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"tools/standalone.py": [[1, 1]]}, changed_paths=["tools/standalone.py"])
+    finding = _old(detail="chain/m0.py:2 divides by zero", file="chain/m0.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
