@@ -11,7 +11,7 @@ from theseus_reviewer import known, protocol
 from theseus_reviewer.policy import Policy, PolicyError, parse_policy
 from theseus_reviewer.verdict import Finding, validate
 
-from .test_attempts import _finding, _v
+from .test_attempts import CHECKER, _finding, _v
 from .test_pre_existing_and_intent import _judged, _plan_with
 from .test_rounds import _final
 
@@ -23,6 +23,8 @@ CITE = "the zero denominator in operation.py:3 raises instead of returning a res
 
 def _tree(tmp_path: Path, **files: str) -> Path:
     (tmp_path / OPERATION).write_text("values = []\ndef ratio(value):\n    return 1 / value\n", encoding="utf-8")
+    (tmp_path / CHECKER).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / CHECKER).write_text("x\n", encoding="utf-8")
     for name, text in files.items():
         (tmp_path / name.replace("__", "/")).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name.replace("__", "/")).write_text(text, encoding="utf-8")
