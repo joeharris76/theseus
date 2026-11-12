@@ -953,7 +953,7 @@ class KnownScope:
         found: set[str] | None = None
         if index is not None:
             names = set(needles)
-            for round_number in range(DEPENDENT_ROUNDS + 1):
+            for _ in range(DEPENDENT_ROUNDS):
                 wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
                 added: set[str] = set()
                 for full, tokens in index.items():
@@ -965,9 +965,6 @@ class KnownScope:
                     added.update({parts[-1], ".".join(parts)})
                 if added <= names:
                     break
-                if round_number == DEPENDENT_ROUNDS:
-                    self.dependent_cache[key] = None
-                    return None
                 names |= added
             found = names
         self.dependent_cache[key] = found
@@ -1028,7 +1025,7 @@ class KnownScope:
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
         frontier = set(related)
-        for round_number in range(DEPENDENT_ROUNDS + 1):
+        for _ in range(DEPENDENT_ROUNDS):
             reached: set[str] = set()
             for full in frontier:
                 for token in index.get(full, ()):
@@ -1036,8 +1033,6 @@ class KnownScope:
             frontier = reached - related
             if not frontier:
                 break
-            if round_number == DEPENDENT_ROUNDS:
-                return None
             related |= frontier
         return related
 
