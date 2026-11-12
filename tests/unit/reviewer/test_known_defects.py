@@ -469,3 +469,18 @@ def test_a_changed_producer_whose_output_an_unchanged_orchestrator_passes_to_the
     assert _judged(plan, _old(detail="src/x.py:2 divides by zero", file="src/x.py")).decision == (
         protocol.SHIP_WITH_FIXES
     )
+
+
+def test_the_related_set_stays_bounded_when_every_module_imports_the_package(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    for number in range(60):
+        (package / f"m{number}.py").write_text(f"import pkg\nfrom pkg import m{(number + 1) % 60}\n", encoding="utf-8")
+    (package / "op.py").write_text("import pkg\ndef divide(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "standalone.py").write_text("import pkg\nprint('x')\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"tools/standalone.py": [[2, 2]]}, changed_paths=["tools/standalone.py"])
+    finding = _old(detail="pkg/op.py:3 divides by zero", file="pkg/op.py")
+    assert _judged(plan, finding).decision == protocol.SHIP

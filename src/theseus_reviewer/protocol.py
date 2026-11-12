@@ -935,47 +935,36 @@ class KnownScope:
         key = frozenset(needles)
         if key in self.dependent_cache:
             return self.dependent_cache[key]
-        found = self._closure(needles, root)
+        index = self._index(root)
+        found: set[str] | None = None
+        if index is not None:
+            common = self._common(index)
+            names = set(needles)
+            for _ in range(DEPENDENT_ROUNDS):
+                wanted = {part.casefold() for name in names for part in name.split(".") if part} - common
+                added: set[str] = set()
+                for full, tokens in index.items():
+                    if not tokens & wanted:
+                        continue
+                    parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
+                    if parts[-1] == "__init__":
+                        continue
+                    if parts[-1].casefold() not in common:
+                        added.update({parts[-1], ".".join(parts)})
+                if added <= names:
+                    break
+                names |= added
+            found = names
         self.dependent_cache[key] = found
         return found
 
     @staticmethod
-    def _closure(needles: set[str], root: str) -> set[str] | None:
-        sources: list[str] = []
-        for base, directories, names in os.walk(root):
-            directories[:] = [item for item in directories if item not in SKIPPED_DIRECTORIES]
-            for name in names:
-                if name.rsplit(".", 1)[-1].casefold() not in IMPORTER_EXTENSIONS:
-                    continue
-                full = os.path.realpath(os.path.join(base, name))
-                if full.startswith(root + os.sep) and os.path.isfile(full):
-                    sources.append(full)
-            if len(sources) > DEPENDENT_SCAN_FILES:
-                return None
-        names = set(needles)
-        for _ in range(DEPENDENT_ROUNDS):
-            pattern = re.compile(
-                r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(names)) + r")(?![\w])", re.IGNORECASE
-            )
-            found: set[str] = set()
-            for full in sources:
-                try:
-                    with open(full, "rb") as handle:
-                        data = handle.read(DEPENDENT_FILE_BYTES + 1)
-                except OSError:
-                    return None
-                if len(data) > DEPENDENT_FILE_BYTES:
-                    return None
-                if not pattern.search(data.decode("utf-8", errors="replace")):
-                    continue
-                parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-                if parts[-1] == "__init__" and len(parts) > 1:
-                    parts = parts[:-1]
-                found.update({parts[-1], ".".join(parts)})
-            if found <= names:
-                break
-            names |= found
-        return names
+    def _common(index: dict[str, set[str]]) -> set[str]:
+        frequency: dict[str, int] = {}
+        for tokens in index.values():
+            for token in tokens:
+                frequency[token] = frequency.get(token, 0) + 1
+        return {token for token, seen in frequency.items() if seen > max(20, len(index) // 20)}
 
     def _index(self, root: str) -> dict[str, set[str]] | None:
         if "index" in self.index_cache:
@@ -1010,12 +999,16 @@ class KnownScope:
         index = self._index(root)
         if index is None:
             return None
+        common = self._common(index)
         stems: dict[str, set[str]] = {}
         for full in index:
             parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-            stems.setdefault(parts[-2] if parts[-1] == "__init__" and len(parts) > 1 else parts[-1], set()).add(full)
-        stems = {key.casefold(): value for key, value in stems.items()}
-        wanted = {part.casefold() for name in names for part in name.split(".") if part}
+            if parts[-1] == "__init__":
+                continue
+            key = parts[-1].casefold()
+            if key not in common:
+                stems.setdefault(key, set()).add(full)
+        wanted = {part.casefold() for name in names for part in name.split(".") if part} - common
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
         frontier = set(related)
@@ -1023,7 +1016,8 @@ class KnownScope:
             reached: set[str] = set()
             for full in frontier:
                 for token in index.get(full, ()):
-                    reached |= stems.get(token, set())
+                    if token in stems:
+                        reached |= stems[token]
             frontier = reached - related
             if not frontier:
                 break
