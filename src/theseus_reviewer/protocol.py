@@ -733,6 +733,9 @@ PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+_IMPORT_LINE = re.compile(
+    r"^\s*(?:import|from|use|using|extern\s+crate|#\s*include|export\b.*\bfrom)\b|\b(?:require|import)\s*\("
+)
 DEPENDENT_SCAN_FILES = 20000
 DEPENDENT_FILE_BYTES = 4194304
 IMPORTER_EXTENSIONS = frozenset(
@@ -949,11 +952,7 @@ class KnownScope:
         index = self._index(root)
         found: set[str] | None = None
         if index is not None:
-            common = self._common(index)
             names = set(needles)
-            if {name.rsplit(".", 1)[-1].casefold() for name in names} & common:
-                self.dependent_cache[key] = None
-                return None
             for _ in range(DEPENDENT_ROUNDS):
                 wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
                 added: set[str] = set()
@@ -961,12 +960,8 @@ class KnownScope:
                     if not tokens & wanted:
                         continue
                     parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-                    if parts[-1] == "__init__":
-                        continue
-                    if parts[-1].casefold() in common:
-                        self.dependent_cache[key] = None
-                        return None
-                    added.update({parts[-1], ".".join(parts)})
+                    if parts[-1] != "__init__":
+                        added.update({parts[-1], ".".join(parts)})
                 if added <= names:
                     break
                 names |= added
@@ -975,12 +970,14 @@ class KnownScope:
         return found
 
     @staticmethod
-    def _common(index: dict[str, set[str]]) -> set[str]:
-        frequency: dict[str, int] = {}
-        for tokens in index.values():
-            for token in tokens:
-                frequency[token] = frequency.get(token, 0) + 1
-        return {token for token, seen in frequency.items() if seen > max(20, len(index) // 20)}
+    def _import_tokens(text: str) -> set[str]:
+        tokens: set[str] = set()
+        open_statement = False
+        for line in text.splitlines():
+            if open_statement or _IMPORT_LINE.search(line):
+                tokens.update(item.casefold() for item in _IDENTIFIER.findall(line))
+                open_statement = (open_statement or "(" in line or "{" in line) and not (")" in line or "}" in line)
+        return tokens
 
     def _index(self, root: str) -> dict[str, set[str]] | None:
         if "index" in self.index_cache:
@@ -1005,7 +1002,7 @@ class KnownScope:
                 if count > DEPENDENT_SCAN_FILES or len(data) > DEPENDENT_FILE_BYTES:
                     index = None
                     break
-                index[full] = {item.casefold() for item in _IDENTIFIER.findall(data.decode("utf-8", errors="replace"))}
+                index[full] = self._import_tokens(data.decode("utf-8", errors="replace"))
             if index is None:
                 break
         self.index_cache["index"] = index
@@ -1015,13 +1012,11 @@ class KnownScope:
         index = self._index(root)
         if index is None:
             return None
-        common = self._common(index)
         stems: dict[str, set[str]] = {}
         for full in index:
             parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-            if parts[-1] == "__init__":
-                continue
-            stems.setdefault(parts[-1].casefold(), set()).add(full)
+            if parts[-1] != "__init__":
+                stems.setdefault(parts[-1].casefold(), set()).add(full)
         wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
@@ -1030,10 +1025,7 @@ class KnownScope:
             reached: set[str] = set()
             for full in frontier:
                 for token in index.get(full, ()):
-                    if token in stems:
-                        if token in common:
-                            return None
-                        reached |= stems[token]
+                    reached |= stems.get(token, set())
             frontier = reached - related
             if not frontier:
                 break
