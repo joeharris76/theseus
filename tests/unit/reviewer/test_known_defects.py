@@ -526,3 +526,17 @@ def test_continuation_and_dynamic_imports_are_followed_to_the_cited_module(
     plan = _plan(policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, changed_paths=["app/new.py"])
     finding = _old(detail="lib/parser.py:2 divides by zero", file="lib/parser.py")
     assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_function_defined_in_a_package_init_is_followed_to_the_cited_module(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "app").mkdir()
+    (tmp_path / "lib" / "parser.py").write_text("def parse(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "lib" / "__init__.py").write_text(
+        "from lib import parser\ndef go(v):\n    return parser.parse(v)\n", encoding="utf-8"
+    )
+    (tmp_path / "app" / "new.py").write_text("import lib\nlib.go(0)\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, changed_paths=["app/new.py"])
+    finding = _old(detail="lib/parser.py:2 divides by zero", file="lib/parser.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES

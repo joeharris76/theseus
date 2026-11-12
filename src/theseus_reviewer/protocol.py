@@ -960,8 +960,9 @@ class KnownScope:
                     if not tokens & wanted:
                         continue
                     parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-                    if parts[-1] != "__init__":
-                        added.update({parts[-1], ".".join(parts)})
+                    if parts[-1] == "__init__" and len(parts) > 1:
+                        parts = parts[:-1]
+                    added.update({parts[-1], ".".join(parts)})
                 if added <= names:
                     break
                 names |= added
@@ -1017,8 +1018,9 @@ class KnownScope:
         stems: dict[str, set[str]] = {}
         for full in index:
             parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
-            if parts[-1] != "__init__":
-                stems.setdefault(parts[-1].casefold(), set()).add(full)
+            if parts[-1] == "__init__" and len(parts) > 1:
+                parts = parts[:-1]
+            stems.setdefault(parts[-1].casefold(), set()).add(full)
         wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
