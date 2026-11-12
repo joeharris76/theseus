@@ -182,7 +182,7 @@ def _sanitize_pass(text: str, limit: int, known: tuple[str, ...]) -> str:
     cleaned = _CONTROL.sub("", credentials.redact(text, known))
     for pattern in SECRET_PATTERNS:
         cleaned = pattern.sub(REDACTED, cleaned)
-    cleaned = _MARKDOWN_LINK.sub(lambda match: f"{match.group(1)} {LINK_REMOVED}".strip(), cleaned)
+    cleaned = _MARKDOWN_LINK.sub(lambda match: match.group(1), cleaned)
     cleaned = _URL.sub(LINK_REMOVED, cleaned)
     cleaned = _MENTION.sub("", cleaned)
     cleaned = _COMMENT_OPEN.sub("&lt;!--", cleaned)

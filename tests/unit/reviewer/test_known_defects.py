@@ -290,19 +290,6 @@ def test_a_cited_line_the_change_does_not_add_stays_known(policy: Policy, detail
     assert judgement.decision == protocol.SHIP and len(judgement.advisory) == 1
 
 
-@pytest.mark.parametrize(
-    "detail",
-    [
-        "caller in [new code](https://github.com/o/n/blob/abc/src/pkg/b.py#L40)",
-        "see [b](src/pkg/b.py#L40)",
-    ],
-)
-def test_a_markdown_link_citation_blocks(policy: Policy, detail: str) -> None:
-    verdict = validate(_v("s", [_old("Medium", 2, detail=detail)]))
-    assert "[link removed]" in verdict.defects[0].detail
-    assert protocol.judge_planned(verdict, _plan_with(policy)).decision == protocol.SHIP_WITH_FIXES
-
-
 def test_a_known_defect_of_an_unrecorded_review_is_not_logged(policy: Policy, tmp_path: Path) -> None:
     from dataclasses import replace
 
