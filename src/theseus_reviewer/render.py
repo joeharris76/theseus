@@ -223,9 +223,10 @@ DELTA_RULE = (
 )
 KNOWN_RULE = (
     "Exception for this repository: a defect with origin pre-existing that is not Critical is logged as a known"
-    " defect and does not block the merge, when every location its title and detail cite is unchanged by this"
-    " pull request. Cite every location the defect depends on, with its file and line, so the check can compare"
-    " them with the diff, as plain text such as path/to/file.py:12 and never as a markdown link: a defect that depends on code or inputs this change adds is introduced, not"
+    " defect and does not block the merge only when its title or detail cites at least one location as plain text"
+    " such as path/to/file.py:12 (never a markdown link), the pull request changes none of the cited files, and no"
+    " changed file imports or calls the cited modules or symbols. Name the module or function in backticks. A"
+    " defect without a citation, or one that depends on code or input this change adds, is introduced, not"
     " pre-existing. A Critical defect always blocks. Rate severity by impact, never by whether it blocks."
 )
 

@@ -731,6 +731,9 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
+TRIGGER_SCAN_FILES = 300
+TRIGGER_SCAN_BYTES = 262144
+_SYMBOL = re.compile(r"`(?P<quoted>[A-Za-z_][\w.]*)`|\b(?P<called>[A-Za-z_]\w{2,})\(")
 _LINE_LIST = (
     r"(?:[ \t]*(?:[:#]|[ \t]lines?[ \t]+|[ \t]*\([ \t]*L?)[ \t]*L?(?P<first>\d+)"
     r"(?:[ \t]*[-\u2013][ \t]*L?(?P<last>\d+))?(?P<more>(?:[ \t]*(?:,|and|&)[ \t]*L?\d+(?:[ \t]*[-\u2013][ \t]*L?\d+)?)*))?"
@@ -769,6 +772,7 @@ class KnownScope:
     new_files: frozenset[str]
     enabled: bool
     changed: frozenset[str] = frozenset()
+    workspace: Path | str | None = None
 
     def _paths(self) -> list[str]:
         return list(dict.fromkeys((*self.new_files, *self.changed, *self.added)))
@@ -777,48 +781,89 @@ class KnownScope:
         folded = _plain(name)
         return [path for path in self._paths() if _plain(path) == folded]
 
-    def _touched(self, path: str, start: int | None, end: int | None) -> bool:
-        if path in self.new_files or (path in self.changed and path not in self.added):
-            return True
-        if start is None:
-            return path in self.changed or path in self.added
-        return any(first <= (end or start) and start <= last for first, last in self.added.get(path, ()))
-
-    def _citations(self, finding: Finding) -> list[tuple[str, int | None, int | None]]:
+    def _citations(self, finding: Finding) -> tuple[list[tuple[str, int | None, int | None]], int]:
         text = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").casefold().replace("\\", "/")
         text = re.sub(r"(?<![\w.])\./", "", text)
         own = _plain(finding.file)
         cited: list[tuple[str, int | None, int | None]] = []
+        mentions = 0
         owners: dict[str, list[str]] = {}
         for path in self._paths():
             for name in dict.fromkeys(_suffixes(path)):
                 owners.setdefault(name, []).append(path)
+        owners.setdefault(own, [finding.file])
+        for name in dict.fromkeys(_suffixes(finding.file)):
+            owners.setdefault(name, [finding.file])
         for name in sorted(owners, key=len, reverse=True):
             if name not in text:
                 continue
             pattern = re.compile(rf"(?<![\w./-]){re.escape(name)}(?!\w){_LINE_LIST}")
             for match in pattern.finditer(text):
+                mentions += 1
                 spans = _ranges(match["first"], match["last"], match["more"])
                 text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
                 for path in owners[name]:
                     if spans:
                         cited.extend((path, start, end) for start, end in spans)
-                    elif _plain(path) != own:
+                    else:
                         cited.append((path, None, None))
         for match in _BARE_LINE.finditer(text):
+            mentions += 1
             numbers = [int(value) for value in match.groups() if value]
             cited.append((finding.file, min(numbers), max(numbers)))
-        return cited
+        return cited, mentions
+
+    def _needles(self, finding: Finding, files: Sequence[str]) -> set[str]:
+        needles: set[str] = set()
+        for path in files:
+            parts = _clean_path(path).rsplit(".", 1)[0].split("/")
+            if parts[-1] == "__init__" and len(parts) > 1:
+                parts = parts[:-1]
+            needles.add(parts[-1])
+            needles.add(".".join(parts))
+        text = f"{finding.title}\n{finding.detail}"
+        for match in _SYMBOL.finditer(text):
+            needles.add(match["quoted"] or match["called"])
+        return {item for item in needles if item}
+
+    def _trigger_in_diff(self, finding: Finding, files: Sequence[str]) -> bool:
+        if self.workspace is None:
+            return True
+        needles = self._needles(finding, files)
+        pattern = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])")
+        root = os.path.realpath(str(self.workspace))
+        scanned = [path for path in self._paths() if _plain(path) not in {_plain(item) for item in files}]
+        if len(scanned) > TRIGGER_SCAN_FILES:
+            return True
+        for path in scanned:
+            full = os.path.realpath(os.path.join(root, path))
+            if not (full.startswith(root + os.sep) and os.path.isfile(full)):
+                continue
+            try:
+                if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
+                    return True
+                with open(full, encoding="utf-8", errors="replace") as handle:
+                    lines = handle.read().splitlines()
+            except OSError:
+                return True
+            ranges = None if path in self.new_files else self.added.get(path)
+            for number, line in enumerate(lines, 1):
+                if ranges is not None and not any(first <= number <= last for first, last in ranges):
+                    continue
+                if pattern.search(line):
+                    return True
+        return False
 
     def unchanged(self, finding: Finding) -> bool:
         if finding.origin != PRE_EXISTING or _unparsed_markers(finding):
             return False
-        locations = [(finding.file, finding.line, finding.end_line or finding.line), *self._citations(finding)]
-        return not any(
-            self._touched(candidate, start, end)
-            for path, start, end in locations
-            for candidate in self._candidates(path) or [path]
-        )
+        cited, mentions = self._citations(finding)
+        if mentions == 0:
+            return False
+        files = list(dict.fromkeys([finding.file, *(path for path, _, _ in cited)]))
+        if any(self._candidates(path) for path in files):
+            return False
+        return not self._trigger_in_diff(finding, files)
 
     def aliased(self, targets: Sequence[str], workspace: Path | str | None) -> bool:
         if workspace is None:
@@ -838,7 +883,7 @@ class KnownScope:
         return self.enabled and finding.severity != "Critical" and self.unchanged(finding)
 
 
-def known_scope(plan: Mapping[str, Any]) -> KnownScope | None:
+def known_scope(plan: Mapping[str, Any], workspace: Path | str | None = None) -> KnownScope | None:
     added = plan.get("added_lines")
     if not isinstance(added, Mapping):
         return None
@@ -848,6 +893,7 @@ def known_scope(plan: Mapping[str, Any]) -> KnownScope | None:
         frozenset(plan.get("new_files") or ()),
         rules.get("pre_existing") == "known" and not plan.get("promotion"),
         frozenset(plan.get("changed_paths") or ()),
+        workspace,
     )
 
 
@@ -973,7 +1019,7 @@ def judge_planned(
         workspace=ws,
         read=read,
         claimed=frozenset(rules.get("claimed") or ()),
-        known=known_scope(plan),
+        known=known_scope(plan, ws),
     )
 
 
