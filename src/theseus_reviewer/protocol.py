@@ -26,9 +26,11 @@ from .verdict import (
     DEMOTED_STATUSES,
     DO_NOT_SHIP,
     FIXED,
+    LINK_REMOVED,
     MAX_CLAIM,
     MAX_LINE,
     NOT_FIXED,
+    REDACTED,
     SHIP,
     SHIP_WITH_FIXES,
     WITHDRAWN,
@@ -727,6 +729,112 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
         return False
 
 
+PRE_EXISTING = "pre-existing"
+KNOWN_LIMIT = 5
+_PATH_LINE = re.compile(
+    r"(?P<path>[\w./-]+\.\w{1,8})(?::|#L|[ \t]+lines?[ \t]+)(?P<start>\d+)(?:[ \t]*[-\u2013][ \t]*L?(?P<end>\d+))?",
+    re.IGNORECASE,
+)
+_BARE_LINE = re.compile(
+    r"#L(?P<a>\d+)(?:-L?(?P<b>\d+))?|\bL(?P<c>\d+)(?:-L?(?P<d>\d+))?\b"
+    r"|\blines?[ \t]+(?P<e>\d+)(?:[ \t]*[-\u2013][ \t]*(?P<f>\d+))?|:[ \t]*(?P<g>\d+)\b|\((?P<h>\d+)\)",
+    re.IGNORECASE,
+)
+_FILE_TOKEN = re.compile(r"[\w./-]+\.\w{1,8}")
+
+
+def cited_locations(finding: Finding) -> list[tuple[str | None, int | None, int | None]] | None:
+    text = f"{finding.title}\n{finding.detail}"
+    if LINK_REMOVED in text or REDACTED in text:
+        return None
+    found: list[tuple[str | None, int | None, int | None]] = []
+    for match in _PATH_LINE.finditer(text):
+        start = int(match["start"])
+        found.append((match["path"].strip("."), start, int(match["end"] or start)))
+    rest = _PATH_LINE.sub(" ", text)
+    for match in _BARE_LINE.finditer(rest):
+        numbers = [int(value) for value in match.groups() if value]
+        found.append((None, min(numbers), max(numbers)))
+    found.extend((token.strip("."), None, None) for token in _FILE_TOKEN.findall(_BARE_LINE.sub(" ", rest)))
+    return found
+
+
+@dataclass(frozen=True)
+class KnownScope:
+    added: Mapping[str, Sequence[Sequence[int]]]
+    new_files: frozenset[str]
+    enabled: bool
+    changed: frozenset[str] = frozenset()
+
+    def _candidates(self, name: str) -> list[str]:
+        folded = _clean_path(name).casefold()
+        every = (*self.new_files, *self.changed, *self.added)
+        return [
+            path
+            for path in dict.fromkeys(every)
+            if _clean_path(path).casefold() == folded
+            or ("/" not in folded and _clean_path(path).rsplit("/", 1)[-1].casefold() == folded)
+        ]
+
+    def _touched(self, path: str, start: int | None, end: int | None) -> bool:
+        if path in self.new_files or (path in self.changed and path not in self.added):
+            return True
+        if start is None:
+            return path in self.changed or path in self.added
+        return any(first <= (end or start) and start <= last for first, last in self.added.get(path, ()))
+
+    def unchanged(self, finding: Finding) -> bool:
+        citations = cited_locations(finding)
+        if finding.origin != PRE_EXISTING or citations is None:
+            return False
+        own = {_clean_path(finding.file).casefold(), _clean_path(finding.file).rsplit("/", 1)[-1].casefold()}
+        locations = [(finding.file, finding.line, finding.end_line or finding.line)]
+        for path, start, end in citations:
+            if path is None:
+                locations.append((finding.file, start, end))
+            elif start is not None or path.casefold() not in own:
+                locations.append((path, start, end))
+        return not any(
+            self._touched(candidate, start, end)
+            for path, start, end in locations
+            for candidate in self._candidates(path) or [path]
+        )
+
+    def aliased(self, targets: Sequence[str], workspace: Path | str | None) -> bool:
+        if workspace is None:
+            return False
+        goals = {_clean_path(target) for target in targets}
+        for path in (*self.new_files, *self.changed, *self.added):
+            own = _clean_path(path)
+            real = _resolve_tree(path, workspace)
+            for goal in goals:
+                if real in ("", ".") and own != goal:
+                    return True
+                if own != goal and (real == goal or goal.startswith(f"{real}/") or goal.startswith(f"{own}/")):
+                    return True
+        return False
+
+    def demotes(self, finding: Finding) -> bool:
+        return self.enabled and finding.severity != "Critical" and self.unchanged(finding)
+
+
+def known_scope(plan: Mapping[str, Any]) -> KnownScope | None:
+    added = plan.get("added_lines")
+    if not isinstance(added, Mapping):
+        return None
+    rules = plan.get("protocol") or {}
+    return KnownScope(
+        added,
+        frozenset(plan.get("new_files") or ()),
+        rules.get("pre_existing") == "known" and not plan.get("promotion"),
+        frozenset(plan.get("changed_paths") or ()),
+    )
+
+
+def _is_file(path: str, workspace: Path | str) -> bool:
+    return _exists_exact(path, workspace) and os.path.isfile(os.path.join(os.path.realpath(str(workspace)), path))
+
+
 def judge(
     verdict: Verdict,
     max_defects: int,
@@ -736,6 +844,7 @@ def judge(
     workspace: Path | str | None = None,
     read: Returned | None = None,
     claimed: frozenset[str] = frozenset(),
+    known: KnownScope | None = None,
 ) -> Judgement:
     if verdict.status != COMPLETE:
         raise ValueError("only a complete review can be judged")
@@ -791,6 +900,21 @@ def judge(
     counted = tuple(dict.fromkeys(in_scope))
     merged = len(in_scope) - len(counted)
     uncounted = verdict.listed - len(verdict.defects)
+    eligible = (
+        tuple(
+            item
+            for item in counted
+            if known.demotes(item)
+            and known.demotes(replace(item, file=_resolve_tree(item.file, workspace)))
+            and not known.aliased((item.file, _resolve_tree(item.file, workspace)), workspace)
+            and workspace is not None
+            and _is_file(_resolve_tree(item.file, workspace), workspace)
+        )
+        if known is not None and not uncounted
+        else ()
+    )
+    advisory = eligible if len(eligible) <= KNOWN_LIMIT else ()
+    counted = tuple(item for item in counted if item not in advisory)
     confirmed_claims = sum(1 for item in carried if item["id"] in claimed)
     total = (
         sum(1 for item in carried if item["id"] not in claimed)
@@ -805,8 +929,10 @@ def judge(
         summary = _clip(verdict.summary, DO_NOT_SHIP_SUMMARY - len(note)) + note
         return Judgement(DO_NOT_SHIP, (), summary, fixed=fixed, withdrawn=withdrawn)
     if carried or counted:
-        return Judgement(SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged)
-    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
+        return Judgement(
+            SHIP_WITH_FIXES, counted, verdict.summary, carried, fixed, outside, withdrawn, merged, advisory
+        )
+    return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn, advisory=advisory)
 
 
 def judge_planned(
@@ -827,6 +953,7 @@ def judge_planned(
         workspace=ws,
         read=read,
         claimed=frozenset(rules.get("claimed") or ()),
+        known=known_scope(plan),
     )
 
 

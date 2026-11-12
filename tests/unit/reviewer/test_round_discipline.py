@@ -327,10 +327,10 @@ def test_the_new_protocol_keys_default_to_today_and_are_strictly_validated() -> 
     parsed = parse_policy(data)
     assert parsed.protocol.max_finding_rounds is None and parsed.protocol.pre_existing == "block"
     assert parsed.brief.include_intent is False
-    data["protocol"].update(max_finding_rounds=4, pre_existing="advisory")
+    data["protocol"].update(max_finding_rounds=4, pre_existing="known")
     data["brief"] = {"include_intent": True}
     parsed = parse_policy(data)
-    assert parsed.protocol.max_finding_rounds == 4 and parsed.protocol.pre_existing == "advisory"
+    assert parsed.protocol.max_finding_rounds == 4 and parsed.protocol.pre_existing == "known"
     assert parsed.brief.include_intent is True
     for key, value in (("max_finding_rounds", 0), ("max_finding_rounds", True), ("max_finding_rounds", "3")):
         bad = _policy_text()

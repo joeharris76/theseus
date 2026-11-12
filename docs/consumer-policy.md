@@ -43,7 +43,7 @@ The `protocol` section's `max_defects` and `max_do_not_ship` are required. Three
 ```yaml
 protocol:
   max_finding_rounds: 4     # integer >= 1; see Round discipline
-  pre_existing: advisory    # block (default) or advisory; see Pre-existing findings
+  pre_existing: known       # block (default) or known; see Pre-existing findings
 brief:
   include_intent: true      # boolean, default false; see Author statement
 ```
@@ -202,7 +202,19 @@ A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. 
 
 ## Pre-existing findings
 
-The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). This is a reviewer claim, not verified evidence that the defective behavior existed at the base commit. An unchanged finding span cannot prove that: new callers, initialization or inputs elsewhere can introduce a defect at an unchanged operation. Until trusted base-behavior evidence can be verified, all findings remain blocking and count toward the defect limit, including Medium and Low findings with `protocol.pre_existing: advisory`. The setting remains accepted, but currently behaves like `block` (the default); no new advisory entries or verified `(pre-existing)` tags are emitted. Existing review records retain their historical advisory entries.
+The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). The reviewer sets it; Theseus cannot prove from the diff that a defect existed at the base commit, because a new caller, input or setting can activate unchanged code. With `protocol.pre_existing: block` (the default) every finding blocks and counts toward the defect limit, whatever its origin.
+
+With `protocol.pre_existing: known` a finding is logged as a known defect and does not block when all of these hold:
+
+- the reviewer flagged it `pre-existing` and did not rate it Critical (a Critical finding always blocks);
+- the review listed every finding it found and is not DO NOT SHIP, and no more than 5 findings qualify (more than 5 and all of them block);
+- the review is not a promotion review and the head tree holds the finding's file as a regular file;
+- the file is not added, renamed, copied or binary in the change, and the finding's line span adds no line;
+- every other location the finding's title or detail cites (`path:line`, `path#L12`, `line 12`, `L12`, `(12)`, or a bare file name) is unchanged: a cited line the change adds, or a cited file the change adds or modifies, blocks it, and so does a link or redaction, which cannot be checked.
+
+A defect that depends on code or input this change adds, and that the reviewer does not cite, still passes as known: that is accepted reviewer judgement, so ask reviewers to cite every location a finding depends on (the brief says so). Known defects are not counted toward the defect limit, get no review thread, and appear under "Pre-existing, not blocking" in the review body and in the `advisory` list of the review record. They are re-judged on every review, so a push that changes the cited lines makes them block again.
+
+`theseus finalize` also writes `known-defects.json` next to `status.json` when a review logged known defects: one entry per defect with a stable `kd-` id (a hash of the file and normalised title), repository, pull request, head, severity, location, title and detail. A trusted job on the gated branch can feed that file, or the review record, to a durable known-defect store; Theseus itself writes no store. `advisory` is no longer a valid `pre_existing` value and is a policy error.
 
 ## Reviewer guidance
 

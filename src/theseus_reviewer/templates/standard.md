@@ -53,7 +53,7 @@ line. Give each location a unique title that names the class and the specific sy
 location again under a new title.
 Set origin to pre-existing only when the defect itself already existed at the base commit; a defect this change
 causes, including by deleting or moving code, is introduced. When in doubt, or when the defect spans several
-locations, set origin to introduced. Origin is a claim, not verified base-behavior evidence; all findings still block.
+locations, set origin to introduced. Origin is a claim; the review policy decides what a pre-existing defect does, and an introduced defect always blocks.
 
 Set status to complete when you have read what the review needs and decided. If you could not read the files
 the review needs, set status to incomplete, explain why in incomplete_reason, and set decision to NONE. Never

@@ -36,6 +36,7 @@ from . import (
     gitdiff,
     github,
     intent,
+    known,
     omp_pin,
     processes,
     promotion,
@@ -95,8 +96,8 @@ from .policy import (
     load_policy,
 )
 from .render import (
-    ADVISORY_RULE,
     DELTA_RULE,
+    KNOWN_RULE,
     SLOT_MAX_BYTES,
     STEP_BACK_RULE,
     TEMPLATES,
@@ -1678,8 +1679,8 @@ def compose_brief(
     )
     if prior and plan["protocol"].get("step_back"):
         prior_rule += " " + STEP_BACK_RULE.format(rounds=int(plan["protocol"].get("finding_rounds") or 0))
-    if plan["protocol"].get("pre_existing") == "advisory" and not plan.get("promotion"):
-        prior_rule += " " + ADVISORY_RULE
+    if plan["protocol"].get("pre_existing") == "known" and not plan.get("promotion"):
+        prior_rule += " " + KNOWN_RULE
     if since_staged:
         prior_rule += " " + DELTA_RULE.format(name=SINCE_STAGED_NAME)
     return render_review(
@@ -1979,6 +1980,7 @@ def command_finalize(args: argparse.Namespace) -> int:
             dispatched=os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
         )
     _write_json(out_dir / "status.json", report.status_payload(plan, final, run_url))
+    known.publish(plan, final, known.FileSink(out_dir / known.KNOWN_FILE))
     if final.body and (plan["findings_delivery"] == "comment" or final.review is None):
         _write_json(out_dir / "comment.json", {"body": final.body})
     if final.review is not None:

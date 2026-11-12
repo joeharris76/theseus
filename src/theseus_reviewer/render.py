@@ -221,10 +221,12 @@ DELTA_RULE = (
     " hunks in the staged pull request diff as usual: every changed hunk must still be seen, and a defect on an old"
     " line of a changed file still counts."
 )
-ADVISORY_RULE = (
-    "The pre-existing origin is a claim, not proof of base behavior. An unchanged finding span does not prove"
-    " the defect existed at base: new callers, initialization or inputs can introduce it elsewhere."
-    " Findings still block regardless of origin, including with the advisory policy. Rate severity by impact."
+KNOWN_RULE = (
+    "Exception for this repository: a defect with origin pre-existing that is not Critical is logged as a known"
+    " defect and does not block the merge, when every location its title and detail cite is unchanged by this"
+    " pull request. Cite every location the defect depends on, with its file and line, so the check can compare"
+    " them with the diff: a defect that depends on code or inputs this change adds is introduced, not"
+    " pre-existing. A Critical defect always blocks. Rate severity by impact, never by whether it blocks."
 )
 
 

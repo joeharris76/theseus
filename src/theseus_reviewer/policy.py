@@ -526,7 +526,7 @@ def load_policy(path: Path) -> Policy:
     return parse_policy(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
-PRE_EXISTING_MODES = ("block", "advisory")
+PRE_EXISTING_MODES = ("block", "known")
 
 
 def _finding_rounds(protocol: Mapping[str, Any]) -> int | None:
@@ -542,6 +542,7 @@ def _finding_rounds(protocol: Mapping[str, Any]) -> int | None:
 
 def _pre_existing(protocol: Mapping[str, Any]) -> str:
     value = protocol.get("pre_existing", "block")
+    _require(value != "advisory", "protocol pre_existing: advisory was replaced by known; use block or known")
     _require(value in PRE_EXISTING_MODES, f"protocol pre_existing must be one of {PRE_EXISTING_MODES}")
     return value
 

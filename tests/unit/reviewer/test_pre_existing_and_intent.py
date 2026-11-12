@@ -10,7 +10,7 @@ import pytest
 
 from conftest import ALPHA_POLICY
 from theseus_reviewer import attempts as attempt_files
-from theseus_reviewer import cli, coverage, github, intent, protocol, selection, status_text
+from theseus_reviewer import cli, coverage, github, intent, protocol, selection
 from theseus_reviewer.absence import INCOMPLETE, Absence
 from theseus_reviewer.diff import STAGED_DIFF_NAME, added_lines
 from theseus_reviewer.policy import Policy
@@ -23,7 +23,7 @@ from .test_cli_plan import REPO, FakeGitHub, _fake, _pull
 from .test_cli_plan import _plan as _cli_plan
 from .test_evidence_retry import _file_list_plan
 from .test_render import _FENCE_NONCE, _response_json
-from .test_rounds import _final, _protocol_plan
+from .test_rounds import _protocol_plan
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -41,7 +41,7 @@ def _workspace() -> str:
 WORKSPACE = _workspace()
 
 
-def _plan_with(policy: Policy, mode: str = "advisory", **over: Any) -> dict[str, Any]:
+def _plan_with(policy: Policy, mode: str = "known", **over: Any) -> dict[str, Any]:
     plan = _protocol_plan(policy, pre_existing=mode)
     return {**plan, "added_lines": ADDED, "new_files": [], "workspace": WORKSPACE, **over}
 
@@ -62,47 +62,6 @@ def test_added_lines_counts_only_plus_lines_with_their_new_numbers() -> None:
     )
     assert added_lines(diff) == {"f": frozenset({2, 22}), "g": frozenset({1, 2})}
     assert added_lines("") == {}
-
-
-@pytest.mark.parametrize("severity", ["Medium", "Low"])
-def test_an_unchanged_anchor_does_not_prove_base_behavior(policy: Policy, severity: str) -> None:
-    judgement = _judged(_plan_with(policy), _old(severity))
-    assert judgement.decision == protocol.SHIP_WITH_FIXES and len(judgement.defects) == 1
-    assert judgement.advisory == () and judgement.carried == ()
-
-
-@pytest.mark.parametrize(
-    ("trigger", "addition"),
-    [
-        ("caller.py", "from operation import ratio\nratio(0)\n"),
-        ("init.py", "from operation import values\nvalues.append(0)\n"),
-        ("input.json", '{"denominator": 0}\n'),
-    ],
-)
-@pytest.mark.parametrize("severity", ["Medium", "Low"])
-def test_a_new_trigger_elsewhere_cannot_demote_an_unchanged_operation(
-    policy: Policy, tmp_path: Path, trigger: str, addition: str, severity: str
-) -> None:
-    (tmp_path / "operation.py").write_text("values = []\ndef ratio(value):\n    return 1 / value\n", encoding="utf-8")
-    (tmp_path / trigger).write_text(addition, encoding="utf-8")
-    plan = _plan_with(
-        policy,
-        added_lines={trigger: [[1, len(addition.splitlines())]]},
-        new_files=[trigger],
-        changed_paths=[trigger],
-        workspace=str(tmp_path),
-    )
-    finding = _old(severity, 3, file="operation.py", detail="zero denominator raises instead of returning a result")
-    judgement = _judged(plan, finding)
-    assert judgement.decision == protocol.SHIP_WITH_FIXES
-    assert len(judgement.defects) == 1 and judgement.advisory == ()
-
-
-@pytest.mark.parametrize("severity", ["Critical", "High"])
-def test_a_pre_existing_critical_or_high_always_blocks(policy: Policy, severity: str) -> None:
-    judgement = _judged(_plan_with(policy), _old(severity))
-    assert judgement.decision == protocol.SHIP_WITH_FIXES and judgement.advisory == ()
-    assert len(judgement.defects) == 1
 
 
 @pytest.mark.parametrize(
@@ -138,12 +97,6 @@ def test_block_mode_keeps_today_behaviour(policy: Policy) -> None:
     assert judgement.decision == protocol.SHIP_WITH_FIXES and judgement.advisory == ()
 
 
-def test_unverified_pre_existing_findings_count_toward_the_defect_limit(policy: Policy) -> None:
-    plan = {**_plan_with(policy), "max_defects": 1}
-    judgement = _judged(plan, _old("Medium"), _old("Low"), _finding("Low", 11))
-    assert judgement.decision == protocol.DO_NOT_SHIP and judgement.advisory == ()
-
-
 def test_the_origin_is_validated_defaults_to_introduced_and_survives_the_artifact_round_trip() -> None:
     assert validate(_v("s", [_finding("Low")])).defects[0].origin == "introduced"
     verdict = validate(_v("s", [_old("Low")]))
@@ -154,27 +107,6 @@ def test_the_origin_is_validated_defaults_to_introduced_and_survives_the_artifac
         validate(_v("s", [_old("Low", origin="legacy")]))
     with pytest.raises(VerdictError):
         validate(_v("s", [_old("Low", origin="<origin>")]))
-
-
-def test_unverified_pre_existing_findings_publish_as_blocking_and_remain_open(policy: Policy, tmp_path: Path) -> None:
-    plan = _plan_with(policy)
-    final = _final(policy, tmp_path, plan, _v("s", [_old("Medium"), _old("Low", 3)]))
-    assert final.state == "failure" and final.description == status_text.with_findings(
-        status_text.OPEN_FINDINGS_LABEL, 2, [("Medium", 1), ("Low", 1)], [], "", status_text.DESCRIPTION_LIMIT
-    )
-    body = final.review["body"]
-    assert "**Pre-existing, not blocking**" not in body and "(pre-existing)" not in body
-    record = protocol.decode_marker(body)
-    assert "advisory" not in record
-    assert [item["id"] for item in record["open_defects"]] == ["D1", "D2"]
-    assert record["next_id"] == 3 and record["decision"] == "SHIP_WITH_FIXES"
-
-
-def test_an_unverified_pre_existing_finding_does_not_carry_a_verified_tag(policy: Policy, tmp_path: Path) -> None:
-    final = _final(policy, tmp_path, _plan_with(policy), _v("s", [_old("High")]))
-    assert final.state == "failure"
-    assert final.review["comments"][0]["body"].startswith("**High**: High issue\n")
-    assert "advisory" not in protocol.decode_marker(final.review["body"])
 
 
 def test_the_plan_records_the_trusted_added_lines_and_new_files(
@@ -445,49 +377,16 @@ def test_a_defect_caused_by_deleting_a_guard_is_never_advisory(policy: Policy) -
     assert _judged(plan, _old("Medium", 3)).decision == protocol.SHIP_WITH_FIXES
 
 
-@pytest.mark.parametrize(
-    "detail",
-    ["The same pattern recurs at checker.py:11.", "Also see line 11.", "other.py:3 repeats it"],
-)
-def test_a_finding_that_names_another_location_is_never_advisory(policy: Policy, detail: str) -> None:
-    plan = _plan_with(policy)
-    assert _judged(plan, _old("Medium", 2, detail=detail)).decision == protocol.SHIP_WITH_FIXES
-
-
 def test_the_origin_rule_in_every_template_covers_deleted_and_grouped_defects() -> None:
     from theseus_reviewer.render import TEMPLATE_DIR, TEMPLATES
 
     for name in TEMPLATES:
         text = (TEMPLATE_DIR / f"{name}.md").read_text(encoding="utf-8")
         assert "including by deleting or moving code, is introduced" in text and "spans several" in text
-        assert "Origin is a claim, not verified base-behavior evidence; all findings still block." in text
-
-
-@pytest.mark.parametrize(
-    ("title", "detail"),
-    [
-        ("Old issue", "Same pattern at line 11."),
-        ("Old issue", "see lines 11-12"),
-        ("Old issue", "see the code at checker.py:11"),
-        ("Old issue", "see other.py:3"),
-        ("Old issue", "see foo: 11"),
-        ("Old issue", "permalink checker.py#L11"),
-        ("Old issue", "also at L11"),
-        ("Old issue", "also at call site (11)"),
-        ("Old issue at other.py", "plain detail"),
-        ("Old issue at line 11", "plain detail"),
-        ("Old issue (11)", "plain detail"),
-        ("Old issue", "mirrors util/helpers.py"),
-    ],
-)
-def test_any_other_location_in_the_title_or_detail_blocks_demotion(policy: Policy, title: str, detail: str) -> None:
-    finding = {**_old("Medium", 2), "title": title, "detail": detail}
-    assert _judged(_plan_with(policy), finding).decision == protocol.SHIP_WITH_FIXES
-
-
-def test_naming_only_its_own_path_does_not_prove_base_behavior(policy: Policy) -> None:
-    finding = {**_old("Medium", 2), "detail": "benchbox/core/equivalence/checker.py never validates it"}
-    assert _judged(_plan_with(policy), finding).decision == protocol.SHIP_WITH_FIXES
+        assert (
+            "Origin is a claim; the review policy decides what a pre-existing defect does, and an introduced defect always blocks."
+            in text
+        )
 
 
 def test_deleting_hunks_are_marked_without_hiding_added_lines_in_other_files() -> None:
@@ -505,7 +404,7 @@ def test_deleting_hunks_are_marked_without_hiding_added_lines_in_other_files() -
 
 def _scope_plan(policy: Policy, diff: str, changed: list[str]) -> dict[str, Any]:
     return {
-        **_protocol_plan(policy, pre_existing="advisory"),
+        **_protocol_plan(policy, pre_existing="known"),
         "added_lines": cli._added_ranges(diff),
         "new_files": [],
         "changed_paths": changed,
@@ -530,27 +429,6 @@ def test_a_changed_file_whose_header_git_quotes_never_demotes(policy: Policy) ->
     plan = _scope_plan(policy, diff, [path])
     assert path not in plan["added_lines"]
     assert _judged(plan, _old_in(path)).decision == protocol.SHIP_WITH_FIXES
-
-
-def test_mapped_and_untouched_files_both_need_base_behavior_evidence(policy: Policy) -> None:
-    diff = f"diff --git a/{CHECKER} b/{CHECKER}\n--- a/{CHECKER}\n+++ b/{CHECKER}\n@@ -9,1 +9,2 @@\n a\n+b\n"
-    plan = _scope_plan(policy, diff, [CHECKER])
-    assert _judged(plan, _old("Medium", 2)).decision == protocol.SHIP_WITH_FIXES
-    assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP_WITH_FIXES
-
-
-def test_another_spelling_of_a_changed_path_gets_the_same_checks(policy: Policy) -> None:
-    import unicodedata
-
-    plan = _plan_with(policy, added_lines={CHECKER: [[1, 5]], "docs/naïve.py": [[1, 5]]}, changed_paths=[CHECKER])
-    plan["changed_paths"] = [CHECKER, "docs/naïve.py"]
-    shouted = _old_in(CHECKER.upper())
-    decomposed = _old_in(unicodedata.normalize("NFD", "docs/naïve.py"))
-    assert _judged(plan, shouted).decision == protocol.SHIP_WITH_FIXES
-    assert _judged(plan, decomposed).decision == protocol.SHIP_WITH_FIXES
-    unmapped = {**plan, "added_lines": {}}
-    assert _judged(unmapped, _old_in(CHECKER.title())).decision == protocol.SHIP_WITH_FIXES
-    assert _judged(plan, _old_in("elsewhere/untouched.py")).decision == protocol.SHIP_WITH_FIXES
 
 
 def test_a_renamed_or_copied_file_never_demotes(policy: Policy) -> None:
@@ -607,15 +485,6 @@ def test_the_target_of_a_symlink_the_change_adds_is_not_demoted_in_a_first_round
     assert protocol.judge_planned(verdict, retargeted, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
 
 
-def test_an_unrelated_untouched_file_still_needs_base_behavior_evidence(policy: Policy, tmp_path: Path) -> None:
-    (tmp_path / "real.py").write_text("x\n", encoding="utf-8")
-    (tmp_path / "other.py").write_text("y\n", encoding="utf-8")
-    (tmp_path / "alias.py").symlink_to("real.py")
-    plan = _plan_with(policy, new_files=["alias.py"], added_lines={"alias.py": []}, changed_paths=["alias.py"])
-    verdict = validate(_v("s", [{**_old("Medium", 2), "file": "other.py"}]))
-    assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
-
-
 def test_a_finding_under_a_directory_symlink_the_change_adds_is_not_demoted(policy: Policy, tmp_path: Path) -> None:
     (tmp_path / "src" / "core").mkdir(parents=True)
     (tmp_path / "src" / "core" / "foo.py").write_text("x\n", encoding="utf-8")
@@ -652,17 +521,6 @@ def test_a_directory_symlink_to_the_repository_root_aliases_every_path(policy: P
     assert protocol.judge_planned(verdict, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
 
 
-def test_a_cited_path_that_is_not_a_file_in_the_head_tree_never_demotes(policy: Policy, tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "x.py").write_text("x\n", encoding="utf-8")
-    plan = _plan_with(policy, added_lines={"src/x.py": [[1, 5]]}, changed_paths=["src/x.py"])
-    wrong = validate(_v("s", [{**_old("Medium", 2), "file": "x.py"}]))
-    assert protocol.judge_planned(wrong, plan, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
-    other = _plan_with(policy)
-    untouched = validate(_v("s", [{**_old("Medium", 2), "file": "src/x.py"}]))
-    assert protocol.judge_planned(untouched, other, workspace=tmp_path).decision == protocol.SHIP_WITH_FIXES
-
-
 def test_a_promotion_review_never_demotes(policy: Policy) -> None:
     plan = _plan_with(policy, promotion={"schema": 1})
     assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
@@ -678,21 +536,21 @@ def test_a_cited_directory_never_demotes(policy: Policy, tmp_path: Path) -> None
 
 
 def test_the_advisory_exception_is_in_the_brief_only_when_the_policy_opts_in(policy: Policy, tmp_path: Path) -> None:
-    from theseus_reviewer.render import ADVISORY_RULE
+    from theseus_reviewer.render import KNOWN_RULE
 
     plan = {
         **_file_list_plan(_plan(policy, ("large", "huge"))),
         "brief_mode": "inline",
         "diff_inline": "diff --git a/x b/x\n+x\n",
-        "protocol": {"prior": [], "forced": False, "claimed": [], "next_id": 1, "pre_existing": "advisory"},
+        "protocol": {"prior": [], "forced": False, "claimed": [], "next_id": 1, "pre_existing": "known"},
     }
-    for name, mode, expected in (("on", "advisory", True), ("off", "block", False)):
+    for name, mode, expected in (("on", "known", True), ("off", "block", False)):
         plan_dir, workspace = tmp_path / name / "p", tmp_path / name / "w"
         plan_dir.mkdir(parents=True)
         workspace.mkdir()
         _git(workspace, "init", "--quiet")
         held = {**plan, "protocol": {**plan["protocol"], "pre_existing": mode}}
-        assert (ADVISORY_RULE in cli._assemble_prompt(held, plan_dir, _classification("large"), workspace)) is expected
+        assert (KNOWN_RULE in cli._assemble_prompt(held, plan_dir, _classification("large"), workspace)) is expected
 
 
 def test_without_a_workspace_nothing_demotes(policy: Policy) -> None:
