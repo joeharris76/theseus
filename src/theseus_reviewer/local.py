@@ -159,7 +159,7 @@ def _git(root: Path, *args: str) -> str:
 
 
 def _base_guidance(root: Path, base_ref: str, path: str) -> str:
-    entry = _git(root, "ls-tree", base_ref, "--", path).split("\t", 1)[0].split()
+    entry = _git(root, "ls-tree", "--full-tree", base_ref, "--", path).split("\t", 1)[0].split()
     if len(entry) < 3 or entry[0] not in ("100644", "100755") or entry[1] != "blob":
         raise Unavailable(f"{path} at {base_ref} must be a regular file")
     result = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{base_ref}:{path}"], capture_output=True)

@@ -196,3 +196,11 @@ def test_a_local_review_refuses_the_same_base_guidance_the_hosted_run_refuses(
     root = _base_repository(tmp_path, content, link)
     with pytest.raises(local.Unavailable, match=message):
         local.Trusted.read(root, "main", ".github/review.yml")
+
+
+def test_a_local_review_started_from_a_subdirectory_still_finds_the_guidance(tmp_path: Path) -> None:
+    root = _base_repository(tmp_path, GUIDANCE_TEXT.encode())
+    sub = root / "sub"
+    sub.mkdir()
+    trusted = local.Trusted.read(sub, "main", ".github/review.yml")
+    assert dict(trusted.files)[GUIDANCE_PATH] == GUIDANCE_TEXT.strip()
