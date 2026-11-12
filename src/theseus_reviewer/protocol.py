@@ -738,7 +738,7 @@ DEPENDENT_FILE_BYTES = 4194304
 IMPORTER_EXTENSIONS = frozenset(
     "py pyi js jsx mjs cjs ts tsx java kt scala go rs c h cc cpp hpp cs rb php sh swift".split()
 )
-DEPENDENT_ROUNDS = 3
+DEPENDENT_ROUNDS = 2
 SKIPPED_DIRECTORIES = frozenset(
     ".git .venv venv node_modules __pycache__ .tox dist build .mypy_cache .ruff_cache".split()
 )
@@ -853,6 +853,16 @@ class KnownScope:
         full = os.path.realpath(os.path.join(root, token))
         return full.startswith(root + os.sep) and os.path.isfile(full)
 
+    @staticmethod
+    def _modules(files: Sequence[str]) -> set[str]:
+        names: set[str] = set()
+        for path in files:
+            parts = _clean_path(path).rsplit(".", 1)[0].split("/")
+            if parts[-1] == "__init__" and len(parts) > 1:
+                parts = parts[:-1]
+            names.update({parts[-1], ".".join(parts)})
+        return {item for item in names if item}
+
     def _definitions(self, path: str) -> list[str] | None:
         if self.workspace is None:
             return None
@@ -893,9 +903,10 @@ class KnownScope:
         if not needles:
             return True
         root = os.path.realpath(str(self.workspace))
-        expanded = self._with_dependents(needles, root)
-        if expanded is None:
+        grown = self._with_dependents(self._modules(files), root)
+        if grown is None:
             return True
+        expanded = needles | grown
         pattern = re.compile(
             r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(expanded)) + r")(?![\w])", re.IGNORECASE
         )
@@ -941,7 +952,7 @@ class KnownScope:
             common = self._common(index)
             names = set(needles)
             for _ in range(DEPENDENT_ROUNDS):
-                wanted = {part.casefold() for name in names for part in name.split(".") if part} - common
+                wanted = {name.rsplit(".", 1)[-1].casefold() for name in names} - common
                 added: set[str] = set()
                 for full, tokens in index.items():
                     if not tokens & wanted:
@@ -1008,7 +1019,7 @@ class KnownScope:
             key = parts[-1].casefold()
             if key not in common:
                 stems.setdefault(key, set()).add(full)
-        wanted = {part.casefold() for name in names for part in name.split(".") if part} - common
+        wanted = {name.rsplit(".", 1)[-1].casefold() for name in names} - common
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
         frontier = set(related)
