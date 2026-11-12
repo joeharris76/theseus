@@ -783,8 +783,9 @@ class KnownScope:
         return [path for path in self._paths() if _plain(path) == folded]
 
     def _citations(self, finding: Finding) -> tuple[list[tuple[str, int | None, int | None]], int]:
-        text = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").casefold().replace("\\", "/")
-        text = re.sub(r"(?<![\w.])\./", "", text)
+        original = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").replace("\\", "/")
+        original = re.sub(r"(?<![\w.])\./", "", original)
+        text = original.casefold()
         own = _plain(finding.file)
         cited: list[tuple[str, int | None, int | None]] = []
         mentions = 0
@@ -808,11 +809,10 @@ class KnownScope:
                         cited.extend((path, start, end) for start, end in spans)
                     else:
                         cited.append((path, None, None))
-        for match in _TOKEN.finditer(text):
+        for match in _TOKEN.finditer(original):
             token = match["token"]
             if ("." in token or "/" in token) and self._on_disk(token):
                 mentions += 1
-                text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
                 spans = _ranges(match["first"], match["last"], match["more"])
                 if spans:
                     cited.extend((token, start, end) for start, end in spans)
@@ -850,7 +850,9 @@ class KnownScope:
         needles = self._needles(finding, files)
         if not needles:
             return True
-        pattern = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])")
+        pattern = re.compile(
+            r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])", re.IGNORECASE
+        )
         root = os.path.realpath(str(self.workspace))
         scanned = [path for path in self._paths() if _plain(path) not in {_plain(item) for item in files}]
         if len(scanned) > TRIGGER_SCAN_FILES:

@@ -287,3 +287,17 @@ def test_a_cited_unchanged_file_other_than_the_own_file_is_searched_for_triggers
 def test_incidental_numbers_are_not_a_citation(policy: Policy, tmp_path: Path, detail: str) -> None:
     _tree(tmp_path)
     assert _judged(_plan(policy, tmp_path), _old(detail=detail)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_mixed_case_cited_module_is_searched_with_its_case(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "app").mkdir()
+    (tmp_path / "lib" / "Parser.py").write_text("def parse(x):\n    return 1 / x\n", encoding="utf-8")
+    (tmp_path / "app" / "report.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "app" / "new.py").write_text("from lib import Parser\nParser.parse(0)\n", encoding="utf-8")
+    plan = _plan(
+        policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, new_files=["app/new.py"], changed_paths=["app/new.py"]
+    )
+    finding = _old(detail="report.py:1 uses lib/Parser.py:2 which divides by zero", file="app/report.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
