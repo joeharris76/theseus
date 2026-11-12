@@ -35,6 +35,8 @@ _RAW_TAG = re.compile(r"<(?=/?\s*(?:details|summary)\b)", re.IGNORECASE)
 # A backslash does not stop GitHub rendering "[ ]" as a checkbox (checked against its markdown API), a code span does.
 _TASK_MARK = re.compile(r"\[([ xX])\]")
 _BLOCK_START = re.compile(r"^(?:[#>=+*-]|`{3,}|~{3,}|\d+[.)])")
+# A fence run at the start of a prose line, behind any indent, quote or list prefix.
+_PROSE_FENCE = re.compile(r"^((?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*)(`{3,}|~{3,})", re.MULTILINE)
 _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 _HEADING = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
 _UNDERLINE = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})([=-])(?=[=-]*[ \t]*$)")
@@ -70,6 +72,7 @@ def _prose(chunk: str) -> str:
         if rows[index - 1].strip() and (found := _UNDERLINE.match(rows[index])):
             rows[index] = f"{found.group(1)}\\{rows[index][found.end(1) :]}"
     chunk = "\n".join(rows)
+    chunk = _PROSE_FENCE.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
     chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
     chunk = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)

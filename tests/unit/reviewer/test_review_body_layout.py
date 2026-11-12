@@ -661,3 +661,59 @@ def test_dispute_evidence_and_owner_reasons_are_inert_inline(policy: Policy) -> 
     line = next(line for line in body.splitlines() if line.startswith("**Owner ruling:**"))
     assert "\\~~~" in line and "`[ ]`" in line and "&lt;/details>" in line
     assert body.count("~~~") == 1
+
+
+FENCE_CASES = [
+    "  ```\n<i>\n- [ ] tick",
+    " ```\n<i>\n- [ ] tick",
+    "   ```\n<i>\n- [ ] tick",
+    "  ~~~\n<i>\n- [ ] tick",
+    "````\nx\n````\n  ````\n- [ ] tick",
+    "    ````\n- [ ] tick",
+    "> ```\n> <i>\n- [ ] tick",
+    "- ```\n  <i>\n- [ ] tick",
+    "1. ~~~\n   x\n- [ ] tick",
+    "  > - ```\n- [ ] tick",
+]
+
+
+def _wrapped(text: str) -> str:
+    return "\n".join(layout.collapsible("s", [layout.neutralize(text)])) + "\nAFTER"
+
+
+@pytest.mark.parametrize("text", FENCE_CASES)
+def test_an_indented_or_prefixed_fence_is_escaped_and_the_details_block_closes_outside_code(text: str) -> None:
+    out = layout.neutralize(text)
+    real = False
+    for line in out.split("\n"):
+        if re.match(r"^(`{3,}|~{3,})", line):
+            real = not real
+            continue
+        if not real:
+            assert not re.match(r"^((?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*)(`{3,}|~{3,})", line), (line, out)
+    assert not real
+    body = _wrapped(text)
+    assert body.count("</details>") == 1 and body.index("</details>") < body.index("AFTER")
+
+
+def test_every_fence_case_renders_inert_through_githubs_markdown() -> None:
+    import shutil
+    import subprocess
+
+    if shutil.which("gh") is None:
+        pytest.skip("gh is not available")
+    for text in FENCE_CASES:
+        result = subprocess.run(
+            ["gh", "api", "-X", "POST", "/markdown", "-f", "mode=gfm", "-f", f"text={_wrapped(text)}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip("GitHub's markdown API is not reachable")
+        html = result.stdout
+        assert 'type="checkbox"' not in html, text
+        after = html.index("AFTER")
+        assert html.count("<details") == html.count("</details>") == 1, text
+        assert html.rindex("</details>") < after, text
+        assert html[:after].count("<pre") == html[:after].count("</pre>"), text
+        assert "<pre" not in html[html.rindex("</details>") :], text
