@@ -738,10 +738,11 @@ _LINE_LIST = (
     r"(?:[ \t]*(?:[:#]|[ \t]lines?[ \t]+|[ \t]*\([ \t]*L?)[ \t]*L?(?P<first>\d+)"
     r"(?:[ \t]*[-\u2013][ \t]*L?(?P<last>\d+))?(?P<more>(?:[ \t]*(?:,|and|&)[ \t]*L?\d+(?:[ \t]*[-\u2013][ \t]*L?\d+)?)*))?"
 )
+_TOKEN = re.compile(rf"(?<![\w./-])(?P<token>[\w.@+~-]+(?:/[\w.@+~-]+)*)(?![\w]){_LINE_LIST}")
 _NUMBER_RANGE = re.compile(r"(\d+)(?:[ \t]*[-\u2013][ \t]*L?(\d+))?")
 _BARE_LINE = re.compile(
     r"#L(?P<a>\d+)(?:-L?(?P<b>\d+))?|\bL(?P<c>\d+)(?:-L?(?P<d>\d+))?\b"
-    r"|\blines?[ \t]+(?P<e>\d+)(?:[ \t]*[-\u2013][ \t]*(?P<f>\d+))?|:[ \t]*(?P<g>\d+)\b|\((?P<h>\d+)\)",
+    r"|\blines?[ \t]+(?P<e>\d+)(?:[ \t]*[-\u2013][ \t]*(?P<f>\d+))?",
     re.IGNORECASE,
 )
 
@@ -807,11 +808,28 @@ class KnownScope:
                         cited.extend((path, start, end) for start, end in spans)
                     else:
                         cited.append((path, None, None))
+        for match in _TOKEN.finditer(text):
+            token = match["token"]
+            if ("." in token or "/" in token) and self._on_disk(token):
+                mentions += 1
+                text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
+                spans = _ranges(match["first"], match["last"], match["more"])
+                if spans:
+                    cited.extend((token, start, end) for start, end in spans)
+                else:
+                    cited.append((token, None, None))
         for match in _BARE_LINE.finditer(text):
             mentions += 1
             numbers = [int(value) for value in match.groups() if value]
             cited.append((finding.file, min(numbers), max(numbers)))
         return cited, mentions
+
+    def _on_disk(self, token: str) -> bool:
+        if self.workspace is None:
+            return False
+        root = os.path.realpath(str(self.workspace))
+        full = os.path.realpath(os.path.join(root, token))
+        return full.startswith(root + os.sep) and os.path.isfile(full)
 
     def _needles(self, finding: Finding, files: Sequence[str]) -> set[str]:
         needles: set[str] = set()
@@ -830,6 +848,8 @@ class KnownScope:
         if self.workspace is None:
             return True
         needles = self._needles(finding, files)
+        if not needles:
+            return True
         pattern = re.compile(r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])")
         root = os.path.realpath(str(self.workspace))
         scanned = [path for path in self._paths() if _plain(path) not in {_plain(item) for item in files}]

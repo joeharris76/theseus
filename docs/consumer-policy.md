@@ -207,7 +207,7 @@ The findings schema has an optional `origin` (`introduced`, the default, or `pre
 With `protocol.pre_existing: known` a finding is logged as a known defect and does not block when all of these hold:
 
 - the reviewer flagged it `pre-existing` and did not rate it Critical (a Critical finding always blocks);
-- its title or detail cites at least one location in plain text (`path:12`, `path#L12`, `path lines 12-14`, `path:12, 40`, a path suffix or bare file name, or a bare `line 12`, `L12`, `(12)` read against the finding's own file); an uncited finding blocks;
+- its title or detail cites at least one location in plain text (`path:12`, `path#L12`, `path lines 12-14`, `path:12, 40`, an existing repository path, a path suffix or bare file name of a changed file, or a bare `line 12`, `L12`, `#L12` read against the finding's own file); an uncited finding blocks;
 - the change touches none of the cited files, the finding's own file included, and the finding's file is a regular file in the head tree that the change does not add, rename, copy or alter as binary;
 - no file the change touches imports or calls the cited code: Theseus scans the lines the change adds in every other changed file (at most 300 files of 256 KiB each; more or larger blocks) for each cited module name, dotted module path and each function or symbol the finding names in backticks or as `name()`. A match is a trigger and the finding blocks;
 - the review listed every finding it found, is not DO NOT SHIP, is not a promotion review, and at most 5 findings qualify (more than 5 and all of them block);
