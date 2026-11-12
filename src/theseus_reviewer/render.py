@@ -225,7 +225,7 @@ KNOWN_RULE = (
     "Exception for this repository: a defect with origin pre-existing that is not Critical is logged as a known"
     " defect and does not block the merge, when every location its title and detail cite is unchanged by this"
     " pull request. Cite every location the defect depends on, with its file and line, so the check can compare"
-    " them with the diff: a defect that depends on code or inputs this change adds is introduced, not"
+    " them with the diff, as plain text such as path/to/file.py:12 and never as a markdown link: a defect that depends on code or inputs this change adds is introduced, not"
     " pre-existing. A Critical defect always blocks. Rate severity by impact, never by whether it blocks."
 )
 
