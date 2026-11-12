@@ -547,3 +547,33 @@ def test_critical_and_high_pre_existing_defects_always_block(policy: Policy, tmp
     _tree(tmp_path)
     judgement = _judged(_plan(policy, tmp_path), _old(severity))
     assert judgement.decision == protocol.SHIP_WITH_FIXES and len(judgement.defects) == 1 and judgement.advisory == ()
+
+
+def test_a_changed_package_init_runs_before_the_cited_module_and_is_a_trigger(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "op.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "pkg" / "__init__.py").write_text("DEBUG = True\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"pkg/__init__.py": [[1, 1]]}, changed_paths=["pkg/__init__.py"])
+    finding = _old(detail="pkg/op.py:2 divides by zero", file="pkg/op.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "caller"),
+    [
+        ("ratio.go", "package stats\nfunc Compute(v int) int {\n\treturn 1 / v\n}\n", "stats.Compute(0)\n"),
+        ("ratio.rs", "pub fn compute(v: i32) -> i32 {\n    1 / v\n}\n", "compute(0);\n"),
+        ("Ratio.java", "public class Ratio {\n}\n", "new Ratio();\n"),
+    ],
+)
+def test_definitions_in_other_languages_are_needles(
+    policy: Policy, tmp_path: Path, name: str, source: str, caller: str
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / name).write_text(source, encoding="utf-8")
+    (tmp_path / "main.go").write_text(caller, encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"main.go": [[1, 1]]}, changed_paths=["main.go"])
+    finding = _old(detail=f"lib/{name}:2 is wrong", file=f"lib/{name}")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES

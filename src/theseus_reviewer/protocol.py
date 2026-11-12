@@ -751,7 +751,11 @@ SOURCE_EXTENSIONS = frozenset(
 _CONFIG_NAMES = frozenset(
     "makefile dockerfile pyproject.toml setup.cfg setup.py tox.ini noxfile.py conftest.py package.json".split()
 )
-_DEFINITION = re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class|function)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
+_DEFINITION = re.compile(
+    r"^[ \t]*(?:(?:export|public|private|protected|static|pub|async|final|default|extern|inline|unsafe)[ \t]+)*"
+    r"(?:def|class|function|func|fn|interface|struct|enum|trait|type)[ \t]+(?:\([^)]*\)[ \t]*)?([A-Za-z_]\w*)",
+    re.MULTILINE,
+)
 TRIGGER_SCAN_BYTES = 262144
 _SYMBOL = re.compile(r"`(?P<quoted>[A-Za-z_][\w.]*)`|\b(?P<called>[A-Za-z_]\w{2,})\(")
 _LINE_LIST = (
@@ -1024,6 +1028,14 @@ class KnownScope:
         wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
+        for full in list(related):
+            directory = os.path.dirname(full)
+            while directory.startswith(root + os.sep):
+                for init in ("__init__.py", "__init__.pyi"):
+                    candidate = os.path.join(directory, init)
+                    if candidate in index:
+                        related.add(candidate)
+                directory = os.path.dirname(directory)
         frontier = set(related)
         for _ in range(DEPENDENT_ROUNDS):
             reached: set[str] = set()
