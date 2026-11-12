@@ -29,6 +29,7 @@ from . import (
     findings,
     gitdiff,
     github,
+    guidance,
     isolation,
     protocol,
     redaction_check,
@@ -155,6 +156,19 @@ def _git(root: Path, *args: str) -> str:
     if result.returncode != 0:
         raise Unavailable(f"git {args[0]} failed: {result.stderr.strip()[:300]}")
     return result.stdout
+
+
+def _base_guidance(root: Path, base_ref: str, path: str) -> str:
+    entry = _git(root, "ls-tree", "--full-tree", base_ref, "--", path).split("\t", 1)[0].split()
+    if len(entry) < 3 or entry[0] not in ("100644", "100755") or entry[1] != "blob":
+        raise Unavailable(f"{path} at {base_ref} must be a regular file")
+    result = subprocess.run(["git", "-C", str(root), "cat-file", "blob", f"{base_ref}:{path}"], capture_output=True)
+    if result.returncode != 0:
+        raise Unavailable(f"git cat-file failed: {result.stderr.decode('utf-8', 'replace').strip()[:300]}")
+    try:
+        return guidance.check(result.stdout, path)
+    except guidance.GuidanceError as exc:
+        raise Unavailable(str(exc)) from exc
 
 
 def _repository(root: Path, explicit: str = "") -> str:
@@ -331,7 +345,7 @@ class LocalEnvironment:
         pr = int(self.pr) if self.pr else None
         try:
             return self._plan(policy, out_dir, pr)
-        except Unavailable as exc:
+        except (Unavailable, PolicyError) as exc:
             print(f"review-verdict: error: {exc}", file=sys.stderr)
             return 2
 
@@ -597,7 +611,10 @@ class Trusted:
         except (PolicyError, yaml.YAMLError) as exc:
             raise Unavailable(f"the trusted review policy at {base_ref} is invalid: {exc}") from exc
         paths = (consumer.soundness_manifest, consumer.inert_manifest, consumer.omp_config)
-        return cls(policy_text, tuple((path, _git(root, "show", f"{base_ref}:{path}")) for path in paths if path))
+        files = [(path, _git(root, "show", f"{base_ref}:{path}")) for path in paths if path]
+        if consumer.review_guidance:
+            files.append((consumer.review_guidance, _base_guidance(root, base_ref, consumer.review_guidance)))
+        return cls(policy_text, tuple(files))
 
     def write(self, directory: Path) -> Path:
         directory.mkdir(parents=True, exist_ok=True)

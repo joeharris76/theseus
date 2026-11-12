@@ -33,6 +33,7 @@ SLOT_MAX_BYTES = {
     "max_defects": 4,
     "prior_rule": 3072,
     "retry_note": 512,
+    "reviewer_guidance": 16384,
     "change_data": BRIEF_MAX_BYTES,
     "response_template": 16384,
 }
@@ -362,6 +363,7 @@ def assemble_values(
     prior_block: str,
     prior_ids: Sequence[str],
     retry_note: str = RETRY_NONE,
+    reviewer_guidance: str | None = None,
     files_block: str,
     diff_text: str | None,
     diff_path: Path | None,
@@ -394,6 +396,7 @@ def assemble_values(
         "max_defects": max_defects,
         "prior_rule": prior_rule,
         "retry_note": retry_note,
+        "reviewer_guidance": reviewer_guidance or "none",
         "change_data": _neutralize_mentions(change_data),
         "response_template": response_template(prior_ids),
     }
@@ -412,6 +415,7 @@ def render_review(
     prior_block: str,
     prior_ids: Sequence[str],
     retry_note: str = RETRY_NONE,
+    reviewer_guidance: str | None = None,
     files_block: str,
     diff_text: str | None,
     diff_path: Path | None,
@@ -429,6 +433,7 @@ def render_review(
         "prior_block": prior_block,
         "prior_ids": prior_ids,
         "retry_note": retry_note,
+        "reviewer_guidance": reviewer_guidance,
         "files_block": files_block,
         "diff_path": diff_path,
     }
