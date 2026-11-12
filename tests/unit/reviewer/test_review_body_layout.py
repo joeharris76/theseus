@@ -484,11 +484,7 @@ def _headline_cases(policy: Policy) -> dict[str, report.Final]:
         ),
         "none": pending(),
     }
-    for name in (
-        absence.ALL
-        if hasattr(absence, "ALL")
-        else ("quota", "auth", "timeout", "invalid", "empty", "error", "incomplete")
-    ):
+    for name in (kind for kind in absence.KINDS if kind != absence.OK):
         cases[f"absent-{name}"] = pending(
             attempts=[Attempt(1, "small", selection.ABSENT, absence=name, provider="anthropic")]
         )
