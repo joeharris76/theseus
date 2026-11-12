@@ -1,5 +1,6 @@
 version: 2
 mode: enforce
+minimize_superseded: true
 status_context: review-verdict
 findings_delivery: review
 bot_login: theseus-review
