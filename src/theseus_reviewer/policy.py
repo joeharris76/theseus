@@ -147,6 +147,7 @@ class Consumer:
     omp_config: str
     inert_manifest: str | None = None
     omp_fixture_prefix: str | None = None
+    review_guidance: str | None = None
 
     @property
     def primary_base(self) -> str:
@@ -335,6 +336,7 @@ def _consumer(data: Any) -> Consumer:
         "omp_config",
         "inert_manifest",
         "omp_fixture_prefix",
+        "review_guidance",
     }
     _require(not unknown, f"consumer has unknown keys {sorted(unknown)}")
     raw_bases = data.get("gated_base")
@@ -354,6 +356,7 @@ def _consumer(data: Any) -> Consumer:
     )
     inert = data.get("inert_manifest")
     fixtures = data.get("omp_fixture_prefix")
+    guidance = data.get("review_guidance")
     return Consumer(
         gated_bases=gated_bases,
         attesters=attesters,
@@ -363,6 +366,7 @@ def _consumer(data: Any) -> Consumer:
         omp_fixture_prefix=None
         if fixtures is None
         else _relative_path(fixtures.rstrip("/"), "consumer omp_fixture_prefix") + "/",
+        review_guidance=None if guidance is None else _relative_path(guidance, "consumer review_guidance"),
     )
 
 

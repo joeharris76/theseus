@@ -1012,6 +1012,8 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     if active_promotion is not None:
         promotion.write_materialized_bundle(active_promotion, out_dir)
     _stage_since_review(plan, out_dir, step, inputs)
+    if matchers.guidance is not None:
+        plan["reviewer_guidance"] = matchers.guidance
     if policy.brief.include_intent:
         plan["author_statement"] = intent.statement(
             inputs.title, inputs.body if inputs.description is None else inputs.description, inputs.linked
@@ -1683,6 +1685,7 @@ def compose_brief(
     return render_review(
         template_name=classification.template,
         retry_note=retry_note(len(marked)),
+        reviewer_guidance=plan.get("reviewer_guidance"),
         classification=classification,
         repo=plan["repo"],
         pr=UNOPENED_PR if plan["pr"] is None else int(plan["pr"]),

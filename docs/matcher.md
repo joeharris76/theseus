@@ -19,4 +19,4 @@ The owner-approved arrangement is a single verbatim copy in each consumer, recor
 theseus matcher verify --copy PATH_TO_VENDORED_COPY [--sha256 PINNED_DIGEST]
 ```
 
-It exits 1 when the copy differs from the installed matcher or from the pinned digest. `theseus matcher digest` prints the installed module's sha256. In-package callers use `theseus_reviewer.matchers.load_matchers(consumer, root)`, which loads the soundness manifest and the optional inert manifest named in the consumer policy.
+It exits 1 when the copy differs from the installed matcher or from the pinned digest. `theseus matcher digest` prints the installed module's sha256. In-package callers use `theseus_reviewer.matchers.load_matchers(consumer, root)`, which loads the soundness manifest, the optional inert manifest and the optional reviewer guidance file named in the consumer policy; an invalid guidance file raises `PolicyError`.
