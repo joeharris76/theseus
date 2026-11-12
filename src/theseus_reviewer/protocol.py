@@ -786,21 +786,24 @@ class KnownScope:
 
     def _citations(self, finding: Finding) -> list[tuple[str, int | None, int | None]]:
         text = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").casefold().replace("\\", "/")
+        text = re.sub(r"(?<![\w.])\./", "", text)
         own = _plain(finding.file)
         cited: list[tuple[str, int | None, int | None]] = []
+        owners: dict[str, list[str]] = {}
         for path in self._paths():
             for name in dict.fromkeys(_suffixes(path)):
-                if name not in text:
-                    continue
-                pattern = re.compile(rf"(?<![\w.-]){re.escape(name)}(?!\w){_LINE_LIST}")
-                for match in pattern.finditer(text):
-                    spans = _ranges(match["first"], match["last"], match["more"])
-                    text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
-                    if not spans and _plain(path) == own:
-                        continue
+                owners.setdefault(name, []).append(path)
+        for name in sorted(owners, key=len, reverse=True):
+            if name not in text:
+                continue
+            pattern = re.compile(rf"(?<![\w./-]){re.escape(name)}(?!\w){_LINE_LIST}")
+            for match in pattern.finditer(text):
+                spans = _ranges(match["first"], match["last"], match["more"])
+                text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
+                for path in owners[name]:
                     if spans:
                         cited.extend((path, start, end) for start, end in spans)
-                    else:
+                    elif _plain(path) != own:
                         cited.append((path, None, None))
         for match in _BARE_LINE.finditer(text):
             numbers = [int(value) for value in match.groups() if value]

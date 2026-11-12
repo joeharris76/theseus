@@ -305,3 +305,24 @@ def test_the_id_does_not_change_with_the_spelling_of_the_path() -> None:
     plain = Finding("Low", "src/é.py", 1, "Title", "d")
     spelled = Finding("Low", "./src/e\u0301.py", 9, "Title", "other")
     assert known.defect_id(plain) == known.defect_id(spelled)
+
+
+@pytest.mark.parametrize("detail", ["see src/pkg/b.py:40", "see pkg/b.py:40", "see b.py:40"])
+def test_two_changed_files_sharing_a_basename_do_not_swallow_each_others_citation(policy: Policy, detail: str) -> None:
+    plan = _plan_with(
+        policy,
+        added_lines={"other/b.py": [[1, 1]], "src/pkg/b.py": [[40, 41]]},
+        changed_paths=["other/b.py", "src/pkg/b.py"],
+    )
+    judgement = _judged(plan, _old("Medium", 2, detail=detail))
+    assert judgement.decision == protocol.SHIP_WITH_FIXES and judgement.advisory == ()
+
+
+def test_a_cited_other_file_with_the_own_basename_is_attributed_to_that_file(policy: Policy) -> None:
+    plan = _plan_with(
+        policy,
+        added_lines={"own/utils.py": [[90, 90]], "lib/utils.py": [[7, 7]]},
+        changed_paths=["own/utils.py", "lib/utils.py"],
+    )
+    finding = {**_old("Medium", 2, detail="see lib/utils.py:7"), "file": "own/utils.py"}
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
