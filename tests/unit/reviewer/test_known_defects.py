@@ -441,3 +441,31 @@ def test_the_dependency_walk_skips_symlinks_that_leave_the_tree_and_special_file
     (tmp_path / "notes.py").write_text("unrelated = 1\n", encoding="utf-8")
     plan = _plan(policy, tmp_path, added_lines={"notes.py": [[1, 1]]}, changed_paths=["notes.py"])
     assert _judged(plan, _old()).decision == protocol.SHIP
+
+
+def test_a_changed_transitive_dependency_of_the_cited_code_is_a_possible_trigger(
+    policy: Policy, tmp_path: Path
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "x.py").write_text("import a\ndef check(v):\n    return 1 / a.value()\n", encoding="utf-8")
+    (tmp_path / "src" / "a.py").write_text("import b\ndef value():\n    return b.number()\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("def number():\n    return 0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"src/b.py": [[2, 2]]}, changed_paths=["src/b.py"])
+    assert _judged(plan, _old(detail="src/x.py:3 divides by zero", file="src/x.py")).decision == (
+        protocol.SHIP_WITH_FIXES
+    )
+
+
+def test_a_changed_producer_whose_output_an_unchanged_orchestrator_passes_to_the_cited_code_is_a_trigger(
+    policy: Policy, tmp_path: Path
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "x.py").write_text("def validate(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "src" / "z.py").write_text("import x\nimport y\nx.validate(y.produce())\n", encoding="utf-8")
+    (tmp_path / "src" / "y.py").write_text("def produce():\n    return 0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"src/y.py": [[2, 2]]}, changed_paths=["src/y.py"])
+    assert _judged(plan, _old(detail="src/x.py:2 divides by zero", file="src/x.py")).decision == (
+        protocol.SHIP_WITH_FIXES
+    )

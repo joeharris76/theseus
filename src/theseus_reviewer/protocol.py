@@ -732,6 +732,7 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 DEPENDENT_SCAN_FILES = 20000
 DEPENDENT_FILE_BYTES = 4194304
 IMPORTER_EXTENSIONS = frozenset(
@@ -791,6 +792,7 @@ class KnownScope:
     changed: frozenset[str] = frozenset()
     workspace: Path | str | None = None
     dependent_cache: dict[frozenset[str], set[str] | None] = field(default_factory=dict, compare=False)
+    index_cache: dict[str, Any] = field(default_factory=dict, compare=False)
 
     def _paths(self) -> list[str]:
         return list(dict.fromkeys((*self.new_files, *self.changed, *self.added)))
@@ -905,7 +907,12 @@ class KnownScope:
         cited_text = self._cited_text(files)
         if cited_text is None:
             return True
+        related = self._related(files, expanded, root)
+        if related is None:
+            return True
         for path in scanned:
+            if os.path.realpath(os.path.join(root, path)) in related:
+                return True
             if self._non_source_trigger(path):
                 return True
             if self._depended_on(path, cited_text):
@@ -969,6 +976,59 @@ class KnownScope:
                 break
             names |= found
         return names
+
+    def _index(self, root: str) -> dict[str, set[str]] | None:
+        if "index" in self.index_cache:
+            return self.index_cache["index"]
+        index: dict[str, set[str]] | None = {}
+        count = 0
+        for base, directories, names in os.walk(root):
+            directories[:] = [item for item in directories if item not in SKIPPED_DIRECTORIES]
+            for name in names:
+                if name.rsplit(".", 1)[-1].casefold() not in IMPORTER_EXTENSIONS:
+                    continue
+                full = os.path.realpath(os.path.join(base, name))
+                if not (full.startswith(root + os.sep) and os.path.isfile(full)):
+                    continue
+                count += 1
+                try:
+                    with open(full, "rb") as handle:
+                        data = handle.read(DEPENDENT_FILE_BYTES + 1)
+                except OSError:
+                    index = None
+                    break
+                if count > DEPENDENT_SCAN_FILES or len(data) > DEPENDENT_FILE_BYTES:
+                    index = None
+                    break
+                index[full] = {item.casefold() for item in _IDENTIFIER.findall(data.decode("utf-8", errors="replace"))}
+            if index is None:
+                break
+        self.index_cache["index"] = index
+        return index
+
+    def _related(self, files: Sequence[str], names: set[str], root: str) -> set[str] | None:
+        index = self._index(root)
+        if index is None:
+            return None
+        stems: dict[str, set[str]] = {}
+        for full in index:
+            parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
+            stems.setdefault(parts[-2] if parts[-1] == "__init__" and len(parts) > 1 else parts[-1], set()).add(full)
+        stems = {key.casefold(): value for key, value in stems.items()}
+        wanted = {part.casefold() for name in names for part in name.split(".") if part}
+        related = {os.path.realpath(os.path.join(root, item)) for item in files}
+        related |= {full for full, tokens in index.items() if tokens & wanted}
+        frontier = set(related)
+        for _ in range(DEPENDENT_ROUNDS):
+            reached: set[str] = set()
+            for full in frontier:
+                for token in index.get(full, ()):
+                    reached |= stems.get(token, set())
+            frontier = reached - related
+            if not frontier:
+                break
+            related |= frontier
+        return related
 
     def _cited_text(self, files: Sequence[str]) -> str | None:
         root = os.path.realpath(str(self.workspace))
