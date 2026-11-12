@@ -16,6 +16,7 @@ consumer:
   omp_config: .github/review-omp-config.yml
   inert_manifest: .github/inert-paths.txt            # optional
   omp_fixture_prefix: tests/fixtures/omp_candidate   # optional
+  review_guidance: .github/review-guidance.md        # optional; see Reviewer guidance
 classifier:
   unavailable_bucket: large   # optional; size bucket used when the classifier is unreachable
   fallback: decisions         # optional; needs unavailable_bucket; OpenAI Decisions answers when TypeSafe is down
@@ -202,6 +203,12 @@ A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. 
 ## Pre-existing findings
 
 The findings schema has an optional `origin` (`introduced`, the default, or `pre-existing`). This is a reviewer claim, not verified evidence that the defective behavior existed at the base commit. An unchanged finding span cannot prove that: new callers, initialization or inputs elsewhere can introduce a defect at an unchanged operation. Until trusted base-behavior evidence can be verified, all findings remain blocking and count toward the defect limit, including Medium and Low findings with `protocol.pre_existing: advisory`. The setting remains accepted, but currently behaves like `block` (the default); no new advisory entries or verified `(pre-existing)` tags are emitted. Existing review records retain their historical advisory entries.
+
+## Reviewer guidance
+
+`consumer.review_guidance` names a repository-relative text file of reviewer guidance: the domain checks this repository wants on top of the generic template rules. Theseus reads it from the trusted checkout of the gated base branch (a local review reads it from the base ref), never from the pull request head, so a change that edits the file does not alter its own review; the edit takes effect once it merges. The file is trusted owner text and appears in the brief under `CONSUMER GUIDANCE`, outside the fenced data sections. It cannot override the template rules, the decision rules or the response contract.
+
+The file must be a non-empty UTF-8 regular file (not a symlink) of at most 16384 bytes. A missing, empty, oversized or non-UTF-8 file makes the plan fail (exit 2) rather than review without it. Keep the file in a directory the trusted checkout includes (`trusted_paths` defaults to `.github`), and list it in the classifier `gate_paths` so a change to it is reviewed as review machinery. Omit the key for no guidance; the brief then shows `none`.
 
 ## Author statement
 

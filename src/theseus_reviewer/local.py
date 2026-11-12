@@ -596,7 +596,7 @@ class Trusted:
             consumer = parse_policy(yaml.safe_load(policy_text)).consumer
         except (PolicyError, yaml.YAMLError) as exc:
             raise Unavailable(f"the trusted review policy at {base_ref} is invalid: {exc}") from exc
-        paths = (consumer.soundness_manifest, consumer.inert_manifest, consumer.omp_config)
+        paths = (consumer.soundness_manifest, consumer.inert_manifest, consumer.omp_config, consumer.review_guidance)
         return cls(policy_text, tuple((path, _git(root, "show", f"{base_ref}:{path}")) for path in paths if path))
 
     def write(self, directory: Path) -> Path:
