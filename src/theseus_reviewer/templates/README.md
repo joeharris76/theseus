@@ -56,6 +56,7 @@ instruction prose of the template itself.
 | `max_defects` | integer | 4 | protocol defect cap from policy |
 | `prior_rule` | prose | 3072 | first / ship / follow-up prior-defect rule |
 | `retry_note` | prose | 512 | `none`, or the fixed note carrying only the count of required files an earlier attempt of the same reviewer left unread; the files and the diff lines of their unseen hunks are marked inside the fenced `change_data` |
+| `reviewer_guidance` | prose | 16384 | the consumer's `review_guidance` file read from the trusted base checkout, or `none`; trusted text placed outside the fences, under the template rules |
 | `change_data` | prose+diff | 400000 | optional Author statement (pull request title, description and linked tracker text, only when the policy sets `brief.include_intent`), then file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |
 | `response_template` | JSON | 16384 | JSON template to populate, rendered after `change_data`; see below |
 

@@ -225,12 +225,15 @@ def test_linked_tracker_items_come_from_closing_keywords_only_and_skip_pull_requ
     assert intent.linked_items("o/n", body, read) == [{"ref": "#12", "title": "Issue", "text": "Details"}]
 
 
-def _statement_brief(policy: Policy, tmp_path: Path, held: dict[str, Any] | None) -> str:
+def _statement_brief(
+    policy: Policy, tmp_path: Path, held: dict[str, Any] | None, reviewer_guidance: str | None = None
+) -> str:
     plan = {
         **_file_list_plan(_plan(policy, ("large", "huge"))),
         "brief_mode": "inline",
         "diff_inline": "diff --git a/x b/x\n+x\n",
         "author_statement": held,
+        "reviewer_guidance": reviewer_guidance,
         "protocol": {"prior": [], "forced": False, "claimed": [], "next_id": 1},
     }
     plan_dir, workspace = tmp_path / "plan", tmp_path / "ws"
