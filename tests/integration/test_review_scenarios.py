@@ -33,7 +33,7 @@ def test_first_review_ships_posts_success_and_the_gate_passes(harness: Harness) 
     verdicts = harness.github.review_statuses(head)
     assert [(item["state"], item["creator"]["login"]) for item in verdicts] == [("success", "benchbox-review[bot]")]
     review = harness.github.reviews[41][-1]
-    assert review["commit_id"] == head and f"### review-verdict: success for `{head}`" in review["body"]
+    assert review["commit_id"] == head and review["body"].startswith("### ✅ SHIP · no open findings")
     assert harness.github.dispatches == [
         {"workflow": "review-gate.yml", "ref": "develop", "inputs": {"pr": "41", "head_sha": head}}
     ]

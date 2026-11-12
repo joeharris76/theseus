@@ -94,7 +94,7 @@ def test_a_first_review_records_its_decision_and_numbers_its_defects(policy: Pol
     thread = final.review["comments"][0]["body"]
     assert thread.index("<!-- review-defect: c1-D1 -->") < thread.index("<!-- review-finding:")
     assert thread.rstrip().endswith("-->") and thread.rstrip().splitlines()[-1].startswith("<!-- review-finding:")
-    assert final.review["body"].startswith(f"### review-verdict: failure for `{HEAD}`\n")
+    assert final.review["body"].startswith("### 🔧 SHIP WITH FIXES · 2 findings block merge")
 
 
 def test_ship_records_a_marker_and_a_non_empty_review(policy: Policy, tmp_path: Path) -> None:
@@ -112,7 +112,7 @@ def test_do_not_ship_opens_no_thread_and_adds_a_strike(policy: Policy, tmp_path:
     assert record["strikes_after"] == 2 and final.strikes == 2
     assert 0 < len(record["summary"]) <= protocol.DO_NOT_SHIP_SUMMARY
     assert final.review is not None and final.review["comments"] == []
-    assert "DO NOT SHIP decisions on this pull request: 2 of 3." in final.body
+    assert final.body.splitlines()[0].startswith("### ⛔ DO NOT SHIP · rework needed · strike 2 of 3")
 
 
 def test_a_pending_or_withheld_result_records_no_marker(policy: Policy, tmp_path: Path) -> None:
@@ -146,11 +146,11 @@ def test_a_follow_up_counts_unfixed_and_new_defects_in_changed_files_only(policy
     assert final.state == "failure"
     assert [item["id"] for item in record["open_defects"]] == ["D2", "D3"]
     assert record["next_id"] == 4 and (record["kind"], record["round"]) == ("follow-up", 2)
-    assert "Verified fixed: D1. Resolve their review threads." in final.body
-    still_open = final.body.split("**Still open from earlier reviews**", 1)[1]
-    assert f"`{CHECKER}:1`: D2: Old" in still_open
+    assert "fixed: **D1** (resolve its thread)" in final.body.splitlines()[2]
+    still_open = final.body.split("**Still open**", 1)[1]
+    assert f"D2 · Old · <code>{CHECKER}:1</code>" in still_open
     hidden = final.body.split("<details><summary>Not counted", 1)[1].split("</details>", 1)[0]
-    assert f"`{OTHER}:9`" in hidden and f"`{OTHER}:9`" not in final.body.split("<details>", 1)[0]
+    assert f"<code>{OTHER}:9</code>" in hidden and f"<code>{OTHER}:9</code>" not in final.body.replace(hidden, "")
     assert final.description == _open_findings(2, ("High", 1), ("Medium", 1))
     assert final.review is not None
     assert [comment["path"] for comment in final.review["comments"]] == [CHECKER]
@@ -163,8 +163,7 @@ def test_a_follow_up_ships_when_every_prior_defect_is_fixed_or_withdrawn(policy:
     final = _final(policy, tmp_path, plan, _with_priors(_v("s", outside, decision="SHIP"), D1="fixed", D2="withdrawn"))
     record = _record(final)
     assert final.state == "success" and record["decision"] == "SHIP" and record["open_defects"] == []
-    assert "Verified fixed: D1. Resolve their review threads." in final.review["body"]
-    assert "Withdrawn as never defects: D2. Resolve their review threads." in final.review["body"]
+    assert "fixed: **D1**" in final.review["body"] and "withdrawn as never defects: **D2**" in final.review["body"]
 
 
 def test_a_prior_defect_with_no_status_stays_open(policy: Policy, tmp_path: Path) -> None:
@@ -288,7 +287,7 @@ def test_carry_records_the_previous_decision_without_a_reviewer(policy: Policy, 
     assert final.state == "failure" and final.strikes == 1
     assert (record["kind"], record["decision"], record["carried"]) == ("carry", "SHIP_WITH_FIXES", True)
     assert record["open_defects"] == [_prior("D4")] and record["next_id"] == 5 and record["head_sha"] == HEAD
-    assert f"since head `{old}` was reviewed" in final.body and "D4: Old" in final.body
+    assert f"carried from {old}" in final.body and "D4 · Old" in final.body
     shipped = report.carried({**plan, "protocol": {**plan["protocol"], "previous": {**previous, "decision": "SHIP"}}})
     assert shipped.state == "success"
 
@@ -299,7 +298,7 @@ def test_refusal_posts_a_failure_that_asks_for_a_new_pull_request(policy: Policy
     record = _record(final)
     assert final.state == "failure" and len(final.description) <= 140
     assert (record["kind"], record["decision"], record["strikes_after"]) == ("refused", "REFUSED", 3)
-    assert "Decision: **REFUSED**." in final.body.splitlines()
+    assert final.body.splitlines()[0].startswith("### 🚫 REFUSED · 3 DO NOT SHIP decisions")
     assert "Close this pull request and open a new one" in final.body and "not a security control" in final.body
     assert final.review is not None and final.review["comments"] == []
 
@@ -1033,7 +1032,7 @@ def test_a_follow_up_lists_at_most_five_defects_as_not_counted(policy: Policy, t
     final = _final(policy, tmp_path, plan, _v("s", outside, decision="SHIP"))
     assert final.state == "success" and final.review is not None
     hidden = final.review["body"].split("<details><summary>Not counted", 1)[1].split("</details>", 1)[0]
-    listed = [line for line in hidden.splitlines() if line.startswith("- **")]
+    listed = [line for line in hidden.splitlines() if line.startswith("- ")]
     assert len(listed) == protocol.NOT_COUNTED_LIMIT == 5
     assert [f"outside {line}" in hidden for line in range(1, 8)] == [True] * 5 + [False] * 2
 
@@ -1101,9 +1100,8 @@ def test_three_long_cjk_findings_still_fit_the_marker_and_round_trip(policy: Pol
     assert record["decision"] == "SHIP_WITH_FIXES" and record["strikes_after"] == 1
     assert [item["id"] for item in record["open_defects"]] == ["D1", "D2", "D3"]
     assert [item["line"] for item in record["open_defects"]] == [1, 2, 3]
-    assert all(
-        finding["file"] in final.review["body"] and finding["title"] in final.review["body"] for finding in findings
-    )
+    posted = final.review["body"] + "".join(comment["body"] for comment in final.review["comments"])
+    assert all(finding["file"] in final.review["body"] and finding["title"] in posted for finding in findings)
     assert sum(1 for finding in findings if finding["file"] in final.body) == 3
 
 

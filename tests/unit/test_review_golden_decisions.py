@@ -10,7 +10,7 @@ import pytest
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 GOLDEN_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "review_golden"
-HEADING = re.compile(r"### review-verdict: (?P<state>[a-z]+) for `")
+HEADING = re.compile(r"(?:### review-verdict: |<!-- review-verdict: v2 )(?P<state>[a-z]+) ")
 DECISION = re.compile(r'<!-- review-protocol: \{.*?"decision": "(?P<decision>[A-Z_]+)"')
 
 
@@ -25,7 +25,7 @@ def _receipts() -> list[tuple[str, str, str]]:
     found = []
     for path in sorted(GOLDEN_DIR.glob("*.json")):
         for text in _strings(json.loads(path.read_text(encoding="utf-8"))):
-            heading, record = HEADING.match(text), DECISION.search(text)
+            heading, record = HEADING.search(text), DECISION.search(text)
             if heading and record:
                 found.append((path.name, heading.group("state"), record.group("decision")))
     return found

@@ -288,7 +288,7 @@ def test_a_withdrawal_stops_the_finding_blocking(monkeypatch: pytest.MonkeyPatch
     assert final.description == status_text.SEP.join(
         (status_text.SHIP_LABEL, status_text.ruling_tail("WITHDRAW", "D1"))
     )
-    assert final.review["body"].startswith("### review-verdict: success for `")
+    assert final.review["body"].startswith("### ✅ SHIP · owner ruling: WITHDRAW D1")
 
 
 def test_maintaining_a_finding_closes_its_dispute_and_keeps_it_blocking(

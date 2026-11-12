@@ -51,7 +51,7 @@ def test_follow_up_with_a_fixed_prior_defect_ships(harness: Harness) -> None:
     assert run.plan["protocol"]["kind"] == "follow-up"
     assert [item["absence"] for item in run.attempts()][:1] == [None], run.attempts()[0]["absence"]
     assert [item["state"] for item in harness.github.review_statuses(head)] == ["success"]
-    assert f"### review-verdict: success for `{head}`" in harness.github.reviews[51][-1]["body"]
+    assert harness.github.reviews[51][-1]["body"].startswith("### ✅ SHIP · no open findings")
 
 
 def test_dispute_round_rejudges_the_disputed_finding_and_ships(harness: Harness) -> None:

@@ -81,6 +81,7 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 _MARKDOWN_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 _URL = re.compile(r"(?i)\b(?:https?|ftp|file|data|javascript):[^\s<>()]+|\bwww\.[^\s<>()]+")
 _MENTION = re.compile(r"(?<![A-Za-z0-9_`])@+(?=[A-Za-z0-9])")
+_LINE_BREAK = re.compile(r"[\r\n\t]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _COMMENT_OPEN = re.compile(r"<\s*!\s*-\s*-")
 _COMMENT_CLOSE = re.compile(r"-\s*-\s*>")
@@ -343,6 +344,7 @@ def valid_path(path: str) -> bool:
         and "\\" not in path
         and all(part not in ("", ".", "..") for part in parts)
         and _CONTROL.search(path) is None
+        and not _LINE_BREAK.search(path)
     )
 
 

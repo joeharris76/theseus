@@ -5,12 +5,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from . import absence, capacity, providers, recovery, retry, selection
+from . import absence, capacity, protocol, providers, recovery, retry, selection
 from .github import parse_time
 from .selection import Attempt, Step
 
 MARKER_VERSION = "v1"
 MARKER_OPEN = "<!-- review-unavailable:"
+VERDICT_MARKER = re.compile(r"<!-- review-verdict: v2 [a-z]+ (?P<head>[0-9a-f]{40}) -->")
+# The App's own meta line, directly after the headline: "Reviewed <head>" or "**counts** · reviewed <head>".
+REVIEWED_LINE = re.compile(r"\A### [^\n]*\n\n(?:\*\*[^\n]*?\*\* · reviewed |Reviewed )(?P<head>[0-9a-f]{40})\b")
 MARKER_PATTERN = re.compile(
     rf"{re.escape(MARKER_OPEN)} {MARKER_VERSION} (?P<head>[0-9a-f]{{40}}) (?P<key>[a-z0-9+-]+) -->"
 )
@@ -207,9 +210,24 @@ def notice(head: str, found: Sequence[Cause], *, with_next_step: bool = True) ->
     return [*([f"Next step: {next_step(found)}", ""] if with_next_step else []), marker(head, found)]
 
 
+def _record_head(body: str) -> str | None:
+    """The head named by the post's own protocol record (carried, adjudicated and refused posts have no other)."""
+    record = protocol.marker_payload(body)
+    return record.get("head_sha") if isinstance(record, dict) else None
+
+
 def _post_head(post: Mapping[str, Any], head: str) -> bool:
     body = str(post.get("body") or "")
-    return post.get("commit_id") == head or f"for `{head}`" in body.split("\n", 1)[0]
+    return (
+        post.get("commit_id") == head
+        or f"for `{head}`" in body.split("\n", 1)[0]
+        or any(found[0] == head for found in MARKER_PATTERN.findall(body))
+        or _record_head(body) == head
+        or any(
+            found.group("head") == head
+            for found in (*VERDICT_MARKER.finditer(body), *filter(None, [REVIEWED_LINE.match(body)]))
+        )
+    )
 
 
 def _bot_post(post: Mapping[str, Any], bot_login: str) -> bool:
