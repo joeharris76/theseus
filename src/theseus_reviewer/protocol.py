@@ -732,7 +732,11 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
-DEPENDENT_SCAN_FILES = 3000
+DEPENDENT_SCAN_FILES = 20000
+DEPENDENT_FILE_BYTES = 4194304
+IMPORTER_EXTENSIONS = frozenset(
+    "py pyi js jsx mjs cjs ts tsx java kt scala go rs c h cc cpp hpp cs rb php sh swift".split()
+)
 DEPENDENT_ROUNDS = 3
 SKIPPED_DIRECTORIES = frozenset(
     ".git .venv venv node_modules __pycache__ .tox dist build .mypy_cache .ruff_cache".split()
@@ -786,6 +790,7 @@ class KnownScope:
     enabled: bool
     changed: frozenset[str] = frozenset()
     workspace: Path | str | None = None
+    dependent_cache: dict[frozenset[str], set[str] | None] = field(default_factory=dict, compare=False)
 
     def _paths(self) -> list[str]:
         return list(dict.fromkeys((*self.new_files, *self.changed, *self.added)))
@@ -919,14 +924,25 @@ class KnownScope:
                 return True
         return False
 
+    def _with_dependents(self, needles: set[str], root: str) -> set[str] | None:
+        key = frozenset(needles)
+        if key in self.dependent_cache:
+            return self.dependent_cache[key]
+        found = self._closure(needles, root)
+        self.dependent_cache[key] = found
+        return found
+
     @staticmethod
-    def _with_dependents(needles: set[str], root: str) -> set[str] | None:
+    def _closure(needles: set[str], root: str) -> set[str] | None:
         sources: list[str] = []
         for base, directories, names in os.walk(root):
             directories[:] = [item for item in directories if item not in SKIPPED_DIRECTORIES]
-            sources.extend(
-                os.path.join(base, name) for name in names if name.rsplit(".", 1)[-1].casefold() in SOURCE_EXTENSIONS
-            )
+            for name in names:
+                if name.rsplit(".", 1)[-1].casefold() not in IMPORTER_EXTENSIONS:
+                    continue
+                full = os.path.realpath(os.path.join(base, name))
+                if full.startswith(root + os.sep) and os.path.isfile(full):
+                    sources.append(full)
             if len(sources) > DEPENDENT_SCAN_FILES:
                 return None
         names = set(needles)
@@ -937,13 +953,14 @@ class KnownScope:
             found: set[str] = set()
             for full in sources:
                 try:
-                    if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
-                        return None
-                    with open(full, encoding="utf-8", errors="replace") as handle:
-                        if not pattern.search(handle.read()):
-                            continue
+                    with open(full, "rb") as handle:
+                        data = handle.read(DEPENDENT_FILE_BYTES + 1)
                 except OSError:
                     return None
+                if len(data) > DEPENDENT_FILE_BYTES:
+                    return None
+                if not pattern.search(data.decode("utf-8", errors="replace")):
+                    continue
                 parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
                 if parts[-1] == "__init__" and len(parts) > 1:
                     parts = parts[:-1]

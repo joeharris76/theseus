@@ -426,3 +426,18 @@ def test_a_changed_file_that_the_cited_file_imports_is_a_possible_trigger(policy
     (tmp_path / "src" / "other.py").write_text("x = 1\n", encoding="utf-8")
     unrelated = _plan(policy, tmp_path, added_lines={"src/other.py": [[1, 1]]}, changed_paths=["src/other.py"])
     assert _judged(unrelated, finding).decision == protocol.SHIP
+
+
+def test_the_dependency_walk_skips_symlinks_that_leave_the_tree_and_special_files(
+    policy: Policy, tmp_path: Path
+) -> None:
+    import os
+
+    _tree(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.py"
+    outside.write_text("operation\n", encoding="utf-8")
+    (tmp_path / "evil.py").symlink_to(outside)
+    os.mkfifo(tmp_path / "pipe.py")
+    (tmp_path / "notes.py").write_text("unrelated = 1\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"notes.py": [[1, 1]]}, changed_paths=["notes.py"])
+    assert _judged(plan, _old()).decision == protocol.SHIP
