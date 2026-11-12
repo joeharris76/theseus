@@ -150,7 +150,7 @@ def test_a_data_file_in_the_cited_files_package_is_a_possible_trigger(policy: Po
     assert _judged(docs, finding).decision == protocol.SHIP
 
 
-def test_a_data_file_in_another_package_is_not_a_trigger(policy: Policy, tmp_path: Path) -> None:
+def test_a_data_file_anywhere_in_the_repository_is_a_possible_trigger(policy: Policy, tmp_path: Path) -> None:
     _tree(tmp_path)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "op.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
@@ -158,7 +158,23 @@ def test_a_data_file_in_another_package_is_not_a_trigger(policy: Policy, tmp_pat
     (tmp_path / "other" / "cases.csv").write_text("0\n", encoding="utf-8")
     plan = _plan(policy, tmp_path, added_lines={"other/cases.csv": [[1, 1]]}, changed_paths=["other/cases.csv"])
     finding = _old(detail="pkg/op.py:2 divides by zero", file="pkg/op.py")
-    assert _judged(plan, finding).decision == protocol.SHIP
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_changed_caller_that_reaches_the_cited_code_through_an_unchanged_module_is_a_trigger(
+    policy: Policy, tmp_path: Path
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "c.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("import c\ndef run(v):\n    return c.divide(v)\n", encoding="utf-8")
+    (tmp_path / "src" / "a.py").write_text("import b\nb.run(0)\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"src/a.py": [[1, 2]]}, changed_paths=["src/a.py"])
+    finding = _old(detail="src/c.py:2 divides by zero", file="src/c.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+    (tmp_path / "src" / "d.py").write_text("print('hi')\n", encoding="utf-8")
+    unrelated = _plan(policy, tmp_path, added_lines={"src/d.py": [[1, 1]]}, changed_paths=["src/d.py"])
+    assert _judged(unrelated, finding).decision == protocol.SHIP
 
 
 def test_a_symlink_to_a_changed_file_is_the_same_cited_file(policy: Policy, tmp_path: Path) -> None:

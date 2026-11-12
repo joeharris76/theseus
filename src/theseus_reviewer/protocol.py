@@ -732,6 +732,11 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
+DEPENDENT_SCAN_FILES = 3000
+DEPENDENT_ROUNDS = 3
+SKIPPED_DIRECTORIES = frozenset(
+    ".git .venv venv node_modules __pycache__ .tox dist build .mypy_cache .ruff_cache".split()
+)
 SOURCE_EXTENSIONS = frozenset(
     "py pyi js jsx mjs cjs ts tsx java kt scala go rs c h cc cpp hpp cs rb php sh swift md rst".split()
 )
@@ -880,21 +885,23 @@ class KnownScope:
         needles = self._needles(finding, files)
         if not needles:
             return True
-        pattern = re.compile(
-            r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])", re.IGNORECASE
-        )
         root = os.path.realpath(str(self.workspace))
+        expanded = self._with_dependents(needles, root)
+        if expanded is None:
+            return True
+        pattern = re.compile(
+            r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(expanded)) + r")(?![\w])", re.IGNORECASE
+        )
         cited = {self._real(item) for item in files}
         scanned = [path for path in self._paths() if self._real(path) not in cited and _plain(path) not in cited]
         if len(scanned) > TRIGGER_SCAN_FILES:
             return True
-        packages = {_clean_path(item).split("/", 1)[0] if "/" in _clean_path(item) else "" for item in files}
         names = {_clean_path(item).rsplit("/", 1)[-1].casefold() for item in files}
         cited_text = self._cited_text(files)
         if cited_text is None:
             return True
         for path in scanned:
-            if self._non_source_trigger(path, packages):
+            if self._non_source_trigger(path):
                 return True
             if self._depended_on(path, cited_text):
                 return True
@@ -911,6 +918,40 @@ class KnownScope:
             if pattern.search(content) or any(name in content.casefold() for name in names):
                 return True
         return False
+
+    @staticmethod
+    def _with_dependents(needles: set[str], root: str) -> set[str] | None:
+        sources: list[str] = []
+        for base, directories, names in os.walk(root):
+            directories[:] = [item for item in directories if item not in SKIPPED_DIRECTORIES]
+            sources.extend(
+                os.path.join(base, name) for name in names if name.rsplit(".", 1)[-1].casefold() in SOURCE_EXTENSIONS
+            )
+            if len(sources) > DEPENDENT_SCAN_FILES:
+                return None
+        names = set(needles)
+        for _ in range(DEPENDENT_ROUNDS):
+            pattern = re.compile(
+                r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(names)) + r")(?![\w])", re.IGNORECASE
+            )
+            found: set[str] = set()
+            for full in sources:
+                try:
+                    if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
+                        return None
+                    with open(full, encoding="utf-8", errors="replace") as handle:
+                        if not pattern.search(handle.read()):
+                            continue
+                except OSError:
+                    return None
+                parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
+                if parts[-1] == "__init__" and len(parts) > 1:
+                    parts = parts[:-1]
+                found.update({parts[-1], ".".join(parts)})
+            if found <= names:
+                break
+            names |= found
+        return names
 
     def _cited_text(self, files: Sequence[str]) -> str | None:
         root = os.path.realpath(str(self.workspace))
@@ -937,15 +978,11 @@ class KnownScope:
         return any(re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", cited_text) for name in names if name)
 
     @staticmethod
-    def _non_source_trigger(path: str, packages: set[str]) -> bool:
+    def _non_source_trigger(path: str) -> bool:
         clean = _clean_path(path)
-        extension = clean.rsplit(".", 1)[-1].casefold() if "." in clean.rsplit("/", 1)[-1] else ""
-        top = clean.split("/", 1)[0] if "/" in clean else ""
-        if clean.startswith(".github/") or clean.rsplit("/", 1)[-1].casefold() in _CONFIG_NAMES:
-            return True
-        if extension in SOURCE_EXTENSIONS:
-            return False
-        return top == "" or top in packages or "" in packages
+        leaf = clean.rsplit("/", 1)[-1]
+        extension = leaf.rsplit(".", 1)[-1].casefold() if "." in leaf else ""
+        return clean.startswith(".github/") or leaf.casefold() in _CONFIG_NAMES or extension not in SOURCE_EXTENSIONS
 
     def unchanged(self, finding: Finding) -> bool:
         if finding.origin != PRE_EXISTING or _unparsed_markers(finding):
