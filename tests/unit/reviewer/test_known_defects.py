@@ -106,11 +106,70 @@ def test_an_unrelated_change_leaves_the_defect_known(policy: Policy, tmp_path: P
     assert judgement.decision == protocol.SHIP and len(judgement.advisory) == 1
 
 
-def test_an_unchanged_line_of_a_trigger_file_does_not_count(policy: Policy, tmp_path: Path) -> None:
+def test_a_changed_file_whose_full_content_references_the_cited_module_is_a_trigger(
+    policy: Policy, tmp_path: Path
+) -> None:
     _tree(tmp_path, caller="import operation\nnothing\n")
-    (tmp_path / "caller.py").write_text("import operation\nnothing new\n", encoding="utf-8")
+    (tmp_path / "caller.py").write_text("import operation as op\nop.ratio(0)\n", encoding="utf-8")
     plan = _plan(policy, tmp_path, added_lines={"caller.py": [[2, 2]]}, changed_paths=["caller.py"])
-    assert _judged(plan, _old()).decision == protocol.SHIP
+    assert _judged(plan, _old()).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_changed_file_that_calls_a_function_the_cited_file_defines_is_a_trigger(
+    policy: Policy, tmp_path: Path
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "alias.py").write_text("from somewhere import f as ratio\nratio(0)\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"alias.py": [[2, 2]]}, changed_paths=["alias.py"])
+    assert _judged(plan, _old()).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize(
+    "path", ["input.json", "pyproject.toml", "settings.yaml", ".github/workflows/ci.yml", "Makefile"]
+)
+def test_a_root_level_data_or_config_change_is_a_possible_trigger(policy: Policy, tmp_path: Path, path: str) -> None:
+    _tree(tmp_path)
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("denominator: 0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={path: [[1, 1]]}, changed_paths=[path])
+    assert _judged(plan, _old()).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_data_file_in_the_cited_files_package_is_a_possible_trigger(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "pkg" / "data").mkdir(parents=True)
+    (tmp_path / "pkg" / "op.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "pkg" / "data" / "cases.csv").write_text("0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"pkg/data/cases.csv": [[1, 1]]}, changed_paths=["pkg/data/cases.csv"])
+    finding = _old(detail="pkg/op.py:2 divides by zero", file="pkg/op.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+    docs = _plan(policy, tmp_path, added_lines={"docs/notes.md": [[1, 1]]}, changed_paths=["docs/notes.md"])
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "notes.md").write_text("words\n", encoding="utf-8")
+    assert _judged(docs, finding).decision == protocol.SHIP
+
+
+def test_a_data_file_in_another_package_is_not_a_trigger(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "op.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "cases.csv").write_text("0\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"other/cases.csv": [[1, 1]]}, changed_paths=["other/cases.csv"])
+    finding = _old(detail="pkg/op.py:2 divides by zero", file="pkg/op.py")
+    assert _judged(plan, finding).decision == protocol.SHIP
+
+
+def test_a_symlink_to_a_changed_file_is_the_same_cited_file(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "real.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "link.py").symlink_to("real.py")
+    plan = _plan(policy, tmp_path, added_lines={"real.py": [[1, 1]]}, changed_paths=["real.py"])
+    cited = _old(detail="operation.py:3 relies on link.py:1")
+    assert _judged(plan, cited).decision == protocol.SHIP_WITH_FIXES
+    changed_link = _plan(policy, tmp_path, added_lines={"link.py": [[1, 1]]}, changed_paths=["link.py"])
+    assert _judged(changed_link, _old(detail="operation.py:3 relies on real.py:1")).decision == protocol.SHIP_WITH_FIXES
 
 
 def test_a_change_to_a_cited_file_blocks(policy: Policy, tmp_path: Path) -> None:

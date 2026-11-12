@@ -732,6 +732,13 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
+NON_SOURCE_EXTENSIONS = frozenset(
+    "json jsonl yaml yml toml ini cfg conf csv tsv xml sql properties env lock txt parquet avro schema proto graphql".split()
+)
+_CONFIG_NAMES = frozenset(
+    "makefile dockerfile pyproject.toml setup.cfg setup.py tox.ini noxfile.py conftest.py package.json".split()
+)
+_DEFINITION = re.compile(r"^[ \t]*(?:async[ \t]+)?(?:def|class|function)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
 TRIGGER_SCAN_BYTES = 262144
 _SYMBOL = re.compile(r"`(?P<quoted>[A-Za-z_][\w.]*)`|\b(?P<called>[A-Za-z_]\w{2,})\(")
 _LINE_LIST = (
@@ -778,9 +785,12 @@ class KnownScope:
     def _paths(self) -> list[str]:
         return list(dict.fromkeys((*self.new_files, *self.changed, *self.added)))
 
+    def _real(self, path: str) -> str:
+        return _plain(_resolve_tree(path, self.workspace))
+
     def _candidates(self, name: str) -> list[str]:
-        folded = _plain(name)
-        return [path for path in self._paths() if _plain(path) == folded]
+        folded, real = _plain(name), self._real(name)
+        return [path for path in self._paths() if _plain(path) in (folded, real) or self._real(path) in (folded, real)]
 
     def _citations(self, finding: Finding) -> tuple[list[tuple[str, int | None, int | None]], int]:
         original = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").replace("\\", "/")
@@ -831,6 +841,19 @@ class KnownScope:
         full = os.path.realpath(os.path.join(root, token))
         return full.startswith(root + os.sep) and os.path.isfile(full)
 
+    def _definitions(self, path: str) -> list[str]:
+        if self.workspace is None:
+            return []
+        root = os.path.realpath(str(self.workspace))
+        full = os.path.realpath(os.path.join(root, path))
+        try:
+            if full.startswith(root + os.sep) and os.path.isfile(full) and os.path.getsize(full) <= TRIGGER_SCAN_BYTES:
+                with open(full, encoding="utf-8", errors="replace") as handle:
+                    return [name for name in _DEFINITION.findall(handle.read()) if not name.startswith("__")][:50]
+        except OSError:
+            return []
+        return []
+
     def _needles(self, finding: Finding, files: Sequence[str]) -> set[str]:
         needles: set[str] = set()
         for path in files:
@@ -839,6 +862,8 @@ class KnownScope:
                 parts = parts[:-1]
             needles.add(parts[-1])
             needles.add(".".join(parts))
+        for path in files:
+            needles.update(self._definitions(path))
         text = f"{finding.title}\n{finding.detail}"
         for match in _SYMBOL.finditer(text):
             needles.add(match["quoted"] or match["called"])
@@ -854,10 +879,15 @@ class KnownScope:
             r"(?<![\w])(?:" + "|".join(re.escape(item) for item in sorted(needles)) + r")(?![\w])", re.IGNORECASE
         )
         root = os.path.realpath(str(self.workspace))
-        scanned = [path for path in self._paths() if _plain(path) not in {_plain(item) for item in files}]
+        cited = {self._real(item) for item in files}
+        scanned = [path for path in self._paths() if self._real(path) not in cited and _plain(path) not in cited]
         if len(scanned) > TRIGGER_SCAN_FILES:
             return True
+        packages = {_clean_path(item).split("/", 1)[0] if "/" in _clean_path(item) else "" for item in files}
+        names = {_clean_path(item).rsplit("/", 1)[-1].casefold() for item in files}
         for path in scanned:
+            if self._non_source_trigger(path, packages):
+                return True
             full = os.path.realpath(os.path.join(root, path))
             if not (full.startswith(root + os.sep) and os.path.isfile(full)):
                 return True
@@ -865,16 +895,23 @@ class KnownScope:
                 if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
                     return True
                 with open(full, encoding="utf-8", errors="replace") as handle:
-                    lines = handle.read().splitlines()
+                    content = handle.read()
             except OSError:
                 return True
-            ranges = None if path in self.new_files else self.added.get(path)
-            for number, line in enumerate(lines, 1):
-                if ranges is not None and not any(first <= number <= last for first, last in ranges):
-                    continue
-                if pattern.search(line):
-                    return True
+            if pattern.search(content) or any(name in content.casefold() for name in names):
+                return True
         return False
+
+    @staticmethod
+    def _non_source_trigger(path: str, packages: set[str]) -> bool:
+        clean = _clean_path(path)
+        extension = clean.rsplit(".", 1)[-1].casefold() if "." in clean.rsplit("/", 1)[-1] else ""
+        top = clean.split("/", 1)[0] if "/" in clean else ""
+        if clean.startswith(".github/") or clean.rsplit("/", 1)[-1].casefold() in _CONFIG_NAMES:
+            return True
+        if extension not in NON_SOURCE_EXTENSIONS:
+            return False
+        return top == "" or top in packages or "" in packages
 
     def unchanged(self, finding: Finding) -> bool:
         if finding.origin != PRE_EXISTING or _unparsed_markers(finding):
