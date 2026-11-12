@@ -1093,7 +1093,7 @@ class KnownScope:
         return False
 
     def demotes(self, finding: Finding) -> bool:
-        return self.enabled and finding.severity != "Critical" and self.unchanged(finding)
+        return self.enabled and finding.severity not in ("Critical", "High") and self.unchanged(finding)
 
 
 def known_scope(plan: Mapping[str, Any], workspace: Path | str | None = None) -> KnownScope | None:

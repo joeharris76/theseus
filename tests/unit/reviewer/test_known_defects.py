@@ -53,7 +53,7 @@ def _diff(policy: Policy, tmp_path: Path, name: str, text: str, **over: Any) -> 
     return _plan(policy, tmp_path, added_lines={path: [[1, lines]]}, new_files=[path], changed_paths=[path], **over)
 
 
-@pytest.mark.parametrize("severity", ["High", "Medium", "Low"])
+@pytest.mark.parametrize("severity", ["Medium", "Low"])
 def test_a_cited_unchanged_pre_existing_defect_is_known_and_does_not_block(
     policy: Policy, tmp_path: Path, severity: str
 ) -> None:
@@ -271,7 +271,7 @@ def test_a_known_defect_publishes_in_the_not_blocking_section_and_the_review_shi
     policy: Policy, tmp_path: Path
 ) -> None:
     _tree(tmp_path)
-    final = _final(policy, tmp_path, _plan(policy, tmp_path), _v("s", [_old("Medium"), _old("High", title="Other")]))
+    final = _final(policy, tmp_path, _plan(policy, tmp_path), _v("s", [_old("Medium"), _old("Low", title="Other")]))
     assert final.state == "success"
     assert "**Pre-existing, not blocking**" in final.review["body"]
     record = protocol.decode_marker(final.review["body"])
@@ -540,3 +540,10 @@ def test_a_function_defined_in_a_package_init_is_followed_to_the_cited_module(po
     plan = _plan(policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, changed_paths=["app/new.py"])
     finding = _old(detail="lib/parser.py:2 divides by zero", file="lib/parser.py")
     assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize("severity", ["Critical", "High"])
+def test_critical_and_high_pre_existing_defects_always_block(policy: Policy, tmp_path: Path, severity: str) -> None:
+    _tree(tmp_path)
+    judgement = _judged(_plan(policy, tmp_path), _old(severity))
+    assert judgement.decision == protocol.SHIP_WITH_FIXES and len(judgement.defects) == 1 and judgement.advisory == ()
