@@ -731,32 +731,36 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
-_PATH_LINE = re.compile(
-    r"(?P<path>[\w./-]+\.\w{1,8})(?::|#L|[ \t]+lines?[ \t]+)(?P<start>\d+)(?:[ \t]*[-\u2013][ \t]*L?(?P<end>\d+))?",
-    re.IGNORECASE,
+_LINE_LIST = (
+    r"(?:[ \t]*(?:[:#]|[ \t]lines?[ \t]+|[ \t]*\([ \t]*L?)[ \t]*L?(?P<first>\d+)"
+    r"(?:[ \t]*[-\u2013][ \t]*L?(?P<last>\d+))?(?P<more>(?:[ \t]*(?:,|and|&)[ \t]*L?\d+(?:[ \t]*[-\u2013][ \t]*L?\d+)?)*))?"
 )
+_NUMBER_RANGE = re.compile(r"(\d+)(?:[ \t]*[-\u2013][ \t]*L?(\d+))?")
 _BARE_LINE = re.compile(
     r"#L(?P<a>\d+)(?:-L?(?P<b>\d+))?|\bL(?P<c>\d+)(?:-L?(?P<d>\d+))?\b"
     r"|\blines?[ \t]+(?P<e>\d+)(?:[ \t]*[-\u2013][ \t]*(?P<f>\d+))?|:[ \t]*(?P<g>\d+)\b|\((?P<h>\d+)\)",
     re.IGNORECASE,
 )
-_FILE_TOKEN = re.compile(r"[\w./-]+\.\w{1,8}")
 
 
-def cited_locations(finding: Finding) -> list[tuple[str | None, int | None, int | None]] | None:
-    text = f"{finding.title}\n{finding.detail}"
-    if LINK_REMOVED in text or REDACTED in text:
-        return None
-    found: list[tuple[str | None, int | None, int | None]] = []
-    for match in _PATH_LINE.finditer(text):
-        start = int(match["start"])
-        found.append((match["path"].strip("."), start, int(match["end"] or start)))
-    rest = _PATH_LINE.sub(" ", text)
-    for match in _BARE_LINE.finditer(rest):
-        numbers = [int(value) for value in match.groups() if value]
-        found.append((None, min(numbers), max(numbers)))
-    found.extend((token.strip("."), None, None) for token in _FILE_TOKEN.findall(_BARE_LINE.sub(" ", rest)))
+def _ranges(first: str | None, last: str | None, more: str | None) -> list[tuple[int, int]]:
+    found = [(int(first), int(last or first))] if first else []
+    found.extend((int(a), int(b or a)) for a, b in _NUMBER_RANGE.findall(more or ""))
     return found
+
+
+def _plain(path: str) -> str:
+    return _clean_path(path).casefold()
+
+
+def _suffixes(path: str) -> list[str]:
+    parts = _plain(path).split("/")
+    return ["/".join(parts[index:]) for index in range(len(parts))]
+
+
+def _unparsed_markers(finding: Finding) -> bool:
+    text = f"{finding.title}\n{finding.detail}"
+    return LINK_REMOVED in text or REDACTED in text
 
 
 @dataclass(frozen=True)
@@ -766,15 +770,12 @@ class KnownScope:
     enabled: bool
     changed: frozenset[str] = frozenset()
 
+    def _paths(self) -> list[str]:
+        return list(dict.fromkeys((*self.new_files, *self.changed, *self.added)))
+
     def _candidates(self, name: str) -> list[str]:
-        folded = _clean_path(name).casefold()
-        every = (*self.new_files, *self.changed, *self.added)
-        return [
-            path
-            for path in dict.fromkeys(every)
-            if _clean_path(path).casefold() == folded
-            or ("/" not in folded and _clean_path(path).rsplit("/", 1)[-1].casefold() == folded)
-        ]
+        folded = _plain(name)
+        return [path for path in self._paths() if _plain(path) == folded]
 
     def _touched(self, path: str, start: int | None, end: int | None) -> bool:
         if path in self.new_files or (path in self.changed and path not in self.added):
@@ -783,17 +784,33 @@ class KnownScope:
             return path in self.changed or path in self.added
         return any(first <= (end or start) and start <= last for first, last in self.added.get(path, ()))
 
+    def _citations(self, finding: Finding) -> list[tuple[str, int | None, int | None]]:
+        text = unicodedata.normalize("NFC", f"{finding.title}\n{finding.detail}").casefold().replace("\\", "/")
+        own = _plain(finding.file)
+        cited: list[tuple[str, int | None, int | None]] = []
+        for path in self._paths():
+            for name in dict.fromkeys(_suffixes(path)):
+                if name not in text:
+                    continue
+                pattern = re.compile(rf"(?<![\w.-]){re.escape(name)}(?!\w){_LINE_LIST}")
+                for match in pattern.finditer(text):
+                    spans = _ranges(match["first"], match["last"], match["more"])
+                    text = text[: match.start()] + " " * (match.end() - match.start()) + text[match.end() :]
+                    if not spans and _plain(path) == own:
+                        continue
+                    if spans:
+                        cited.extend((path, start, end) for start, end in spans)
+                    else:
+                        cited.append((path, None, None))
+        for match in _BARE_LINE.finditer(text):
+            numbers = [int(value) for value in match.groups() if value]
+            cited.append((finding.file, min(numbers), max(numbers)))
+        return cited
+
     def unchanged(self, finding: Finding) -> bool:
-        citations = cited_locations(finding)
-        if finding.origin != PRE_EXISTING or citations is None:
+        if finding.origin != PRE_EXISTING or _unparsed_markers(finding):
             return False
-        own = {_clean_path(finding.file).casefold(), _clean_path(finding.file).rsplit("/", 1)[-1].casefold()}
-        locations = [(finding.file, finding.line, finding.end_line or finding.line)]
-        for path, start, end in citations:
-            if path is None:
-                locations.append((finding.file, start, end))
-            elif start is not None or path.casefold() not in own:
-                locations.append((path, start, end))
+        locations = [(finding.file, finding.line, finding.end_line or finding.line), *self._citations(finding)]
         return not any(
             self._touched(candidate, start, end)
             for path, start, end in locations

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import dedup
+from . import dedup, retry
 from .verdict import Finding
 
 KNOWN_FILE = "known-defects.json"
@@ -31,7 +32,8 @@ class FileSink:
 
 
 def defect_id(finding: Finding) -> str:
-    return f"kd-{dedup.fingerprint(finding.file, finding.title)}"
+    path = unicodedata.normalize("NFC", finding.file).removeprefix("./")
+    return f"kd-{dedup.fingerprint(path, finding.title)}"
 
 
 def entries(plan: Mapping[str, Any], findings: Sequence[Finding], reviewer: str | None) -> list[dict[str, Any]]:
@@ -59,6 +61,7 @@ def entries(plan: Mapping[str, Any], findings: Sequence[Finding], reviewer: str 
 
 def publish(plan: Mapping[str, Any], final: Any, sink: Sink) -> list[dict[str, Any]]:
     judgement = final.judgement
-    held = entries(plan, judgement.advisory if judgement is not None else (), final.reviewer)
+    recorded = judgement is not None and final.state != retry.PENDING
+    held = entries(plan, judgement.advisory if recorded else (), final.reviewer)
     sink.record(held)
     return held

@@ -231,3 +231,90 @@ def test_the_policy_accepts_block_and_known_and_names_the_replacement_for_adviso
     raw["protocol"]["pre_existing"] = "advisory"
     with pytest.raises(PolicyError, match="replaced by known"):
         parse_policy(raw)
+
+
+def _citing(policy: Policy, detail: str, **plan_over: Any) -> protocol.Judgement:
+    base = {
+        "added_lines": {
+            ".github/workflows/ci.yml": [[5, 5]],
+            "Makefile": [[12, 12]],
+            "src/pkg/b.py": [[40, 41]],
+            "app/[id]/page.tsx": [[3, 3]],
+            "conf/app.properties": [[5, 5]],
+            CHECKER: [[10, 12]],
+        },
+        "changed_paths": [".github/workflows/ci.yml", "Makefile", "src/pkg/b.py", "app/[id]/page.tsx"],
+    }
+    plan = _plan_with(policy, **{**base, **plan_over})
+    return _judged(plan, _old("Medium", 2, detail=detail))
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "Triggered by .github/workflows/ci.yml:5",
+        "see ./src/pkg/b.py:40",
+        "see Makefile:12",
+        "see pkg/b.py:40",
+        "see b.py line 40",
+        "see app/[id]/page.tsx:3",
+        "see conf/app.properties:5",
+        "see src/pkg/b.py:12, 40",
+        "see src/pkg/b.py lines 12 and 41",
+        "see SRC/PKG/B.PY#L40",
+        "see src\\pkg\\b.py:40",
+        "see src/pkg/b.py",
+        "see Makefile",
+    ],
+)
+def test_every_spelling_of_a_changed_file_the_finding_cites_blocks(policy: Policy, detail: str) -> None:
+    conf = {
+        "changed_paths": [
+            ".github/workflows/ci.yml",
+            "Makefile",
+            "src/pkg/b.py",
+            "app/[id]/page.tsx",
+            "conf/app.properties",
+        ]
+    }
+    judgement = _citing(policy, detail, **conf)
+    assert judgement.decision == protocol.SHIP_WITH_FIXES and judgement.advisory == ()
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["see src/pkg/b.py:12", "see Makefile:3", "see src/pkg/b.py:20-30", "see util/other.py:40", "see other.py"],
+)
+def test_a_cited_line_the_change_does_not_add_stays_known(policy: Policy, detail: str) -> None:
+    judgement = _citing(policy, detail)
+    assert judgement.decision == protocol.SHIP and len(judgement.advisory) == 1
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "caller in [new code](https://github.com/o/n/blob/abc/src/pkg/b.py#L40)",
+        "see [b](src/pkg/b.py#L40)",
+    ],
+)
+def test_a_markdown_link_citation_blocks(policy: Policy, detail: str) -> None:
+    verdict = validate(_v("s", [_old("Medium", 2, detail=detail)]))
+    assert "[link removed]" in verdict.defects[0].detail
+    assert protocol.judge_planned(verdict, _plan_with(policy)).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_known_defect_of_an_unrecorded_review_is_not_logged(policy: Policy, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    plan = {**_plan_with(policy), "repo": "o/n", "pr": 7, "head_sha": "a" * 40}
+    final = _final(policy, tmp_path, plan, _v("s", [_old("Medium")]))
+    assert len(known.publish(plan, final, known.NoSink())) == 1
+    assert known.publish(plan, replace(final, state="pending"), known.NoSink()) == []
+
+
+def test_the_id_does_not_change_with_the_spelling_of_the_path() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    plain = Finding("Low", "src/é.py", 1, "Title", "d")
+    spelled = Finding("Low", "./src/e\u0301.py", 9, "Title", "other")
+    assert known.defect_id(plain) == known.defect_id(spelled)
