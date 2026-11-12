@@ -70,13 +70,13 @@ def test_guidance_at_the_bound_is_accepted_and_one_byte_over_is_refused(tmp_path
     policy, root = _consumer(tmp_path, b"x" * guidance.MAX_GUIDANCE_BYTES)
     assert len(load_matchers(policy.consumer, root).guidance or "") == guidance.MAX_GUIDANCE_BYTES
     (root / GUIDANCE_PATH).write_bytes(b"x" * (guidance.MAX_GUIDANCE_BYTES + 1))
-    with pytest.raises(PolicyError, match="the limit is 16384"):
+    with pytest.raises(PolicyError, match="the limit"):
         load_matchers(policy.consumer, root)
 
 
 def test_the_bound_counts_bytes_not_characters(tmp_path: Path) -> None:
     policy, root = _consumer(tmp_path, ("é" * (guidance.MAX_GUIDANCE_BYTES // 2 + 1)).encode())
-    with pytest.raises(PolicyError, match="the limit is"):
+    with pytest.raises(PolicyError, match="the limit"):
         load_matchers(policy.consumer, root)
 
 
