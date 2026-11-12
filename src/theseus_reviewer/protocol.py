@@ -951,8 +951,11 @@ class KnownScope:
         if index is not None:
             common = self._common(index)
             names = set(needles)
+            if {name.rsplit(".", 1)[-1].casefold() for name in names} & common:
+                self.dependent_cache[key] = None
+                return None
             for _ in range(DEPENDENT_ROUNDS):
-                wanted = {name.rsplit(".", 1)[-1].casefold() for name in names} - common
+                wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
                 added: set[str] = set()
                 for full, tokens in index.items():
                     if not tokens & wanted:
@@ -960,8 +963,10 @@ class KnownScope:
                     parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
                     if parts[-1] == "__init__":
                         continue
-                    if parts[-1].casefold() not in common:
-                        added.update({parts[-1], ".".join(parts)})
+                    if parts[-1].casefold() in common:
+                        self.dependent_cache[key] = None
+                        return None
+                    added.update({parts[-1], ".".join(parts)})
                 if added <= names:
                     break
                 names |= added
@@ -1016,10 +1021,8 @@ class KnownScope:
             parts = os.path.relpath(full, root).replace(os.sep, "/").rsplit(".", 1)[0].split("/")
             if parts[-1] == "__init__":
                 continue
-            key = parts[-1].casefold()
-            if key not in common:
-                stems.setdefault(key, set()).add(full)
-        wanted = {name.rsplit(".", 1)[-1].casefold() for name in names} - common
+            stems.setdefault(parts[-1].casefold(), set()).add(full)
+        wanted = {name.rsplit(".", 1)[-1].casefold() for name in names}
         related = {os.path.realpath(os.path.join(root, item)) for item in files}
         related |= {full for full, tokens in index.items() if tokens & wanted}
         frontier = set(related)
@@ -1028,6 +1031,8 @@ class KnownScope:
             for full in frontier:
                 for token in index.get(full, ()):
                     if token in stems:
+                        if token in common:
+                            return None
                         reached |= stems[token]
             frontier = reached - related
             if not frontier:

@@ -484,3 +484,16 @@ def test_the_related_set_stays_bounded_when_every_module_imports_the_package(pol
     plan = _plan(policy, tmp_path, added_lines={"tools/standalone.py": [[2, 2]]}, changed_paths=["tools/standalone.py"])
     finding = _old(detail="pkg/op.py:3 divides by zero", file="pkg/op.py")
     assert _judged(plan, finding).decision == protocol.SHIP
+
+
+def test_a_cited_module_with_a_very_common_name_blocks_instead_of_being_skipped(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "utils.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    for number in range(25):
+        (tmp_path / "pkg" / f"user{number}.py").write_text("from pkg import utils\n", encoding="utf-8")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "standalone.py").write_text("print('x')\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"tools/standalone.py": [[1, 1]]}, changed_paths=["tools/standalone.py"])
+    finding = _old(detail="pkg/utils.py:2 divides by zero", file="pkg/utils.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
