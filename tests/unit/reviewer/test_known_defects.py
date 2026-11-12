@@ -503,3 +503,26 @@ def test_a_very_common_module_name_is_followed_through_imports_and_unrelated_cha
     assert _judged(unrelated, finding).decision == protocol.SHIP
     related = _plan(policy, tmp_path, added_lines={"pkg/user3.py": [[1, 1]]}, changed_paths=["pkg/user3.py"])
     assert _judged(related, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize(
+    "middle",
+    [
+        "from lib import helpers, \\\n    parser\nparser.parse(0)\n",
+        "import importlib\nP = importlib.import_module('lib.parser')\n",
+        "P = __import__('lib.parser')\n",
+    ],
+)
+def test_continuation_and_dynamic_imports_are_followed_to_the_cited_module(
+    policy: Policy, tmp_path: Path, middle: str
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "app").mkdir()
+    (tmp_path / "lib" / "parser.py").write_text("def parse(v):\n    return 1 / v\n", encoding="utf-8")
+    (tmp_path / "lib" / "helpers.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "lib" / "mid.py").write_text(middle + "def go(v):\n    return v\n", encoding="utf-8")
+    (tmp_path / "app" / "new.py").write_text("from lib import mid\nmid.go(0)\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"app/new.py": [[1, 2]]}, changed_paths=["app/new.py"])
+    finding = _old(detail="lib/parser.py:2 divides by zero", file="lib/parser.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES

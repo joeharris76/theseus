@@ -734,7 +734,7 @@ KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
 _IMPORT_LINE = re.compile(
-    r"^\s*(?:import|from|use|using|extern\s+crate|#\s*include|export\b.*\bfrom)\b|\b(?:require|import)\s*\("
+    r"^\s*(?:import|from|use|using|extern\s+crate|#\s*include|export\b.*\bfrom|(?:pub\s+)?mod\s+\w+\s*;)|\b(?:require|import|import_module|__import__)\s*\(|\bimportlib\b"
 )
 DEPENDENT_SCAN_FILES = 20000
 DEPENDENT_FILE_BYTES = 4194304
@@ -976,7 +976,9 @@ class KnownScope:
         for line in text.splitlines():
             if open_statement or _IMPORT_LINE.search(line):
                 tokens.update(item.casefold() for item in _IDENTIFIER.findall(line))
-                open_statement = (open_statement or "(" in line or "{" in line) and not (")" in line or "}" in line)
+                open_statement = line.rstrip().endswith("\\") or (
+                    (open_statement or "(" in line or "{" in line) and not (")" in line or "}" in line)
+                )
         return tokens
 
     def _index(self, root: str) -> dict[str, set[str]] | None:
