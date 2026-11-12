@@ -301,3 +301,9 @@ def test_a_mixed_case_cited_module_is_searched_with_its_case(policy: Policy, tmp
     )
     finding = _old(detail="report.py:1 uses lib/Parser.py:2 which divides by zero", file="app/report.py")
     assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_a_changed_path_that_is_gone_from_the_head_tree_is_a_trigger(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    plan = _plan(policy, tmp_path, added_lines={"guard.py": [[1, 1]]}, changed_paths=["guard.py"])
+    assert _judged(plan, _old()).decision == protocol.SHIP_WITH_FIXES

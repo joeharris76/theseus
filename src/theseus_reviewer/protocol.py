@@ -860,7 +860,7 @@ class KnownScope:
         for path in scanned:
             full = os.path.realpath(os.path.join(root, path))
             if not (full.startswith(root + os.sep) and os.path.isfile(full)):
-                continue
+                return True
             try:
                 if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
                     return True
