@@ -368,3 +368,30 @@ def test_a_changed_path_that_is_gone_from_the_head_tree_is_a_trigger(policy: Pol
     _tree(tmp_path)
     plan = _plan(policy, tmp_path, added_lines={"guard.py": [[1, 1]]}, changed_paths=["guard.py"])
     assert _judged(plan, _old()).decision == protocol.SHIP_WITH_FIXES
+
+
+@pytest.mark.parametrize("path", ["answers.duckdb", "expected.npy", "requirements.in", "Pipfile", "go.sum", "cases.gz"])
+def test_any_non_source_extension_in_the_cited_package_is_a_possible_trigger(
+    policy: Policy, tmp_path: Path, path: str
+) -> None:
+    _tree(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "op.py").write_text("def divide(v):\n    return 1 / v\n", encoding="utf-8")
+    target = tmp_path / "pkg" / path
+    target.write_bytes(b"\x00\x01")
+    plan = _plan(policy, tmp_path, added_lines={f"pkg/{path}": [[1, 1]]}, changed_paths=[f"pkg/{path}"])
+    finding = _old(detail="pkg/op.py:2 divides by zero", file="pkg/op.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_every_defined_name_is_a_needle_and_an_oversized_cited_file_blocks(policy: Policy, tmp_path: Path) -> None:
+    _tree(tmp_path)
+    body = "".join(f"def f{n}():\n    pass\n" for n in range(80))
+    (tmp_path / "big.py").write_text(body, encoding="utf-8")
+    (tmp_path / "user.py").write_text("f79()\n", encoding="utf-8")
+    plan = _plan(policy, tmp_path, added_lines={"user.py": [[1, 1]]}, changed_paths=["user.py"])
+    finding = _old(detail="big.py:1 is wrong", file="big.py")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES
+    (tmp_path / "big.py").write_text("x = 1\n" + "#" * 300000, encoding="utf-8")
+    (tmp_path / "user.py").write_text("unrelated\n", encoding="utf-8")
+    assert _judged(plan, finding).decision == protocol.SHIP_WITH_FIXES

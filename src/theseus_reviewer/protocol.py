@@ -732,8 +732,8 @@ def _exists_exact(path: str, workspace: Path | str | None) -> bool:
 PRE_EXISTING = "pre-existing"
 KNOWN_LIMIT = 5
 TRIGGER_SCAN_FILES = 300
-NON_SOURCE_EXTENSIONS = frozenset(
-    "json jsonl yaml yml toml ini cfg conf csv tsv xml sql properties env lock txt parquet avro schema proto graphql".split()
+SOURCE_EXTENSIONS = frozenset(
+    "py pyi js jsx mjs cjs ts tsx java kt scala go rs c h cc cpp hpp cs rb php sh swift md rst".split()
 )
 _CONFIG_NAMES = frozenset(
     "makefile dockerfile pyproject.toml setup.cfg setup.py tox.ini noxfile.py conftest.py package.json".split()
@@ -841,18 +841,20 @@ class KnownScope:
         full = os.path.realpath(os.path.join(root, token))
         return full.startswith(root + os.sep) and os.path.isfile(full)
 
-    def _definitions(self, path: str) -> list[str]:
+    def _definitions(self, path: str) -> list[str] | None:
         if self.workspace is None:
-            return []
+            return None
         root = os.path.realpath(str(self.workspace))
         full = os.path.realpath(os.path.join(root, path))
         try:
-            if full.startswith(root + os.sep) and os.path.isfile(full) and os.path.getsize(full) <= TRIGGER_SCAN_BYTES:
-                with open(full, encoding="utf-8", errors="replace") as handle:
-                    return [name for name in _DEFINITION.findall(handle.read()) if not name.startswith("__")][:50]
+            if not (full.startswith(root + os.sep) and os.path.isfile(full)):
+                return []
+            if os.path.getsize(full) > TRIGGER_SCAN_BYTES:
+                return None
+            with open(full, encoding="utf-8", errors="replace") as handle:
+                return [name for name in _DEFINITION.findall(handle.read()) if not name.startswith("__")]
         except OSError:
-            return []
-        return []
+            return None
 
     def _needles(self, finding: Finding, files: Sequence[str]) -> set[str]:
         needles: set[str] = set()
@@ -863,7 +865,10 @@ class KnownScope:
             needles.add(parts[-1])
             needles.add(".".join(parts))
         for path in files:
-            needles.update(self._definitions(path))
+            defined = self._definitions(path)
+            if defined is None:
+                return set()
+            needles.update(defined)
         text = f"{finding.title}\n{finding.detail}"
         for match in _SYMBOL.finditer(text):
             needles.add(match["quoted"] or match["called"])
@@ -909,7 +914,7 @@ class KnownScope:
         top = clean.split("/", 1)[0] if "/" in clean else ""
         if clean.startswith(".github/") or clean.rsplit("/", 1)[-1].casefold() in _CONFIG_NAMES:
             return True
-        if extension not in NON_SOURCE_EXTENSIONS:
+        if extension in SOURCE_EXTENSIONS:
             return False
         return top == "" or top in packages or "" in packages
 
