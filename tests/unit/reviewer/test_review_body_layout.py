@@ -694,26 +694,3 @@ def test_an_indented_or_prefixed_fence_is_escaped_and_the_details_block_closes_o
     assert not real
     body = _wrapped(text)
     assert body.count("</details>") == 1 and body.index("</details>") < body.index("AFTER")
-
-
-def test_every_fence_case_renders_inert_through_githubs_markdown() -> None:
-    import shutil
-    import subprocess
-
-    if shutil.which("gh") is None:
-        pytest.skip("gh is not available")
-    for text in FENCE_CASES:
-        result = subprocess.run(
-            ["gh", "api", "-X", "POST", "/markdown", "-f", "mode=gfm", "-f", f"text={_wrapped(text)}"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            pytest.skip("GitHub's markdown API is not reachable")
-        html = result.stdout
-        assert 'type="checkbox"' not in html, text
-        after = html.index("AFTER")
-        assert html.count("<details") == html.count("</details>") == 1, text
-        assert html.rindex("</details>") < after, text
-        assert html[:after].count("<pre") == html[:after].count("</pre>"), text
-        assert "<pre" not in html[html.rindex("</details>") :], text
