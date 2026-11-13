@@ -83,7 +83,7 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
           path
           comments(first: 50) {
             pageInfo { hasNextPage endCursor }
-            nodes { author { __typename login } authorAssociation body createdAt lastEditedAt includesCreatedEdit }
+            nodes { author { __typename login } authorAssociation body createdAt lastEditedAt includesCreatedEdit url }
           }
         }
       }
@@ -149,6 +149,7 @@ def review_threads(repo: str, pr: int) -> list[dict[str, Any]]:
                 {
                     "resolved": node["isResolved"],
                     "path": node.get("path"),
+                    "url": first.get("url"),
                     "author": (first.get("author") or {}).get("login"),
                     "author_type": (first.get("author") or {}).get("__typename"),
                     "body": first.get("body") or "",
@@ -634,6 +635,20 @@ def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
         except GitHubError as exc:
             failures.append(f"{node_id}: {exc}")
     return failures
+
+
+def post_issue_comment(repo: str, pr: int, body: str, token: str) -> None:
+    _issue_comment_call(["--method", "POST", f"repos/{repo}/issues/{pr}/comments"], body, token)
+
+
+def edit_issue_comment(repo: str, comment_id: int, body: str, token: str) -> None:
+    _issue_comment_call(["--method", "PATCH", f"repos/{repo}/issues/comments/{comment_id}"], body, token)
+
+
+def _issue_comment_call(target: list[str], body: str, token: str) -> None:
+    result = run_gh(["gh", "api", *target, "-f", f"body={body}"], token=token, timeout=MINIMIZE_CALL_SECONDS)
+    if result.returncode != 0:
+        raise GitHubError(f"could not write {target[-1]}: {result.stderr.strip()[:500]}")
 
 
 def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:

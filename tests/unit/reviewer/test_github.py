@@ -400,6 +400,7 @@ def test_review_threads_pages_and_keeps_the_first_comment(monkeypatch: pytest.Mo
         {
             "resolved": False,
             "path": "a.py",
+            "url": None,
             "author": "benchbox-review",
             "author_type": "Bot",
             "body": "**High**: A",
@@ -409,6 +410,7 @@ def test_review_threads_pages_and_keeps_the_first_comment(monkeypatch: pytest.Mo
         {
             "resolved": True,
             "path": "b.py",
+            "url": None,
             "author": None,
             "author_type": None,
             "body": "",
