@@ -34,11 +34,18 @@ _SEVERITY_RANK = {name: index for index, name in enumerate((*SEVERITIES, ADVISOR
 _RAW_TAG = re.compile(r"<(?=/?\s*(?:details|summary)\b)", re.IGNORECASE)
 # A backslash does not stop GitHub rendering "[ ]" as a checkbox (checked against its markdown API), a code span does.
 _TASK_MARK = re.compile(r"\[([ xX])\]")
-_BLOCK_START = re.compile(r"^(?:[#>=+*-]|`{3,}|~{3,}|\d+[.)])")
+_BLOCK_START = re.compile(r"^(?:[#>=+*_-]|`{3,}|~{3,}|\d+[.)])")
 # A fence run at the start of a prose line, behind any indent, quote or list prefix.
 _PROSE_FENCE = re.compile(r"^((?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*)(`{3,}|~{3,})", re.MULTILINE)
 _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
-_HEADING = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
+# A heading may also sit behind list markers ("- # x", "1. ## x"), where GitHub renders it inside the item.
+_HEADING = re.compile(r"^((?:[ \t]{0,3}(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
+# A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link.
+_REFERENCE = re.compile(r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=[^\]\n]*\]:)", re.MULTILINE)
+_LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]|$)")
+_LABEL = re.compile(r"^(Problem|Impact|Fix):(?=\s|$)")
+_INDENTED = re.compile(r"^(?: {4,}|\t)")
+_ENTITY_ESCAPED = str.maketrans({char: f"&#{ord(char)};" for char in "*_\\`~["})
 _UNDERLINE = re.compile(r"^((?:[ \t]{0,3}>)*[ \t]{0,3})([=-])(?=[=-]*[ \t]*$)")
 _BREAKS = re.compile(r"[\r\n\t]+")
 # Only a fence at column 0 opens code. An indented or prefixed fence may sit in a list item or quote, where GFM
@@ -66,15 +73,45 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
     return pairs, opened
 
 
+def _indented_code_rows(rows: Sequence[str]) -> frozenset[int]:
+    """Rows that GitHub renders as an indented code block: indented 4+ columns, after a blank line, outside any list.
+
+    Anything uncertain (a list item may be open, a paragraph may continue) is left out, so it is escaped.
+    """
+    code: set[int] = set()
+    in_list = False
+    after_blank = True
+    for index, row in enumerate(rows):
+        if not row.strip():
+            after_blank = True
+            continue
+        if _INDENTED.match(row):
+            if after_blank and not in_list:
+                code.add(index)
+            elif index - 1 in code:
+                code.add(index)
+        elif _LIST_ITEM.match(row):
+            in_list = True
+        elif after_blank and not row.startswith((" ", "\t")):
+            in_list = False
+        after_blank = False
+    return frozenset(code)
+
+
 def _prose(chunk: str) -> str:
     rows = chunk.split("\n")
     for index in range(1, len(rows)):
         if rows[index - 1].strip() and (found := _UNDERLINE.match(rows[index])):
             rows[index] = f"{found.group(1)}\\{rows[index][found.end(1) :]}"
+    code = _indented_code_rows(rows)
+    rows = [
+        row if index in code else _PROSE_FENCE.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", row)
+        for index, row in enumerate(rows)
+    ]
     chunk = "\n".join(rows)
-    chunk = _PROSE_FENCE.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
     chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
     chunk = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", chunk)
+    chunk = _REFERENCE.sub(lambda match: f"{match.group(1)}\\[", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 
 
@@ -118,16 +155,26 @@ def neutralize(text: str) -> str:
     return _outside_code(_RAW_TAG.sub("&lt;", display_path(text)))
 
 
-def neutralize_inline(text: str) -> str:
+def neutralize_inline(text: str, *, leading: bool = True) -> str:
     """Make model text inert where it follows other text on the same line (a list item, a label).
 
     No fence scanning is possible there, so the text is flattened to one line, `<` and task markers are escaped,
-    and anything that could start a block or a fence is escaped.
+    and anything that could start a block or a fence is escaped. `leading` is false when the text sits mid-line,
+    after a fixed prefix, where it can never open a block of its own.
     """
     flat = " ".join(display_path(text).split())
     flat = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", flat.replace("<", "&lt;"))
     flat = _FENCE_RUN.sub(lambda match: f"\\{match.group(0)}", flat)
-    return f"\\{flat}" if _BLOCK_START.match(flat) else flat
+    return f"\\{flat}" if leading and _BLOCK_START.match(flat) else flat
+
+
+def label_paragraphs(text: str) -> str:
+    """Bold a leading `Problem:`, `Impact:` or `Fix:` label on each prose line of already neutralized text.
+
+    Text without such labels, and every line inside a code fence, comes back unchanged.
+    """
+    pairs, _ = _scan(text)
+    return "\n".join(line if code else _LABEL.sub(r"**\1:**", line) for code, line in pairs)
 
 
 def plain_path(path: str) -> str:
@@ -136,8 +183,12 @@ def plain_path(path: str) -> str:
 
 
 def shown_path(path: str) -> str:
-    """The path for a `<code>` element: HTML-escaped, so no character of it can open markup."""
-    return html.escape(plain_path(path), quote=False)
+    """The path for a `<code>` element: no character of it can open HTML or markdown, whatever GitHub parses inside."""
+    return markup_safe(plain_path(path))
+
+
+def markup_safe(text: str) -> str:
+    return html.escape(text, quote=False).translate(_ENTITY_ESCAPED)
 
 
 def span(line: int, end_line: int | None) -> str:
@@ -155,7 +206,7 @@ def is_shortened(title: str) -> bool:
 
 def thread_title(severity: str, defect_id: str, title: str) -> str:
     """The first line of a review thread; the finding fingerprint hashes `title` unshortened."""
-    return f"{severity_label(severity)} · {defect_id} · {title}"
+    return f"{severity_label(severity)} · {defect_id} · {neutralize_inline(title, leading=False)}"
 
 
 def counts(severities: Iterable[str]) -> str:
@@ -183,10 +234,7 @@ def summary_text(text: str) -> str:
 def finding_summary(severity: str, defect_id: str | None, title: str, where: str) -> str:
     named = f" · {defect_id}" if defect_id else ""
     mark = f"{SEVERITY_MARKS[severity]} " if severity in SEVERITY_MARKS else ""
-    return (
-        f"{mark}<b>{severity}</b>{named} · {summary_text(short_title(title))}"
-        f" · <code>{html.escape(where, quote=False)}</code>"
-    )
+    return f"{mark}<b>{severity}</b>{named} · {summary_text(short_title(title))} · <code>{markup_safe(where)}</code>"
 
 
 def finding_line(

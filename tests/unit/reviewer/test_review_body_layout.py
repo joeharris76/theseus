@@ -176,7 +176,7 @@ def test_staging_prefixes_are_removed_from_displayed_paths_only(policy: Policy) 
     staged = f"{layout.STAGED_NEW_PREFIX}src/theseus_reviewer/gate.py"
     verdict = _v("x", [_defect("Staged", 40, "detail", file=staged)])
     final = _finalize(policy, _comment_plan(policy), verdict, kind=selection.FAIL)
-    assert "<code>src/theseus_reviewer/gate.py:40</code>" in final.body and staged not in final.body
+    assert "<code>src/theseus&#95;reviewer/gate.py:40</code>" in final.body and staged not in final.body
     assert staged in protocol.decode_marker(final.body)["open_defects"][0]["file"]
 
 
@@ -665,7 +665,7 @@ FENCE_CASES = [
     "   ```\n<i>\n- [ ] tick",
     "  ~~~\n<i>\n- [ ] tick",
     "````\nx\n````\n  ````\n- [ ] tick",
-    "    ````\n- [ ] tick",
+    "text\n    ````\n- [ ] tick",
     "> ```\n> <i>\n- [ ] tick",
     "- ```\n  <i>\n- [ ] tick",
     "1. ~~~\n   x\n- [ ] tick",

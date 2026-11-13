@@ -131,6 +131,11 @@ class ProtocolRules:
 @dataclass(frozen=True)
 class BriefRules:
     include_intent: bool = False
+    structured_findings: bool = False
+    suggestions: bool = False
+
+
+BRIEF_KEYS = ("include_intent", "structured_findings", "suggestions")
 
 
 @dataclass(frozen=True)
@@ -554,10 +559,12 @@ def _brief_rules(raw: Any) -> BriefRules:
     if raw is None:
         return BriefRules()
     _require(isinstance(raw, Mapping), "brief must be a mapping")
-    unknown = sorted(str(key) for key in set(raw) - {"include_intent"})
+    unknown = sorted(str(key) for key in set(raw) - set(BRIEF_KEYS))
     _require(
-        not unknown, f"brief has unknown key {unknown[0] if unknown else ''!r}; allowed keys are ['include_intent']"
+        not unknown,
+        f"brief has unknown key {unknown[0] if unknown else ''!r}; allowed keys are {sorted(BRIEF_KEYS)}",
     )
-    include = raw.get("include_intent", False)
-    _require(isinstance(include, bool), "brief include_intent must be a boolean")
-    return BriefRules(include_intent=include)
+    values = {key: raw.get(key, False) for key in BRIEF_KEYS}
+    for key, value in values.items():
+        _require(isinstance(value, bool), f"brief {key} must be a boolean")
+    return BriefRules(**values)
