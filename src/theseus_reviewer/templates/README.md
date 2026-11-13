@@ -54,7 +54,7 @@ instruction prose of the template itself.
 | `gate_flags` | text | 2048 | count of changed review-machinery files, or `none` |
 | `file_priority` | table | 8192 | `path \| score \| impact` rows, score descending, cut to fit, or `none`; fenced |
 | `max_defects` | integer | 4 | protocol defect cap from policy |
-| `prior_rule` | prose | 3072 | first / ship / follow-up prior-defect rule |
+| `prior_rule` | prose | 5120 | first / ship / follow-up prior-defect rule, then the finding-format rules the policy's `brief.structured_findings` and `brief.suggestions` switch on |
 | `retry_note` | prose | 512 | `none`, or the fixed note carrying only the count of required files an earlier attempt of the same reviewer left unread; the files and the diff lines of their unseen hunks are marked inside the fenced `change_data` |
 | `reviewer_guidance` | prose | 16384 | the consumer's `review_guidance` file read from the trusted base checkout, or `none`; trusted text placed outside the fences, under the template rules |
 | `change_data` | prose+diff | 400000 | optional Author statement (pull request title, description and linked tracker text, only when the policy sets `brief.include_intent`), then file list, then inline diff or read instructions per brief mode; in file-list mode the list names the required reads and marks every other file not required; fenced |

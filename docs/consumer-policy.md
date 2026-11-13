@@ -38,7 +38,7 @@ promotion:                    # optional; when present, repository is required
 
 `classifier.size_floor` raises any backend's size to at least `large` when the changed lines in files outside `classifier.data_paths` and `size_floor.exclude` reach `min_lines`. `size_floor.exclude` globs use fnmatch, where `*` crosses `/`, so keep them suffix-anchored (for example `uv.lock`, `*baseline*.json`). The `classifier` section refuses unknown keys. The rendered per-file score is the service's 0-based level plus one (1 to 5).
 
-The `protocol` section's `max_defects` and `max_do_not_ship` are required. Three further keys are optional and strictly validated; leaving them out keeps today's behaviour:
+The `protocol` section's `max_defects` and `max_do_not_ship` are required. Further keys are optional and strictly validated; leaving them out keeps today's behaviour:
 
 ```yaml
 protocol:
@@ -46,6 +46,8 @@ protocol:
   pre_existing: advisory    # block (default) or advisory; see Pre-existing findings
 brief:
   include_intent: true      # boolean, default false; see Author statement
+  structured_findings: true # boolean, default false; see Structured findings
+  suggestions: true         # boolean, default false; see Suggestion blocks
 ```
 
 Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 400000 bytes inside the package (an inline brief is further limited to 100000 bytes), and a policy that still sets it is refused. The brief reaches omp on standard input, so no operating-system argument limit applies; the review capacity below, not the bound, decides which reviewers can hold it.
@@ -104,7 +106,7 @@ A provider that is listed but fails when called is excluded for the rest of the 
 
 When no reviewer can run because of availability alone (the served set is empty or unknown, or no served candidate holds the load) and no attempt ran, the result is pending with cause `unavailable`: no attempt and no retry from the budget is spent, the status reads `pending: no reviewer available (...)`, the gate stays pending, and the sweep re-dispatches it after `retry.backoff_start_minutes` with no doubling. Nothing is merged on an unavailable review; only an owner stand-in does.
 
-Every review-verdict status and body reports degradation: the status description ends with `· degraded: <providers>` (the routed providers that are not served or were excluded), and the body names unserved and excluded providers and each substitution (`large: anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high`) in the collapsed `What happened` block of a pending (not-reviewed) body and in the collapsed `Run details` block of a verdict body. The reviewer identity stays the tier; the body shows the model that ran.
+Every review-verdict status and body reports degradation: the status description ends with `· degraded: <providers>` (the routed providers that are not served or were excluded), and the body names unserved and excluded providers and each substitution (`large: anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high`) in the collapsed `What happened` block of a pending (not-reviewed) body and in the collapsed `Run details` block of a verdict body. The one pending body that carries a verdict, the marker-limit `NOT REVIEWED` body (the review ran but its record did not fit the marker), shows the `Run details` block like a verdict body, not `What happened`. The reviewer identity stays the tier; the body shows the model that ran.
 
 The reusable `review.yml` has a `health` job that runs only on the caller's `schedule` event, with `contents: read`. It joins the tailnet and runs `theseus drive health`, which exits 1 when the gateway is unreachable, rejects the client token, or does not serve every provider the trusted config names, so the scheduled run goes red and its summary names the providers.
 
@@ -213,6 +215,21 @@ The file must be a non-empty UTF-8 regular file (not a symlink) of at most 16384
 ## Author statement
 
 With `brief.include_intent: true` the brief opens its fenced change data with the pull request title, the first 2000 characters of the description (review and local-record markers and HTML comments removed) and up to three same-repository issues the description closes, fixes, resolves or refs (title and 1000 characters of text each). A local review uses the branch's commit messages instead. All of it is untrusted data: sanitized (links, mentions and credentials removed), inside the existing fences, and never part of a template slot; the template only says to judge whether the change does what the statement says.
+
+## Structured findings
+
+`brief.structured_findings: true` (boolean, default false; anything else is refused) adds two rules to the reviewer brief: write the `detail` of each defect as up to three short paragraphs starting `Problem:`, `Impact:` and `Fix:`, and keep titles to 80 characters or fewer. A gate review additionally opens its summary with one sentence stating the decision and the main reason; the mandatory bypass analysis stays and is never replaced by that lead. When the flag is on, a finding thread shows a leading `Problem:`, `Impact:` or `Fix:` label of a prose line in bold; detail without the labels is shown as it always was. Nothing else changes: no schema key, marker or fingerprint, and the flag off leaves the brief and every thread byte-identical.
+
+## Suggestion blocks
+
+`brief.suggestions: true` (boolean, default false; anything else is refused) lets a reviewer attach a mechanical fix to a defect: an optional `suggestion` object `{"mechanical": true, "replacement": "<text>"}` on the defect. The finding thread then carries a GitHub `suggestion` block after the detail, above the dispute footer, so the author can commit it in one click. The thread still states the finding and the footer, and the suggestion carries no trust: the committed change is reviewed like any other on the next head. A suggestion is shown only when all of these hold; otherwise it is silently left out and the thread is the same as without it:
+
+- the defect has a thread, and the span of the thread comment is exactly the defect's own `line` to `end_line` (or `line` alone), with every line inside the diff and present in the head file;
+- the span and the replacement are at most 20 lines, and the replacement differs from the head text of the span;
+- the file is not a gate path (`classifier.gate_paths`), a soundness or machine-read path, a file under `.github/`, a file named by the `consumer` section, a `review.yml`/`review.yaml` policy or a `theseus-lock.json`;
+- the replacement survives the same sanitization as every model string unchanged (links, mentions, credentials and HTML comments make it unusable, because a redacted suggestion would commit wrong code), contains no carriage return, and the head file uses no carriage returns.
+
+The block is fenced with a backtick run longer than any run inside the replacement, so the replacement cannot close the fence or inject markdown. A malformed `suggestion` never fails the verdict; it is dropped.
 
 ## Reading review output
 
