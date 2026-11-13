@@ -105,11 +105,14 @@ class RecordingSink:
             raise self.minimize_error
         return self.minimize_failures
 
+    def check_run(self, repo: str, payload: Path) -> None:
+        self._record("check_run", repo, payload.name)
+
 
 @pytest.fixture
 def sink(monkeypatch: pytest.MonkeyPatch) -> RecordingSink:
     recording = RecordingSink()
-    monkeypatch.setattr(driver, "GitHubSink", lambda app_token, job_token, gated_base, policy: recording)
+    monkeypatch.setattr(driver, "GitHubSink", lambda *args: recording)
     return recording
 
 

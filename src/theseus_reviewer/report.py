@@ -82,6 +82,7 @@ class Final:
     degraded: str = ""
     classification_note: str = ""
     detail: str = ""
+    threadless: tuple[tuple[Finding, str | None], ...] = ()
 
 
 def _cut(text: str, limit: int) -> str:
@@ -1011,7 +1012,15 @@ def finalize(
         marker,
         degraded_suffix,
         detail=detail,
+        threadless=_threadless(placement, ids, delivery) if judgement is not None and not unrecorded else (),
     )
+
+
+def _threadless(
+    placement: Placement, ids: Mapping[Finding, str], delivery: str
+) -> tuple[tuple[Finding, str | None], ...]:
+    held = placement.summary if delivery == "review" else (*placement.inline, *placement.summary)
+    return tuple((finding, ids.get(finding)) for finding in held)
 
 
 def _carried_head(label: str, decision: str, count: int, origin: str) -> str:

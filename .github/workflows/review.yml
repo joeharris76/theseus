@@ -538,6 +538,16 @@ jobs:
           permission-pull-requests: write
           permission-contents: read
 
+      - name: Mint the check-run token
+        id: checks_app
+        if: steps.prepare.outputs.post == 'true' && steps.finalize.outputs.check_run == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.REVIEW_APP_ID }}
+          private-key: ${{ secrets.REVIEW_APP_PRIVATE_KEY }}
+          permission-checks: write
+
       - name: Check out the current gated-branch gate
         if: steps.prepare.outputs.post == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -569,6 +579,7 @@ jobs:
         working-directory: trusted
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          CHECKS_TOKEN: ${{ steps.checks_app.outputs.token }}
           JOB_TOKEN: ${{ github.token }}
           THESEUS_GATE_COMMAND: ${{ steps.gate_pin.outputs.command }}
           THESEUS_GATE_ROOT: ${{ github.workspace }}/gate

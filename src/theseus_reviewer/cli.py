@@ -24,6 +24,7 @@ from . import (
     base_change,
     bases,
     capacity,
+    check_run,
     commands,
     comment_disputes,
     coverage,
@@ -211,6 +212,7 @@ def _base_plan(policy: Policy, repo: str, pr: int | None, run_id: str) -> dict[s
         "bot_login": policy.bot_login,
         "omp_config": policy.consumer.omp_config,
         "findings_delivery": policy.findings_delivery,
+        **({"check_run_mirror": True} if policy.check_run_mirror else {}),
         "repo": repo,
         "pr": pr,
         "run_id": run_id,
@@ -1983,12 +1985,16 @@ def command_finalize(args: argparse.Namespace) -> int:
         _write_json(out_dir / "comment.json", {"body": final.body})
     if final.review is not None:
         _write_json(out_dir / "review.json", final.review)
+    mirror = check_run.payload(plan, final.threadless) if plan.get("check_run_mirror") else None
+    if mirror is not None:
+        _write_json(out_dir / check_run.FILE, mirror)
     _output(
         {
             "state": final.state,
             "comment": "true" if (out_dir / "comment.json").is_file() else "false",
             "review": "true" if final.review is not None else "false",
             "has_state": "true" if (out_dir / "state" / github.STATE_FILE).is_file() else "false",
+            **({"check_run": "true"} if mirror is not None else {}),
         }
     )
     _defer_summary(out_dir, f"review-verdict #{plan['pr']} {plan['head_sha']}: {final.state}: {final.description}")
