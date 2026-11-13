@@ -121,6 +121,10 @@ The workflow cannot commit. Its immutable artifact is the authenticated evidence
 
 The secrets are reachable only from the scheduled run on `main`. The reviewed cases are the repository's own corpus, so no pull request content ever reaches a model through this workflow; the reviewer itself runs with the same secret withholding and isolation as `local-review`.
 
+## Recorded manual comparisons
+
+A one-off comparison that is not a scheduled run is written up under `docs/eval-runs/`, not `evals/results/`: a local run cannot authenticate, and a file under `evals/results/` is exactly what the score rule inspects. The first one compares the current brief with the structured-findings and suggestion briefs: [2026-11-13-structured-findings.md](eval-runs/2026-11-13-structured-findings.md).
+
 ## Limits
 
 - Model output varies between runs. A change near the noise floor can fail or pass by chance; use `--repeat` and read the per-case table instead of re-running until green.
