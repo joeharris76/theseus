@@ -354,7 +354,7 @@ def test_the_gate_pin_resolves_the_current_gated_tip_into_a_separate_install_and
     assert pin["continue-on-error"] is True
     assert publish["env"]["THESEUS_GATE_COMMAND"] == "${{ steps.gate_pin.outputs.command }}"
     assert publish["env"]["THESEUS_GATE_ROOT"] == "${{ github.workspace }}/gate"
-    assert set(publish["env"]) == {"GH_TOKEN", "JOB_TOKEN", "THESEUS_GATE_COMMAND", "THESEUS_GATE_ROOT"}
+    assert set(publish["env"]) == {"GH_TOKEN", "CHECKS_TOKEN", "JOB_TOKEN", "THESEUS_GATE_COMMAND", "THESEUS_GATE_ROOT"}
     names = [step["name"] for step in steps_of(review, "review")]
     assert names.index(checkout["name"]) < names.index(pin["name"]) < names.index(publish["name"])
 
@@ -366,10 +366,14 @@ def test_the_app_is_minted_only_after_the_reviewer_has_run_and_the_result_is_fin
     for name in names:
         step = step_named(review, "review", name)
         if "REVIEW_APP" in yaml.safe_dump(step):
-            assert name in {"Mint the App token", APP_REFUSAL}
+            assert name in {"Mint the App token", "Mint the check-run token", APP_REFUSAL}
     assert mint > max(i for i, name in enumerate(names) if "attempt loop" in name or "Run the attempt" in name)
     assert mint > names.index("Decide the verdict and redact every secret value from the results")
     assert mint < names.index("Post the result")
+    checks = step_named(review, "review", "Mint the check-run token")
+    assert checks["continue-on-error"] is True and checks["with"]["permission-checks"] == "write"
+    assert set(checks["with"]) == {"app-id", "private-key", "permission-checks"}
+    assert names.index("Mint the check-run token") < names.index("Post the result")
     assert "REVIEW_APP_PRIVATE_KEY" not in yaml.safe_dump(
         [step.get("env") for _, step in all_steps(review) if "env" in step]
     )

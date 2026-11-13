@@ -573,11 +573,19 @@ MINIMIZE_CALL_SECONDS = 20
 MINIMIZE_TOTAL_SECONDS = 60
 
 
-def run_gh(argv: Sequence[str], *, token: str, timeout: float) -> subprocess.CompletedProcess[str]:
-    """Run one ``gh`` command as the App, bounded in time. The seam the minimise requests are faked through."""
+def run_gh(
+    argv: Sequence[str], *, token: str, timeout: float, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run one ``gh`` command as the App, bounded in time. The seam the minimise and check-run requests are faked through."""
     try:
         return subprocess.run(
-            list(argv), capture_output=True, text=True, check=False, env=_token_env(token), timeout=timeout
+            list(argv),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_token_env(token),
+            timeout=timeout,
+            input=stdin,
         )
     except subprocess.TimeoutExpired as exc:
         raise GitHubError(f"{' '.join(argv[:3])} timed out after {timeout} seconds") from exc
@@ -635,6 +643,23 @@ def minimize_reviews(node_ids: Sequence[str], token: str) -> list[str]:
         except GitHubError as exc:
             failures.append(f"{node_id}: {exc}")
     return failures
+
+
+def post_check_run(repo: str, bodies: Sequence[Mapping[str, Any]], token: str) -> None:
+    """Create the check run from the first body and append each later batch of annotations to it."""
+    run_id = ""
+    for index, body in enumerate(bodies):
+        argv = ["gh", "api", "--method", "PATCH" if run_id else "POST", f"repos/{repo}/check-runs/{run_id}".rstrip("/")]
+        result = run_gh([*argv, "--input", "-"], token=token, timeout=MINIMIZE_CALL_SECONDS, stdin=json.dumps(body))
+        if result.returncode != 0:
+            raise GitHubError(
+                f"could not write the check run: {(result.stderr.strip() or result.stdout.strip())[:500]}"
+            )
+        if index == 0 and len(bodies) > 1:
+            try:
+                run_id = str(int(json.loads(result.stdout)["id"]))
+            except (ValueError, KeyError, TypeError) as exc:
+                raise GitHubError("GitHub returned no check run id") from exc
 
 
 def post_issue_comment(repo: str, pr: int, body: str, token: str) -> None:

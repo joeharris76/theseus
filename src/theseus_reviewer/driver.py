@@ -15,6 +15,7 @@ from typing import Any, Protocol, TypeVar
 
 from . import (
     capacity,
+    check_run,
     cli,
     commands,
     dashboard,
@@ -88,6 +89,7 @@ class Sink(Protocol):
 
     def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]: ...
 
+    def check_run(self, repo: str, payload: Path) -> None: ...
     def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Mapping[str, Any]) -> None: ...
 
 
@@ -101,6 +103,7 @@ class GitHubSink:
     job_token: str
     consumer: Consumer
     policy: Path
+    checks_token: str = ""
 
     def status(self, repo: str, head: str, payload: Path) -> None:
         github.post_status_file(repo, head, payload, self.app_token)
@@ -127,6 +130,13 @@ class GitHubSink:
         )
         return github.minimize_reviews(
             minimize.superseded(github.reviews(repo, pr), bot_login, head, held), self.app_token
+        )
+
+    def check_run(self, repo: str, payload: Path) -> None:
+        if not self.checks_token:
+            raise github.GitHubError("no checks token: the App installation was not issued checks: write")
+        github.post_check_run(
+            repo, check_run.requests(json.loads(payload.read_text(encoding="utf-8"))), self.checks_token
         )
 
     def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Mapping[str, Any]) -> None:
@@ -171,6 +181,7 @@ class CiEnvironment:
     scan_roots: tuple[Path, ...]
     app_token: str
     job_token: str
+    checks_token: str = ""
     scan_secrets: tuple[str, ...] = SCAN_SECRETS
     redacted_secrets: tuple[str, ...] = REDACTED_SECRETS
     scan_excludes: tuple[Path, ...] = ()
@@ -199,6 +210,7 @@ class CiEnvironment:
             scan_roots=roots,
             app_token=environ.get("GH_TOKEN", ""),
             job_token=environ.get("JOB_TOKEN", ""),
+            checks_token=environ.get("CHECKS_TOKEN", ""),
         )
 
     def plan(self) -> int:
@@ -212,7 +224,7 @@ class CiEnvironment:
             consumer = load_policy(self.policy).consumer
         except (OSError, PolicyError) as exc:
             raise CredentialError(f"the review policy cannot be read: {exc}") from exc
-        return GitHubSink(self.app_token, self.job_token, consumer, self.policy)
+        return GitHubSink(self.app_token, self.job_token, consumer, self.policy, self.checks_token)
 
     def session(self) -> AbstractContextManager[None]:
         return nullcontext()
@@ -506,6 +518,20 @@ def _minimize_superseded(env: Environment, sink: Sink, plan: Mapping[str, Any]) 
         print(f"::warning::a superseded review was not minimised: {failure}", file=sys.stderr)
 
 
+def _mirror_check_run(env: Environment, sink: Sink) -> None:
+    """Publish threadless findings as check-run annotations; cosmetic, so it fails open and logs once.
+
+    Runs after the verdict, the status and the gate are posted and reads nothing back into them.
+    """
+    mirror = env.layout.final / check_run.FILE
+    if not mirror.is_file():
+        return
+    try:
+        _bounded(lambda: sink.check_run(env.repo, mirror))
+    except Exception as exc:  # noqa: BLE001 - presentation only: nothing here may change the review outcome
+        print(f"::warning::findings were not mirrored to a check run: {exc}", file=sys.stderr)
+
+
 def _update_dashboard(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
     """Create or edit the sticky dashboard comment after a record-bearing review; cosmetic, so it fails open.
 
@@ -552,6 +578,7 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
     if has_state:
         cli._output({"state_recorded": "true"})
     _minimize_superseded(env, sink, plan)
+    _mirror_check_run(env, sink)
     _update_dashboard(env, sink, plan)
     return 0
 

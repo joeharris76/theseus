@@ -106,6 +106,9 @@ class RecordingSink:
             raise self.minimize_error
         return self.minimize_failures
 
+    def check_run(self, repo: str, payload: Path) -> None:
+        self._record("check_run", repo, payload.name)
+
     def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Any) -> None:
         self._record("dashboard", repo, (pr, head, bot_login, record["decision"]))
         if self.dashboard_error is not None:
@@ -115,7 +118,7 @@ class RecordingSink:
 @pytest.fixture
 def sink(monkeypatch: pytest.MonkeyPatch) -> RecordingSink:
     recording = RecordingSink()
-    monkeypatch.setattr(driver, "GitHubSink", lambda app_token, job_token, gated_base, policy: recording)
+    monkeypatch.setattr(driver, "GitHubSink", lambda *args: recording)
     return recording
 
 
