@@ -1,5 +1,7 @@
 # Theseus reviewer output: format audit and redesign proposal
 
+Status: audit of v0.2.8 (`360cead`); its recommendations shipped in v0.2.10 (status descriptions, "not reviewed" reasons, and the verdict and finding-title markers), v0.2.11 (verdict-first bodies, finding ids in threads, minimising superseded reviews, pending gate status) and v0.2.12 (dashboard comment, structured findings and suggestion blocks, check-run mirror). The present-tense text below describes v0.2.8.
+
 Read-only research. No edits, comments, or model calls were made. Date of evidence: 2026-11-10.
 
 ## 1. Summary
@@ -38,7 +40,7 @@ Recommended order (detail in section 9):
 ## 2. Evidence base and caveats
 
 - **Code audited:** `joeharris76/theseus` at `origin/main` = `360cead` (v0.2.8). All Theseus `file:line` references below are for that commit, read with `git show origin/main:…`.
-- **An older local checkout differs.** A checkout at `main@8635dc7` (v0.2.4), 62 commits behind, has different line numbers (for example `_header` is `report.py:196` there, `:252` upstream).
+- **Tag v0.2.4 differs.** The tree at tag v0.2.4 (`main@8635dc7`), 62 commits behind v0.2.8, has different line numbers (for example `_header` is `report.py:196` there, `:252` upstream).
 - **BenchBox** is pinned to Theseus v0.2.6 (`.github/theseus-lock.json`, `source_commit 2900aa6`).
 - **Real output sampled:** 29 bot reviews and 18 inline threads from Theseus #45, #54 and BenchBox #4062, #4067, #4068, plus commit statuses on 7 heads.
 - **Rendering was verified, not assumed.** Mockups were rendered through GitHub's `POST /markdown` API (`mode=gfm`, repository context). That endpoint may differ slightly from the live comment pipeline.
@@ -239,7 +241,7 @@ A finding with no thread, inside the review body ([BenchBox #4062](https://githu
 
 ## 6. Machine contracts on the current text
 
-Anything below must be preserved or migrated with a dual-read period. Theseus has done this before: v0.2.4–v0.2.6 read the old `oracle-*` spellings alongside the new ones through `legacy.py` (see `docs/hosted-workflows.md:203-207` in the local v0.2.4 checkout). Those readers are gone at v0.2.8.
+Anything below must be preserved or migrated with a dual-read period. Theseus has done this before: v0.2.4–v0.2.6 read the old `oracle-*` spellings alongside the new ones through `legacy.py` (see `docs/hosted-workflows.md:203-207` at tag v0.2.4). Those readers are gone at v0.2.8.
 
 ### 6.1 In Theseus
 
