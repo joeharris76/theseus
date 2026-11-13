@@ -1,6 +1,8 @@
 version: 2
 mode: enforce
 minimize_superseded: true
+dashboard_comment: true
+check_run_mirror: true
 status_context: review-verdict
 findings_delivery: review
 bot_login: theseus-review
@@ -10,6 +12,9 @@ consumer:
     - joeharris76
   soundness_manifest: .github/soundness-paths.txt
   omp_config: .github/review-omp-config.yml
+brief:
+  structured_findings: true
+  suggestions: true
 max_attempts: 5
 protocol:
   max_defects: 10
