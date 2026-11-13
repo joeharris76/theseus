@@ -78,6 +78,7 @@ class RecordingSink:
         self.refuse = ""
         self.minimize_failures: list[str] = []
         self.minimize_error: Exception | None = None
+        self.dashboard_error: Exception | None = None
 
     def _record(self, kind: str, repo: str, target: Any) -> None:
         if self.refuse == kind:
@@ -104,6 +105,11 @@ class RecordingSink:
         if self.minimize_error is not None:
             raise self.minimize_error
         return self.minimize_failures
+
+    def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Any) -> None:
+        self._record("dashboard", repo, (pr, head, bot_login, record["decision"]))
+        if self.dashboard_error is not None:
+            raise self.dashboard_error
 
 
 @pytest.fixture
@@ -614,3 +620,86 @@ def test_the_harness_phase_does_not_swallow_a_missing_yaml_import(
         driver.harness(environment, argparse.Namespace())
 
     assert outputs.read_text(encoding="utf-8") == ""
+
+
+def _publish_with_dashboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, flag: bool, review: dict[str, Any] | None = RECORDED_REVIEW
+) -> tuple[int, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    environment = _environment(tmp_path)
+    if flag:
+        environment.policy.write_text(
+            environment.policy.read_text(encoding="utf-8") + "\ndashboard_comment: true\n", encoding="utf-8"
+        )
+    _plan(environment.layout, bot_login="acme-review")
+    _final(environment.layout.final, comment=True, review=review is not None)
+    if review is not None:
+        _write(environment.layout.final / "review.json", review)
+    monkeypatch.setattr(cli, "guard_decision", lambda plan: (0, False))
+    return driver.publish(environment, argparse.Namespace()), Path(os.environ["GITHUB_OUTPUT"])
+
+
+def test_publish_updates_the_dashboard_last_when_the_flag_is_on_and_a_record_was_posted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    code, _ = _publish_with_dashboard(tmp_path, monkeypatch, flag=True)
+
+    assert code == 0
+    assert [item[0] for item in sink.calls] == ["comment", "review", "status", "gate", "dashboard"]
+    assert sink.calls[-1] == ("dashboard", REPO, (7, HEAD, "acme-review", "SHIP"))
+
+
+def test_publish_leaves_the_dashboard_alone_when_the_flag_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    code, _ = _publish_with_dashboard(tmp_path, monkeypatch, flag=False)
+
+    assert code == 0 and "dashboard" not in [item[0] for item in sink.calls]
+
+
+@pytest.mark.parametrize(
+    "review", [None, {"body": "A review without a record.", "comments": []}], ids=["none", "no-record"]
+)
+def test_publish_leaves_the_dashboard_alone_without_a_record_bearing_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink, review: dict[str, Any] | None
+) -> None:
+    code, _ = _publish_with_dashboard(tmp_path, monkeypatch, flag=True, review=review)
+
+    assert code == 0 and "dashboard" not in [item[0] for item in sink.calls]
+
+
+@pytest.mark.parametrize("failure", [github.GitHubError("refused"), RuntimeError("boom"), TimeoutError("slow")])
+def test_a_failed_dashboard_update_changes_nothing_else(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outputs: Path,
+    sink: RecordingSink,
+    capsys: pytest.CaptureFixture[str],
+    failure: Exception,
+) -> None:
+    sink.dashboard_error = failure
+    code, output = _publish_with_dashboard(tmp_path, monkeypatch, flag=True)
+
+    assert code == 0
+    assert [item[0] for item in sink.calls] == ["comment", "review", "status", "gate", "dashboard"]
+    assert "::warning::the dashboard comment was not updated" in capsys.readouterr().err
+    written = output.read_text(encoding="utf-8")
+    assert "state_recorded=true" in written and "gate_failed" not in written
+
+
+def test_a_stalled_dashboard_update_is_abandoned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outputs: Path,
+    sink: RecordingSink,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release = threading.Event()
+    monkeypatch.setattr(driver, "MINIMIZE_STEP_SECONDS", 0.05)
+    monkeypatch.setattr(sink, "update_dashboard", lambda *args: release.wait(5))
+    try:
+        code, _ = _publish_with_dashboard(tmp_path, monkeypatch, flag=True)
+    finally:
+        release.set()
+
+    assert code == 0 and "the dashboard comment was not updated" in capsys.readouterr().err
