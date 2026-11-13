@@ -14,6 +14,7 @@ from . import (
     redaction_check,
     selection,
     status_text,
+    suggestions,
     unavailable,
 )
 from .policy import SEVERITIES
@@ -450,6 +451,8 @@ def _review_comment(
     commentable: Mapping[str, frozenset[int]],
     defect_id: str | None = None,
     cycle: int = 1,
+    plan: Mapping[str, Any] | None = None,
+    workspace: Path | str | None = None,
 ) -> dict[str, Any]:
     span = comment_span(finding, commentable)
     anchor: dict[str, Any] = {"line": finding.line, "side": "RIGHT"}
@@ -459,9 +462,16 @@ def _review_comment(
     title = (
         layout.thread_title(finding.severity, defect_id, finding.title)
         if defect_id
-        else f"**{finding.severity}**: {finding.title}"
+        else f"**{finding.severity}**: {layout.neutralize_inline(finding.title, leading=False)}"
     )
-    body = f"{title}\n\n{finding.detail}".rstrip()
+    rules = (plan or {}).get("brief_rules") or {}
+    detail = layout.neutralize(finding.detail)
+    if rules.get("structured_findings"):
+        detail = layout.label_paragraphs(detail)
+    parts = [title, detail]
+    if plan is not None and defect_id and rules.get("suggestions"):
+        parts.append(suggestions.block(finding, plan, (span or (finding.line, finding.line)), commentable, workspace))
+    body = "\n\n".join(part for part in parts if part).rstrip()
     if defect_id:
         body += f"\n\n{layout.THREAD_FOOTER}\n\n<!-- review-defect: c{cycle}-{defect_id} -->"
     return {"path": finding.file, **anchor, "body": body + f"\n\n{dedup.marker(finding)}"}
@@ -474,13 +484,14 @@ def _review_payload(
     commentable: Mapping[str, frozenset[int]],
     defect_ids: Mapping[Finding, str] | None = None,
     cycle: int = 1,
+    workspace: Path | str | None = None,
 ) -> dict[str, Any]:
     return {
         "commit_id": plan["head_sha"],
         "event": "COMMENT",
         "body": body,
         "comments": [
-            _review_comment(finding, commentable, (defect_ids or {}).get(finding), cycle)
+            _review_comment(finding, commentable, (defect_ids or {}).get(finding), cycle, plan, workspace)
             for finding in placement.inline
         ],
     }
@@ -990,6 +1001,7 @@ def finalize(
             commentable,
             {**ids, **dict(opened)},
             cycle,
+            ws,
         )
         if delivery == "review"
         else None

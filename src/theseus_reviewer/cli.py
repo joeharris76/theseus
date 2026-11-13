@@ -50,6 +50,7 @@ from . import (
     runner,
     selection,
     status_text,
+    suggestions,
     sweep,
 )
 from . import (
@@ -106,6 +107,7 @@ from .render import (
     dispute_listing,
     file_list_block,
     file_listing,
+    finding_rules,
     prior_listing,
     render_review,
     retry_note,
@@ -1262,6 +1264,20 @@ def _block_hints(
     return coverage.block_hints(evidence_files, request_text, upstream_text, evidence_files, whole, staged)
 
 
+def _brief_plan(policy: Policy, files: list[ChangedFile], matchers: Matchers) -> dict[str, Any]:
+    """The plan keys of the optional brief and thread features; none when every flag is off."""
+    rules = policy.brief
+    if not (rules.structured_findings or rules.suggestions):
+        return {}
+    plan: dict[str, Any] = {
+        "brief_rules": {"structured_findings": rules.structured_findings, "suggestions": rules.suggestions}
+    }
+    if rules.suggestions:
+        paths = (path for item in files for path in item.paths)
+        plan["suggestion_blocked"] = suggestions.blocked_paths(paths, policy, matchers)
+    return plan
+
+
 def _plan_review(
     plan: dict[str, Any],
     out_dir: Path,
@@ -1363,6 +1379,7 @@ def _plan_review(
             "coverage": coverage.VERSION,
             "reviewed_head": latest["head_sha"] if partial else None,
             "gate_path_list": list(policy.classifier.gate_paths),
+            **_brief_plan(policy, files, matchers),
             "pool_blocked_until": {pool: block.to_json() for pool, block in pool_blocks.items()},
             "classifier_unavailable_bucket": policy.classifier.unavailable_bucket,
             "classifier_fallback": policy.classifier.fallback,
@@ -1684,6 +1701,13 @@ def compose_brief(
         prior_rule += " " + ADVISORY_RULE
     if since_staged:
         prior_rule += " " + DELTA_RULE.format(name=SINCE_STAGED_NAME)
+    brief_rules = plan.get("brief_rules") or {}
+    if extra := finding_rules(
+        structured=bool(brief_rules.get("structured_findings")),
+        suggestions=bool(brief_rules.get("suggestions")),
+        gate=classification.template == "gate",
+    ):
+        prior_rule += " " + extra
     return render_review(
         template_name=classification.template,
         retry_note=retry_note(len(marked)),

@@ -35,8 +35,10 @@ NOT_FIXED = "not_fixed"
 WITHDRAWN = "withdrawn"
 PRIOR_STATUSES = (FIXED, NOT_FIXED, WITHDRAWN)
 
-FINDING_KEYS = ("severity", "file", "line", "end_line", "title", "detail", "origin")
-OPTIONAL_FINDING_KEYS = frozenset({"end_line", "origin"})
+FINDING_KEYS = ("severity", "file", "line", "end_line", "title", "detail", "origin", "suggestion")
+OPTIONAL_FINDING_KEYS = frozenset({"end_line", "origin", "suggestion"})
+SUGGESTION_KEYS = frozenset({"mechanical", "replacement"})
+MAX_SUGGESTION = 2000
 ORIGINS = ("introduced", "pre-existing")
 PRIOR_KEYS = ("id", "status", "evidence")
 PRIOR_OPTIONAL_KEYS = ("claim", "concedes", "demoted")
@@ -102,6 +104,7 @@ class Finding:
     detail: str
     end_line: int | None = None
     origin: str = "introduced"
+    replacement: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -114,6 +117,8 @@ class Finding:
         }
         if self.origin != "introduced":
             data["origin"] = self.origin
+        if self.replacement is not None:
+            data["suggestion"] = {"mechanical": True, "replacement": self.replacement}
         return data
 
 
@@ -376,7 +381,24 @@ def _finding(data: Any) -> Finding:
     line = min(line, MAX_LINE)
     span_end = None if span_end is None else min(span_end, MAX_LINE)
     span_end = None if span_end == line else span_end
-    return Finding(severity, path, line, sanitize(title, MAX_TITLE), sanitize(detail, MAX_DETAIL), span_end, origin)
+    replacement = _replacement(data.get("suggestion"))
+    return Finding(
+        severity, path, line, sanitize(title, MAX_TITLE), sanitize(detail, MAX_DETAIL), span_end, origin, replacement
+    )
+
+
+def _replacement(data: Any) -> str | None:
+    """The replacement text of a mechanical suggestion, or None.
+
+    A suggestion is a convenience: a malformed or unsafe one is dropped, never a reason to reject the verdict.
+    Text that sanitization would alter is dropped too, because a redacted suggestion would commit wrong code.
+    """
+    if not isinstance(data, dict) or set(data) != SUGGESTION_KEYS or data["mechanical"] is not True:
+        return None
+    text = data["replacement"]
+    if not isinstance(text, str) or not text or "\r" in text or len(text) > MAX_SUGGESTION:
+        return None
+    return text if sanitize(text, MAX_SUGGESTION) == text else None
 
 
 def _prior(data: Any, *, trusted: bool = False) -> PriorDefect:

@@ -31,7 +31,7 @@ SLOT_MAX_BYTES = {
     "gate_flags": 2048,
     "file_priority": 8192,
     "max_defects": 4,
-    "prior_rule": 3072,
+    "prior_rule": 5120,
     "retry_note": 512,
     "reviewer_guidance": 16384,
     "change_data": BRIEF_MAX_BYTES,
@@ -230,6 +230,37 @@ ADVISORY_RULE = (
 
 class OversizeError(ValueError):
     pass
+
+
+STRUCTURED_FINDINGS_RULE = (
+    "Write the detail of each defect as up to three short paragraphs separated by a blank line, each starting with"
+    " its label: `Problem:` (what is wrong, in one or two sentences), `Impact:` (what ships wrong or breaks because"
+    " of it) and `Fix:` (the change that resolves it). Leave out a paragraph you have nothing to say in. Keep every"
+    " title to 80 characters or fewer."
+)
+GATE_LEAD_RULE = (
+    "Begin the summary with one sentence that states the decision and the main reason for it, then give the bypass"
+    " analysis exactly as the rules above require; the lead never replaces it."
+)
+SUGGESTION_RULE = (
+    "When the fix for a defect is mechanical (a typo, a missing import, a wrong constant) and you can state the exact"
+    " replacement for the lines of its span, add the key suggestion to that defect, with the value"
+    ' {"mechanical": true, "replacement": "<the complete replacement lines>"}. line through end_line (or line alone)'
+    " are the exact lines the replacement substitutes, and every one of them must be a line this change adds or"
+    " modifies in the diff. The replacement is plain file text, never fenced, and holds at most 20 lines. Omit the"
+    " key for any fix that needs judgment, spans more than 20 lines or touches another file. A suggestion is a"
+    " convenience, not evidence: the defect must stand on its own."
+)
+
+
+def finding_rules(*, structured: bool, suggestions: bool, gate: bool) -> str:
+    """The extra brief rules a consumer's `brief` policy switches on; empty when none is on."""
+    rules = [STRUCTURED_FINDINGS_RULE] if structured else []
+    if structured and gate:
+        rules.append(GATE_LEAD_RULE)
+    if suggestions:
+        rules.append(SUGGESTION_RULE)
+    return " ".join(rules)
 
 
 def select_prior_rule(
