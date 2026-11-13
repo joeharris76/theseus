@@ -31,6 +31,18 @@ uv build
 - Commit messages describe the durable reason for the change.
 - Changes to `evals/results/` must be unmodified authenticated artifacts of a successful scheduled run, appended one at a time; see [docs/review-evals.md](docs/review-evals.md). While no result has been recorded, the score rule is inactive for engine, scorer, corpus, workflow, dependency, policy, omp config and guidance changes and the owner's whole-diff review applies to them. Committing the first authenticated baseline activates the rule for every such change, which then needs digest-matched authenticated evidence that does not score lower; do not record a baseline until a trusted candidate executor exists.
 
+## Worktree hygiene
+
+A session removes its own worktree and local branch after its pull request has merged: `git worktree remove <path>` followed by `git branch -D <branch>`, without `--force`.
+
+To clean up leftover linked worktrees by hand, run `git fetch --prune origin` and inspect each entry of `git worktree list --porcelain`. Remove a worktree only when all of these hold:
+
+- `git -C <path> status --porcelain` prints nothing, so there are no tracked changes and no untracked files.
+- The branch change is provably on `origin/main`: the tip is an ancestor of `origin/main`; or a squash-equivalent commit (`t=$(git commit-tree <tip>^{tree} -p $(git merge-base origin/main <tip>) -m x)`) is reported by `git cherry origin/main $t` with a leading `-`; or `gh pr list --head <branch> --state merged --json headRefOid` shows a merged pull request whose `headRefOid` equals the worktree HEAD. A detached HEAD counts only by the ancestor test.
+- No process has the path as its working directory (`lsof -a -d cwd | grep <path>`), and nothing in it changed in the last 24 hours.
+
+Record the branch name and commit sha before running `git branch -D`, and never delete remote branches as part of cleanup. Anything that fails a condition stays in place.
+
 ## Reporting vulnerabilities
 
 See [SECURITY.md](SECURITY.md); do not open public issues for vulnerabilities.
