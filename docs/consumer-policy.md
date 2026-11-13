@@ -204,6 +204,19 @@ With the key off (the default) nothing changes: no token is minted and no reques
 - Token: the request uses a separate App installation token, minted by the reusable `review.yml` with only `permission-checks: write`, and only when the key is on and there is something to mirror. It is separate on purpose: asking `actions/create-github-app-token` for a permission the installation has not been granted makes the mint fail, and putting that on the token that posts the verdict would stop every review. The mint step is `continue-on-error`.
 - Consumer-side change: none to the caller workflow. The `permissions:` block of the reusable workflow and of the caller scopes only `GITHUB_TOKEN`, which this feature does not use; the App's installation permissions are what matter. The change is on the App: the owner must add the repository permission `Checks: Read and write` to the review App and each installation must accept it before the key is enabled. A caller that is pinned to an earlier Theseus release does not mint the token, so the key has no effect there until the pin moves to a release that contains it.
 
+## Dashboard comment
+
+```yaml
+dashboard_comment: true   # boolean, default false; any other value is refused
+```
+
+With the key off (the default) nothing changes. With it on, after Theseus posts a verdict review that carries a protocol record, it creates one comment on the pull request (marked `<!-- review-dashboard: v1 -->`, authored by the App) and afterwards edits that same comment in place after every such review. It shows the verdict and head, and a table of the open findings: severity mark and word, `D<n>`, the neutralised title, and a link to the finding's review thread or `no thread`. It says it is non-authoritative.
+
+- It is not a review and not a command. The verdict review, its protocol record and the `review-verdict` status stay authoritative; no reader, the gate, deduplication or a digest parses the comment, and the edit detectors (which read reviews and review threads) never see it. Verdict reviews and threads are still never edited; this is the only post Theseus edits.
+- It never starts with a command prefix (`/review`, `Stand-in`, `Dispute:`, `Owner instruction`), and finding titles are rendered with the phrases the gate and request workflows match (`Stand-in review`, `Omp candidate check`, `Review adjudication`) broken by a space before the colon. The workflows select comments by those phrases only, so creating or editing the dashboard starts no gate or verdict run and is not taken as a command; the existing consumer callers need no change. The App's own comment is also ignored by the readers that look for attester comments, because the App is not an attester.
+- A run that posts no record-bearing review ("not reviewed") leaves the dashboard as it was; it shows the head it describes. A stale run (the head has moved) writes nothing.
+- It fails open. It runs last in the publish step, after the verdict, status and gate are posted, and is bounded in time. A failed or refused post or edit is logged as a workflow warning and changes nothing else. It needs the App's existing `issues: write` token.
+
 ## Disputing a finding
 
 Every finding on a line inside the diff gets a review thread carrying the finding marker, including a finding carried into a round from an author-supplied local record, which previously had none. A finding that cannot be anchored (its line is outside the diff) has no thread, and the review body lists it with its detail in a collapsed block. Every finding is shown with its visible id, `<mark> **<Severity>** · D<n> · <title>`, in the thread's first line and in the body, and each thread ends with a footer saying how to contest it. Two disputes reach the same re-judgement and escalation:

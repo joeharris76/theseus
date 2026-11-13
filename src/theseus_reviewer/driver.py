@@ -11,9 +11,22 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
-from . import capacity, check_run, cli, commands, github, isolation, minimize, omp_pin, providers, unavailable
+from . import (
+    capacity,
+    check_run,
+    cli,
+    commands,
+    dashboard,
+    github,
+    isolation,
+    minimize,
+    omp_pin,
+    protocol,
+    providers,
+    unavailable,
+)
 from ._vendor import yaml
 from .policy import Consumer, PolicyError, load_policy
 
@@ -24,6 +37,7 @@ CI = "ci"
 LOCAL = "local"
 VERSION_TIMEOUT_SECONDS = 60
 MINIMIZE_STEP_SECONDS = 90
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -76,6 +90,7 @@ class Sink(Protocol):
     def minimize_superseded(self, repo: str, pr: int, head: str, bot_login: str) -> list[str]: ...
 
     def check_run(self, repo: str, payload: Path) -> None: ...
+    def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Mapping[str, Any]) -> None: ...
 
 
 class CredentialError(Exception):
@@ -123,6 +138,18 @@ class GitHubSink:
         github.post_check_run(
             repo, check_run.requests(json.loads(payload.read_text(encoding="utf-8"))), self.checks_token
         )
+
+    def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Mapping[str, Any]) -> None:
+        if github.pull_head_sha(repo, pr, self.app_token) != head:
+            return  # a stale run: a newer head owns the dashboard now
+        body = dashboard.render(
+            record, dashboard.thread_urls(github.review_threads(repo, pr), bot_login, record["cycle"])
+        )
+        found = dashboard.existing(github.issue_comments(repo, pr), bot_login)
+        if found is None:
+            github.post_issue_comment(repo, pr, body, self.app_token)
+        elif found.get("body") != body:
+            github.edit_issue_comment(repo, int(found["id"]), body, self.app_token)
 
 
 class Environment(Protocol):
@@ -449,7 +476,7 @@ def _post_gate(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
         cli._output({"gate_failed": "true"})
 
 
-def _bounded(call: Callable[[], Any]) -> Any:
+def _bounded(call: Callable[[], _T]) -> _T:
     """Run ``call`` for at most MINIMIZE_STEP_SECONDS; a stalled request is abandoned, never waited for."""
     outcome: list[Any] = []
 
@@ -505,6 +532,23 @@ def _mirror_check_run(env: Environment, sink: Sink) -> None:
         print(f"::warning::findings were not mirrored to a check run: {exc}", file=sys.stderr)
 
 
+def _update_dashboard(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
+    """Create or edit the sticky dashboard comment after a record-bearing review; cosmetic, so it fails open.
+
+    Runs after the status and the gate are posted and reads nothing back into them, like the minimise step.
+    """
+    review = env.layout.final / "review.json"
+    try:
+        if not review.is_file() or not load_policy(env.policy).dashboard_comment:
+            return
+        record = protocol.decode_marker(str(_read(review).get("body") or ""))
+        if record is None:
+            return
+        _bounded(lambda: sink.update_dashboard(env.repo, int(plan["pr"]), plan["head_sha"], plan["bot_login"], record))
+    except Exception as exc:  # noqa: BLE001 - presentation only: nothing here may change the review outcome
+        print(f"::warning::the dashboard comment was not updated: {exc}", file=sys.stderr)
+
+
 def _credentialed_sink(env: Environment) -> Sink | None:
     try:
         return env.sink()
@@ -535,6 +579,7 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
         cli._output({"state_recorded": "true"})
     _minimize_superseded(env, sink, plan)
     _mirror_check_run(env, sink)
+    _update_dashboard(env, sink, plan)
     return 0
 
 
