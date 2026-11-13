@@ -385,3 +385,20 @@ def test_a_suggestion_reaches_the_posted_review_only_through_finalize_with_the_f
     verdict = _v("s", [defect])
     assert "```suggestion\nline TWO\n```" in _thread_of(_finalize(policy, on, verdict, kind=selection.FAIL))
     assert "suggestion" not in _thread_of(_finalize(policy, base, verdict, kind=selection.FAIL))
+
+
+def test_the_plan_records_the_brief_flags_and_the_blocked_paths_only_when_a_flag_is_on() -> None:
+    from theseus_reviewer import cli
+    from theseus_reviewer.classifier import ChangedFile
+    from theseus_reviewer.matchers import Matchers
+    from theseus_reviewer.soundness_paths import Matcher, parse_rules
+
+    matchers = Matchers(Matcher(parse_rules("prefix\tcore/sound/\n")), None)
+    files = [ChangedFile("core/sound/a.py", None, 1, 0), ChangedFile("src/app.py", None, 1, 0)]
+    assert cli._brief_plan(parse_policy(_raw()), files, matchers) == {}
+    assert cli._brief_plan(_flagged(structured_findings=True), files, matchers) == {
+        "brief_rules": {"structured_findings": True, "suggestions": False}
+    }
+    both = cli._brief_plan(_flagged(structured_findings=True, suggestions=True), files, matchers)
+    assert both["brief_rules"] == {"structured_findings": True, "suggestions": True}
+    assert both["suggestion_blocked"] == ["core/sound/a.py"]

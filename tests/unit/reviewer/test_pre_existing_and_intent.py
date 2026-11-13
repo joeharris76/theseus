@@ -699,3 +699,34 @@ def test_without_a_workspace_nothing_demotes(policy: Policy) -> None:
     plan = _plan_with(policy)
     del plan["workspace"]
     assert _judged(plan, _old("Medium")).decision == protocol.SHIP_WITH_FIXES
+
+
+def test_the_finding_format_rules_are_in_the_brief_only_for_the_flags_the_policy_sets(
+    policy: Policy, tmp_path: Path
+) -> None:
+    from theseus_reviewer.render import GATE_LEAD_RULE, STRUCTURED_FINDINGS_RULE, SUGGESTION_RULE
+
+    plan = {
+        **_file_list_plan(_plan(policy, ("large", "huge"))),
+        "brief_mode": "inline",
+        "diff_inline": "diff --git a/x b/x\n+x\n",
+        "protocol": {"prior": [], "forced": False, "claimed": [], "next_id": 1},
+    }
+    cases = (
+        ({}, False, False),
+        ({"structured_findings": True}, True, False),
+        ({"suggestions": True}, False, True),
+        ({"structured_findings": True, "suggestions": True}, True, True),
+    )
+    for index, (rules, structured, suggestions) in enumerate(cases):
+        plan_dir, workspace = tmp_path / str(index) / "p", tmp_path / str(index) / "w"
+        plan_dir.mkdir(parents=True)
+        workspace.mkdir()
+        _git(workspace, "init", "--quiet")
+        held = {**plan, "brief_rules": rules} if rules else plan
+        brief = cli._assemble_prompt(held, plan_dir, _classification("large"), workspace)
+        assert (STRUCTURED_FINDINGS_RULE in brief) is structured
+        assert (SUGGESTION_RULE in brief) is suggestions
+        assert GATE_LEAD_RULE not in brief
+    baseline = cli._assemble_prompt(plan, tmp_path / "0" / "p", _classification("large"), tmp_path / "0" / "w")
+    assert "brief_rules" not in plan and "Problem:" not in baseline
