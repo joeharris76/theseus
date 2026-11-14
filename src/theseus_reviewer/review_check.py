@@ -239,11 +239,15 @@ def _open_findings_tail(verdicts: list[dict[str, Any]]) -> str:
     decisive = _latest_decisive(verdicts)
     match = ESCALATED.search((decisive or {}).get("description") or "")
     if match:
-        return status_text.hard_clip(f"{match.group('ids')} need an owner ruling", OWNER_RULING_TAIL_LIMIT)
+        ruling = " need an owner ruling"
+        ids = status_text.ids_text(
+            match.group("ids").split(","), OWNER_RULING_IDS_LIMIT, unseen=int(match.group("more") or 0)
+        )
+        return f"{ids}{ruling}"
     return "open review findings"
 
 
-OWNER_RULING_TAIL_LIMIT = 40
+OWNER_RULING_IDS_LIMIT = 24
 
 
 def _ignored_adjudications(
@@ -328,9 +332,9 @@ def decide(
             ignored = _ignored_adjudications(comments, reviews, head_sha, binding)
             if ignored:
                 tail = _open_findings_tail(verdicts)
-                refusal = status_text.gate_refusals("owner adjudication ignored", ignored)
                 room = status_text.DESCRIPTION_LIMIT - len(status_text.SEP) - len(tail)
-                return WAITING, f"{status_text.hard_clip(refusal, room)}{status_text.SEP}{tail}"
+                refusal = status_text.gate_refusals("owner adjudication ignored", ignored, room)
+                return WAITING, f"{refusal}{status_text.SEP}{tail}"
             return WAITING, _open_findings_message(verdicts)
         if verdict == "pending":
             return WAITING, status_text.GATE_NOT_REVIEWED

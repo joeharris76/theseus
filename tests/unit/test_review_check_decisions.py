@@ -841,6 +841,18 @@ def test_an_ignored_adjudication_on_plain_open_findings_still_says_findings_are_
     assert message.endswith("open review findings") and len(message) <= status_text.DESCRIPTION_LIMIT
 
 
+def test_several_ignored_adjudications_keep_their_count_and_the_extra_escalated_ids() -> None:
+    first = _ruling_comment("Review adjudication: WITHDRAW D9 - gone")
+    second = _ruling_comment("Review adjudication: MAINTAIN D8 - gone", created_at="2026-10-01T15:30:00Z")
+    status = _open_findings_status(
+        "large: SHIP WITH FIXES, 9 defect(s) to fix; escalated D10,D11,D12,D13,D14,D15 +2 more"
+    )
+    reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(escalated=["D1"]))]
+    _, message = _decide(statuses=[status], reviews=reviews, comments=[first, second])
+    assert "(+1 more)" in message and "+4 more need an owner ruling" in message
+    assert len(message) <= status_text.DESCRIPTION_LIMIT
+
+
 def test_an_adjudication_posted_before_the_latest_review_is_not_reported() -> None:
     old = _ruling_comment("Review adjudication: WITHDRAW D9 - gone", created_at=BEFORE_HEAD)
     assert "ignored" not in _decide_ruling(old)[1]
