@@ -226,7 +226,7 @@ Every finding on a line inside the diff gets a review thread carrying the findin
 - a reply starting with `Dispute:` on the finding's thread (from an owner, member or collaborator), as before;
 - a pull request comment `Dispute: D<n> - <reason>` from a login in `consumer.attesters`. The prefix is matched case-insensitively; the rest of the grammar is exact (`D<n>`, one space, `- `, a non-empty reason). The comment must be unedited, from a user account, posted after the review that first listed that finding in the current cycle, and name a finding that is still open. The reason is data, shown to the reviewer like a thread reply, which must restate it in `claim` and answer it.
 
-A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. Two dispute re-reviews of one patch that leave the finding open escalate it, after which only an attester's `Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>` settles it.
+A re-judgement runs on `/review` or when the sweep finds an unanswered dispute. Two dispute re-reviews of one patch that leave the finding open escalate it, after which only an attester's `Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>` settles it. The same attester comment also settles an open finding carried from a local findings record (a claimed prior), without escalation; `MAINTAIN` keeps it open. An adjudication that cannot apply (unknown or closed id, a finding that is neither escalated nor claimed, an edited comment, a malformed comment, a non-attester) changes nothing and is named in the gate's blocked message; one for another head is recorded only in the planning run.
 
 ## Pre-existing findings
 

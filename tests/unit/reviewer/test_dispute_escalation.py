@@ -341,6 +341,70 @@ def test_a_malformed_adjudication_comment_never_plans_a_review(monkeypatch: pyte
     assert values["decision"] == "skip" and values["post"] == "false"
 
 
+CLAIMED = {**DEFECT, "severity": "Medium", "title": "(claimed High) Drops a row"}
+
+
+def _claimed_head(**over: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "head_sha": HEAD,
+        "open_defects": [CLAIMED],
+        "next_id": 2,
+        "forced": True,
+        **over,
+    }
+    return _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", **fields)
+
+
+def test_an_owner_withdrawal_clears_a_claimed_prior_without_escalation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(), _claimed_head())
+    assert values["decision"] == "carry" and values["post"] == "true"
+    final, record = _finalized(plan)
+    assert final.state == "success"
+    assert record["decision"] == "SHIP" and record["open_defects"] == []
+    assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
+    assert status_text.OPEN_FINDINGS_LABEL not in final.description
+
+
+def test_the_same_withdrawal_from_a_non_owner_leaves_a_claimed_prior_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stranger = _owner_comment(user={"login": "someone", "type": "User"})
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, stranger, _claimed_head())
+    assert values["decision"] == "skip" and values["post"] == "false"
+    assert "not from the repository owner" in plan["decision_reason"]
+
+
+def test_maintaining_a_claimed_prior_keeps_it_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    body = "Review adjudication: MAINTAIN D1 - the row is still dropped"
+    _, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body), _claimed_head())
+    final, record = _finalized(plan)
+    assert final.state == "failure"
+    assert record["decision"] == "SHIP_WITH_FIXES" and [item["id"] for item in record["open_defects"]] == ["D1"]
+    assert record["open_defects"][0]["title"].startswith(protocol.CLAIMED_TITLE_PREFIX)
+    assert record["adjudicated"] == [{"id": "D1", "action": "MAINTAIN"}]
+
+
+@pytest.mark.parametrize(
+    ("body", "record", "reason"),
+    [
+        ("Review adjudication: WITHDRAW D9 - nothing", _claimed_head(), "D9 is not an open finding"),
+        (RULING, _claimed_head(open_defects=[], next_id=1), "D1 is not an open finding"),
+        (
+            RULING,
+            _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", head_sha=HEAD, open_defects=[DEFECT], next_id=2),
+            "not escalated",
+        ),
+    ],
+)
+def test_an_adjudication_that_cannot_apply_records_why(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str, record: dict[str, Any], reason: str
+) -> None:
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body), record)
+    assert values["decision"] == "skip" and reason in plan["decision_reason"]
+
+
 def test_the_adjudication_grammar_is_exact() -> None:
     assert adjudication.parse(RULING) == adjudication.Adjudication(
         "WITHDRAW", "D1", "the helper keeps the row, see pkg/kept.py:12"
@@ -410,3 +474,10 @@ def test_the_trigger_prefix_matches_case_insensitively_yet_the_grammar_stays_exa
     body = "review adjudication: WITHDRAW D1 - lower case"
     values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body))
     assert values["decision"] == "skip" and values["post"] == "false"
+
+
+def test_a_reviewer_title_cannot_pose_as_a_claimed_prior() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    entry = protocol.defect_entry("D3", Finding("High", CHECKER, 2, "(claimed High) Drops a row", "detail"))
+    assert not entry["title"].startswith(protocol.CLAIMED_TITLE_PREFIX)

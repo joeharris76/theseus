@@ -723,6 +723,141 @@ def test_an_escalated_finding_names_the_exact_owner_action() -> None:
     assert "D1,D3" in message and "Review adjudication: WITHDRAW|MAINTAIN D<n> - <reason>" in message
 
 
+def _findings_body(claimed: bool = True, **over: Any) -> str:
+    from theseus_reviewer import protocol
+
+    record = {
+        "v": protocol.MARKER_VERSION,
+        "cycle": 1,
+        "round": 1,
+        "kind": protocol.FIRST,
+        "decision": protocol.SHIP_WITH_FIXES,
+        "head_sha": HEAD,
+        "base_ref": "develop",
+        "reviewer": "large",
+        "tier": "large",
+        "strikes_after": 0,
+        "open_defects": [
+            {
+                "id": "D1",
+                "severity": "Medium",
+                "file": "pkg/a.py",
+                "line": 2,
+                "end_line": None,
+                "title": "(claimed High) t" if claimed else "t",
+            }
+        ],
+        "next_id": 2,
+        "patch_digest": "d" * 32,
+        "carried": False,
+        "summary": "",
+        **over,
+    }
+    return f"### review-verdict: failure for `{HEAD}`\n\n{protocol.encode_marker(record)}"
+
+
+def _ruling_comment(body: str, login: str = "joeharris76", created_at: str = AFTER_RETARGET, **over: Any) -> dict:
+    return {
+        "login": login,
+        "user_type": "User",
+        "body": body,
+        "created_at": created_at,
+        "updated_at": created_at,
+        **over,
+    }
+
+
+def _decide_ruling(*comments: dict[str, Any], **over: Any) -> tuple[int, str]:
+    reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(**over))]
+    return _decide(statuses=[_open_findings_status()], reviews=reviews, comments=list(comments))
+
+
+@pytest.mark.parametrize(
+    ("comment", "reason"),
+    [
+        (_ruling_comment("Review adjudication: WITHDRAW D9 - gone"), "D9 is not an open finding on this head"),
+        (
+            _ruling_comment("Review adjudication: WITHDRAW D1 - gone", login="someone"),
+            "it is not from the repository owner",
+        ),
+        (
+            _ruling_comment("Review adjudication: WITHDRAW D1 - gone", updated_at="2026-10-01T16:00:00Z"),
+            "it was edited",
+        ),
+        (_ruling_comment("Review adjudication: WITHDRAW D1"), "it must read WITHDRAW|MAINTAIN D<n> - <reason>"),
+    ],
+)
+def test_an_adjudication_that_cannot_apply_is_named_in_the_gate_result(comment: dict[str, Any], reason: str) -> None:
+    code, message = _decide_ruling(comment)
+    assert code == review_check.WAITING
+    assert "owner adjudication ignored" in message and "WITHDRAW D" in message
+    assert reason in message
+
+
+def test_an_adjudication_of_a_finding_that_is_neither_claimed_nor_escalated_is_named() -> None:
+    comment = _ruling_comment("Review adjudication: WITHDRAW D1 - gone")
+    _, message = _decide_ruling(comment, claimed=False)
+    assert "D1 is not escalated and is not a claimed prior" in message
+
+
+def test_a_usable_adjudication_awaiting_its_run_is_not_reported_as_ignored() -> None:
+    comment = _ruling_comment("Review adjudication: WITHDRAW D1 - gone")
+    code, message = _decide_ruling(comment)
+    assert code == review_check.WAITING and "ignored" not in message
+    escalated = _decide_ruling(comment, claimed=False, escalated=["D1"])[1]
+    assert "ignored" not in escalated
+
+
+def test_an_unusable_adjudication_is_named_even_when_an_older_head_has_an_unannotated_review() -> None:
+    older = {
+        "id": 7,
+        "login": REVIEW,
+        "user_type": "Bot",
+        "commit_id": "b" * 40,
+        "state": "COMMENTED",
+        "submitted_at": BEFORE_HEAD,
+        "body": _findings_body(),
+        "node_id": "node",
+    }
+    current = _receipt(submitted_at=RETARGETED, body=_findings_body())
+    comment = _ruling_comment("Review adjudication: WITHDRAW D9 - gone")
+    _, message = _decide(statuses=[_open_findings_status()], reviews=[older, current], comments=[comment])
+    assert "D9 is not an open finding on this head" in message
+
+
+def test_an_ignored_adjudication_keeps_the_escalated_ids() -> None:
+    stranger = _ruling_comment("Review adjudication: WITHDRAW D1 - x", login="u")
+    status = _open_findings_status("large: SHIP WITH FIXES, 1 defect to fix; escalated D1")
+    reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(escalated=["D1"]))]
+    _, message = _decide(statuses=[status], reviews=reviews, comments=[stranger])
+    assert message.startswith("Blocked · owner adjudication ignored · it is not from the repository owner")
+    assert message.endswith("D1 need an owner ruling")
+    assert len(message) <= status_text.DESCRIPTION_LIMIT
+
+
+def test_an_ignored_adjudication_on_plain_open_findings_still_says_findings_are_open() -> None:
+    stranger = _ruling_comment("Review adjudication: WITHDRAW D1 - x", login="u")
+    _, message = _decide_ruling(stranger)
+    assert message.endswith("open review findings") and len(message) <= status_text.DESCRIPTION_LIMIT
+
+
+def test_several_ignored_adjudications_keep_their_count_and_the_extra_escalated_ids() -> None:
+    first = _ruling_comment("Review adjudication: WITHDRAW D9 - gone")
+    second = _ruling_comment("Review adjudication: MAINTAIN D8 - gone", created_at="2026-10-01T15:30:00Z")
+    status = _open_findings_status(
+        "large: SHIP WITH FIXES, 9 defect(s) to fix; escalated D10,D11,D12,D13,D14,D15 +2 more"
+    )
+    reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(escalated=["D1"]))]
+    _, message = _decide(statuses=[status], reviews=reviews, comments=[first, second])
+    assert "(+1 more)" in message and "+4 more need an owner ruling" in message
+    assert len(message) <= status_text.DESCRIPTION_LIMIT
+
+
+def test_an_adjudication_posted_before_the_latest_review_is_not_reported() -> None:
+    old = _ruling_comment("Review adjudication: WITHDRAW D9 - gone", created_at=BEFORE_HEAD)
+    assert "ignored" not in _decide_ruling(old)[1]
+
+
 def test_a_reposted_status_does_not_invalidate_a_standin_posted_before_it() -> None:
     failing = _status("failure", created_at=RETARGETED, description="large: DO NOT SHIP")
     reposted = _status("failure", created_at="2026-10-01T16:00:00Z", description="large: DO NOT SHIP (reposted)")
