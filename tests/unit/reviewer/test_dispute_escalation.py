@@ -362,7 +362,7 @@ def test_an_owner_withdrawal_clears_a_claimed_prior_without_escalation(
     assert values["decision"] == "carry" and values["post"] == "true"
     final, record = _finalized(plan)
     assert final.state == "success"
-    assert record["decision"] == "SHIP" and record["open_defects"] == [] and True
+    assert record["decision"] == "SHIP" and record["open_defects"] == []
     assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
     assert status_text.OPEN_FINDINGS_LABEL not in final.description
 
@@ -474,3 +474,10 @@ def test_the_trigger_prefix_matches_case_insensitively_yet_the_grammar_stays_exa
     body = "review adjudication: WITHDRAW D1 - lower case"
     values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body))
     assert values["decision"] == "skip" and values["post"] == "false"
+
+
+def test_a_reviewer_title_cannot_pose_as_a_claimed_prior() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    entry = protocol.defect_entry("D3", Finding("High", CHECKER, 2, "(claimed High) Drops a row", "detail"))
+    assert not entry["title"].startswith(protocol.CLAIMED_TITLE_PREFIX)

@@ -1083,11 +1083,14 @@ def unique_defects(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
 
 
 def defect_entry(defect_id: str, finding: Finding) -> dict[str, Any]:
+    title = finding.title
+    if title.startswith(CLAIMED_TITLE_PREFIX):
+        title = f"(claim {title.removeprefix(CLAIMED_TITLE_PREFIX)}"
     return {
         "id": defect_id,
         "severity": finding.severity,
         "file": finding.file,
         "line": finding.line,
         "end_line": finding.end_line,
-        "title": finding.title,
+        "title": title,
     }

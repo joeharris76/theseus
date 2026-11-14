@@ -808,6 +808,32 @@ def test_a_usable_adjudication_awaiting_its_run_is_not_reported_as_ignored() -> 
     assert "ignored" not in escalated
 
 
+def test_an_unusable_adjudication_is_named_even_when_an_older_head_has_an_unannotated_review() -> None:
+    older = {
+        "id": 7,
+        "login": REVIEW,
+        "user_type": "Bot",
+        "commit_id": "b" * 40,
+        "state": "COMMENTED",
+        "submitted_at": BEFORE_HEAD,
+        "body": _findings_body(),
+        "node_id": "node",
+    }
+    current = _receipt(submitted_at=RETARGETED, body=_findings_body())
+    comment = _ruling_comment("Review adjudication: WITHDRAW D9 - gone")
+    _, message = _decide(statuses=[_open_findings_status()], reviews=[older, current], comments=[comment])
+    assert "D9 is not an open finding on this head" in message
+
+
+def test_an_ignored_adjudication_keeps_the_escalation_guidance_when_it_fits() -> None:
+    stranger = _ruling_comment("Review adjudication: WITHDRAW D1 - x", login="u")
+    status = _open_findings_status("large: SHIP WITH FIXES, 1 defect to fix; escalated D1")
+    reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(escalated=["D1"]))]
+    _, message = _decide(statuses=[status], reviews=reviews, comments=[stranger])
+    assert message.startswith("Blocked · owner adjudication ignored · it is not from the repository owner")
+    assert len(message) <= status_text.DESCRIPTION_LIMIT
+
+
 def test_an_adjudication_posted_before_the_latest_review_is_not_reported() -> None:
     old = _ruling_comment("Review adjudication: WITHDRAW D9 - gone", created_at=BEFORE_HEAD)
     assert "ignored" not in _decide_ruling(old)[1]

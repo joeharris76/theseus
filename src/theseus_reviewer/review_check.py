@@ -241,8 +241,9 @@ def _ignored_adjudications(
     from . import adjudication, protocol
     from .edits import EditStateError
 
+    own = [review for review in reviews if review.get("commit_id") == head_sha and "last_edited_at" in review]
     try:
-        found = protocol.history(reviews, binding.bot_login)
+        found = protocol.history(own, binding.bot_login)
     except EditStateError:
         return []
     latest, after = found.latest, found.latest_at
@@ -264,7 +265,7 @@ def _ignored_adjudications(
             problem = protocol.ruling_problem(latest, head_sha, ruling.defect_id)
         if problem:
             quoted = status_text.hard_clip(" ".join(body.split()[2:]), IGNORED_QUOTE_LIMIT)
-            ignored.append(f"{comment.get('login')} '{quoted}': {problem}")
+            ignored.append(f"{problem} ({comment.get('login')}: '{quoted}')")
     return ignored
 
 
@@ -315,7 +316,9 @@ def decide(
         if findings_open:
             ignored = _ignored_adjudications(comments, reviews, head_sha, binding)
             if ignored:
-                return WAITING, status_text.gate_refusals("owner adjudication ignored", ignored)
+                guidance = _open_findings_message(verdicts).removeprefix(f"{status_text.GATE_BLOCKED}{status_text.SEP}")
+                refusal = status_text.gate_refusals("owner adjudication ignored", ignored)
+                return WAITING, status_text.trim(f"{refusal}{status_text.SEP}{guidance}", status_text.DESCRIPTION_LIMIT)
             return WAITING, _open_findings_message(verdicts)
         if verdict == "pending":
             return WAITING, status_text.GATE_NOT_REVIEWED
