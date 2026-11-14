@@ -105,6 +105,7 @@ OPTIONAL_RECORD_KEYS = frozenset(
         "advisory",
     }
 )
+CLAIMED_TITLE_PREFIX = "(claimed "
 DEFECT_KEYS = ("id", "severity", "file", "line", "end_line", "title")
 
 
@@ -461,6 +462,19 @@ def escalated_ids(
 ) -> list[str]:
     live = set(disputed)
     return [item["id"] for item in carried if item["id"] in live and counts.get(item["id"], 0) + 1 >= ESCALATION_ROUNDS]
+
+
+def ruling_problem(latest: Mapping[str, Any], head_sha: str, defect_id: str) -> str:
+    if latest["head_sha"] != head_sha:
+        return "the adjudication is not for the current head"
+    entry = next((item for item in latest["open_defects"] if item["id"] == defect_id), None)
+    if entry is None:
+        return f"{defect_id} is not an open finding on this head"
+    if latest["decision"] != SHIP_WITH_FIXES:
+        return f"{defect_id} is not open under a blocking decision on this head"
+    if defect_id not in (latest.get("escalated") or ()) and not entry["title"].startswith(CLAIMED_TITLE_PREFIX):
+        return f"{defect_id} is not escalated and is not a claimed prior"
+    return ""
 
 
 def _dispute_limit_reason(latest: Mapping[str, Any]) -> str:

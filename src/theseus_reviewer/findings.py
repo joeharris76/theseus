@@ -424,7 +424,7 @@ def _claim(raw: Any) -> dict[str, Any] | None:
             "file": path,
             "line": max(min(line, MAX_LINE), 1),
             "end_line": None if end is None else max(min(end, MAX_LINE), 1),
-            "title": sanitize(f"(claimed {severity}) {title}", TITLE_CAP),
+            "title": sanitize(f"{protocol.CLAIMED_TITLE_PREFIX}{severity}) {title}", TITLE_CAP),
         },
         "status": raw["status"],
         "texts": [text for text in texts if text.strip()],

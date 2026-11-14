@@ -235,6 +235,42 @@ def _open_findings_message(verdicts: list[dict[str, Any]]) -> str:
     return status_text.gate_open_findings(COMMENT_DISPUTE_GRAMMAR)
 
 
+def _ignored_adjudications(
+    comments: Iterable[dict[str, Any]], reviews: Iterable[dict[str, Any]], head_sha: str, binding: Binding
+) -> list[str]:
+    from . import adjudication, protocol
+    from .edits import EditStateError
+
+    try:
+        found = protocol.history(reviews, binding.bot_login)
+    except EditStateError:
+        return []
+    latest, after = found.latest, found.latest_at
+    if found.error is not None or latest is None or after is None:
+        return []
+    prefix = adjudication.PREFIX.rstrip().casefold()
+    ignored = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        if not body.lstrip().casefold().startswith(prefix):
+            continue
+        try:
+            if _parse_time(comment["created_at"]) <= after:
+                continue
+        except (KeyError, ValueError):
+            continue
+        ruling, problem = adjudication.assess(comment, after, binding.attesters)
+        if ruling is not None:
+            problem = protocol.ruling_problem(latest, head_sha, ruling.defect_id)
+        if problem:
+            quoted = status_text.hard_clip(" ".join(body.split()[2:]), IGNORED_QUOTE_LIMIT)
+            ignored.append(f"{comment.get('login')} '{quoted}': {problem}")
+    return ignored
+
+
+IGNORED_QUOTE_LIMIT = 24
+
+
 def decide(
     head_sha: str,
     files: Iterable[str],
@@ -277,6 +313,9 @@ def decide(
         if (latest.get("description") or "").startswith(REFUSED_DESCRIPTION_PREFIX):
             return WAITING, status_text.GATE_REFUSED
         if findings_open:
+            ignored = _ignored_adjudications(comments, reviews, head_sha, binding)
+            if ignored:
+                return WAITING, status_text.gate_refusals("owner adjudication ignored", ignored)
             return WAITING, _open_findings_message(verdicts)
         if verdict == "pending":
             return WAITING, status_text.GATE_NOT_REVIEWED

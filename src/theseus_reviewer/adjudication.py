@@ -38,15 +38,21 @@ def _moment(value: Any) -> datetime | None:
         return None
 
 
-def valid(comment: Mapping[str, Any], after: datetime | None, attesters: frozenset[str]) -> Adjudication | None:
+def assess(
+    comment: Mapping[str, Any], after: datetime | None, attesters: frozenset[str]
+) -> tuple[Adjudication | None, str]:
+    if comment.get("login") not in attesters or comment.get("user_type") != "User":
+        return None, "it is not from the repository owner"
+    if comment.get("updated_at") not in (None, comment.get("created_at")):
+        return None, "it was edited"
+    ruling = parse(comment.get("body"))
+    if ruling is None:
+        return None, f"it must read {GRAMMAR.removeprefix(PREFIX)}"
     created = _moment(comment.get("created_at"))
-    if (
-        comment.get("login") not in attesters
-        or comment.get("user_type") != "User"
-        or comment.get("updated_at") not in (None, comment.get("created_at"))
-        or created is None
-        or after is None
-        or created <= after
-    ):
-        return None
-    return parse(comment.get("body"))
+    if created is None or after is None or created <= after:
+        return None, "it was posted before the latest review of this head"
+    return ruling, ""
+
+
+def valid(comment: Mapping[str, Any], after: datetime | None, attesters: frozenset[str]) -> Adjudication | None:
+    return assess(comment, after, attesters)[0]
