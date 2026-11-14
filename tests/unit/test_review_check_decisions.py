@@ -825,13 +825,20 @@ def test_an_unusable_adjudication_is_named_even_when_an_older_head_has_an_unanno
     assert "D9 is not an open finding on this head" in message
 
 
-def test_an_ignored_adjudication_keeps_the_escalation_guidance_when_it_fits() -> None:
+def test_an_ignored_adjudication_keeps_the_escalated_ids() -> None:
     stranger = _ruling_comment("Review adjudication: WITHDRAW D1 - x", login="u")
     status = _open_findings_status("large: SHIP WITH FIXES, 1 defect to fix; escalated D1")
     reviews = [_receipt(submitted_at=RETARGETED, body=_findings_body(escalated=["D1"]))]
     _, message = _decide(statuses=[status], reviews=reviews, comments=[stranger])
     assert message.startswith("Blocked · owner adjudication ignored · it is not from the repository owner")
+    assert message.endswith("D1 need an owner ruling")
     assert len(message) <= status_text.DESCRIPTION_LIMIT
+
+
+def test_an_ignored_adjudication_on_plain_open_findings_still_says_findings_are_open() -> None:
+    stranger = _ruling_comment("Review adjudication: WITHDRAW D1 - x", login="u")
+    _, message = _decide_ruling(stranger)
+    assert message.endswith("open review findings") and len(message) <= status_text.DESCRIPTION_LIMIT
 
 
 def test_an_adjudication_posted_before_the_latest_review_is_not_reported() -> None:
