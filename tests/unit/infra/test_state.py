@@ -50,7 +50,8 @@ def test_the_state_file_has_only_the_documented_shape(tmp_path: Path) -> None:
 
 def test_the_state_refuses_to_write_a_known_secret_value(tmp_path: Path) -> None:
     state = State(tmp_path / "s.json")
-    state.set_provider("openai", service_account_id="SENTINEL-value-9999")
+    state.bump("A")
+    state.secrets["A"]["note"] = "SENTINEL-value-9999"
     with pytest.raises(StateError, match="refusing"):
         state.save(["SENTINEL-value-9999"])
     assert not state.path.exists()
@@ -64,3 +65,14 @@ def test_a_damaged_or_foreign_state_file_is_an_error_not_a_reset(tmp_path: Path)
     path.write_text(json.dumps({"schema": 9}), encoding="utf-8")
     with pytest.raises(StateError, match="schema 1"):
         State.load(path)
+
+
+def test_a_provider_id_that_equals_a_stored_value_is_not_a_leak(tmp_path: Path) -> None:
+    state = State(tmp_path / "s.json")
+    state.set_provider("tailscale", client_id="kclient-abc123")
+    state.save(["kclient-abc123"])
+    assert json.loads(state.path.read_text())["providers"]["tailscale"] == {"client_id": "kclient-abc123"}
+    state.bump("OTHER")
+    state.secrets["OTHER"]["note"] = "SENTINEL-leaked-0001"
+    with pytest.raises(StateError, match="refusing"):
+        state.save(["kclient-abc123", "SENTINEL-leaked-0001"])

@@ -78,10 +78,15 @@ class State:
         return {"schema": SCHEMA, "secrets": self.secrets, "providers": self.providers}
 
     def save(self, forbidden: Iterable[str] = ()) -> None:
-        """Write atomically with mode 0600. Refuses to write if any known secret value would appear in the file."""
+        """Write atomically with mode 0600. Refuses to write if any known secret value would appear in the file.
+
+        A recorded provider id is an identifier, not a credential, so a forbidden value equal to one is allowed
+        (an OAuth client id is both the stored ``..._CLIENT_ID`` value and the id kept here).
+        """
         text = json.dumps(self.to_json(), indent=2, sort_keys=True) + "\n"
+        ids = {value for record in self.providers.values() for value in record.values()}
         for value in forbidden:
-            if len(value) >= _MIN_GUARD_LENGTH and value in text:
+            if len(value) >= _MIN_GUARD_LENGTH and value not in ids and value in text:
                 raise StateError("refusing to write a secret value into the state file")
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, staged = tempfile.mkstemp(prefix=".state-", dir=self.path.parent)
