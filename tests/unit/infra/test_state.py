@@ -50,7 +50,8 @@ def test_the_state_file_has_only_the_documented_shape(tmp_path: Path) -> None:
 
 def test_the_state_refuses_to_write_a_known_secret_value(tmp_path: Path) -> None:
     state = State(tmp_path / "s.json")
-    state.set_provider("openai", service_account_id="SENTINEL-value-9999")
+    state.bump("A")
+    state.secrets["A"]["note"] = "SENTINEL-value-9999"
     with pytest.raises(StateError, match="refusing"):
         state.save(["SENTINEL-value-9999"])
     assert not state.path.exists()
