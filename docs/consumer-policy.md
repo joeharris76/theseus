@@ -50,7 +50,9 @@ brief:
   suggestions: true         # boolean, default false; see Suggestion blocks
 ```
 
-Top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 400000 bytes inside the package (an inline brief is further limited to 100000 bytes), and a policy that still sets it is refused. The brief reaches omp on standard input, so no operating-system argument limit applies; the review capacity below, not the bound, decides which reviewers can hold it.
+The optional top-level `infra:` section describes the consumer's review infrastructure for `theseus infra` ([infra.md](infra.md)). The policy parser accepts it and nothing else reads it: the gate, verdict, plan and policy trust behave identically with or without it.
+
+Other top-level keys outside the reviewer policy schema are refused, naming the key. `brief_max_bytes` is no longer a policy key: the brief size bound is fixed at 400000 bytes inside the package (an inline brief is further limited to 100000 bytes), and a policy that still sets it is refused. The brief reaches omp on standard input, so no operating-system argument limit applies; the review capacity below, not the bound, decides which reviewers can hold it.
 
 All `consumer` paths are repository-relative and are read relative to the trusted checkout root (`--root` for the gate, the working directory for `plan`, the trusted root for local review). Absolute paths, `..`, empty or backslash segments are refused.
 
