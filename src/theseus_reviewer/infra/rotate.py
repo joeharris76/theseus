@@ -147,7 +147,7 @@ class Engine:
                 rotator.kind, rotator.names, UNCHANGED, "no newer credential to adopt", self._manual(rotator, None)
             )
         for value in created.values.values():
-            self.redactor.add(value.reveal())
+            self.redactor.add(value.reveal(), *value.reveal().splitlines())
         return self._run(rotator, created, old, old_ids)
 
     def _run(

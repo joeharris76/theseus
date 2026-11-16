@@ -283,3 +283,17 @@ def add_new_pem(world: World) -> Path:
     stamp = datetime(2026, 11, 10, tzinfo=UTC).timestamp()
     os.utime(pem, (stamp, stamp))
     return pem
+
+
+def write_policy_file(world: World) -> Path:
+    """The example policy with its paths under the world's tmp dir, as a file the command can load."""
+    from copy import deepcopy
+
+    from .example import EXAMPLE, write_policy
+
+    data = deepcopy(EXAMPLE)
+    data["store"]["dir"] = str(world.tmp / "store")
+    data["state"] = str(world.config.state_path)
+    data["gateway"]["dir"] = str(world.tmp / "gateway")
+    data["secrets"]["REVIEW_APP_PRIVATE_KEY"]["pem_dir"] = str(world.tmp / "pems")
+    return write_policy(world.tmp / ".github" / "review.yml", data)

@@ -91,8 +91,19 @@ class GatewayRotator:
 
     def _local(self, token: Secret, path: str) -> int:
         result = self.ctx.run(
-            ["curl", "-s", "--max-time", "10", "-H", "@-", "-o", "/dev/null", "-w", "%{http_code}",
-             f"http://127.0.0.1:{self._port}{path}"],
+            [
+                "curl",
+                "-s",
+                "--max-time",
+                "10",
+                "-H",
+                "@-",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                f"http://127.0.0.1:{self._port}{path}",
+            ],
             stdin=f"Authorization: Bearer {token.reveal()}\n",
         )
         text = result.stdout.strip()
@@ -104,7 +115,9 @@ class GatewayRotator:
             if stored is None:
                 raise RotationError("no tailnet URL to check: the host script reported none and none is stored")
             self._url = stored.reveal()
-        response = self.ctx.http.request("GET", self._url.rstrip("/") + path, headers={"Authorization": f"Bearer {token.reveal()}"})
+        response = self.ctx.http.request(
+            "GET", self._url.rstrip("/") + path, headers={"Authorization": f"Bearer {token.reveal()}"}
+        )
         return response.status
 
     def _url_name(self) -> str:
@@ -122,7 +135,7 @@ class GatewayRotator:
 
     def create(self) -> Created | None:
         token = Secret(secrets.token_urlsafe(36))
-        self.ctx.redactor.add(token.reveal())
+        self.ctx.watch(token.reveal())
         temp_file = gateway.token_path(self._config, self._temp)
         try:
             _write_private(temp_file, token.reveal())
@@ -320,7 +333,7 @@ class TypesafeRotator:
             text = result.stdout.removesuffix("\n") if result.returncode == 0 else ""
             value = Secret(text) if text.strip() else None
             if value is not None:
-                self.ctx.redactor.add(value.reveal())
+                self.ctx.watch(value.reveal())
         current = self.ctx.secret(self.spec.name)
         return None if value is None or value == current else value
 
@@ -341,7 +354,9 @@ class TypesafeRotator:
         if self._candidate() is None:
             lines.extend(self._steps())
         else:
-            lines.append(f"adopt the newer key found in {self._next_name}: check it with GET /v1/models and set {self.spec.name}")
+            lines.append(
+                f"adopt the newer key found in {self._next_name}: check it with GET /v1/models and set {self.spec.name}"
+            )
         return lines
 
     def create(self) -> Created | None:
@@ -436,7 +451,7 @@ class AppKeyRotator:
             value = Secret(pem.read_text(encoding="utf-8"))
         except OSError as exc:
             raise RotationError(f"cannot read {pem.name}: {exc.strerror}") from exc
-        self.ctx.redactor.add(value.reveal())
+        self.ctx.watch(value.reveal())
         assert self.spec.app_slug is not None
         try:
             app_key.validate(self.ctx, value, self._app_id(), self.spec.app_slug)

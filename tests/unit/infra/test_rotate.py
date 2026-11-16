@@ -8,8 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from theseus_reviewer.cli import main
+from theseus_reviewer.infra import cli as infra_cli
 from theseus_reviewer.infra import rotate
 from theseus_reviewer.infra.rotate_command import EXIT_FAILED, EXIT_OK, EXIT_USAGE, Report, run
+from theseus_reviewer.infra.state import State
 from theseus_reviewer.infra.store import PENDING_SUFFIX, Secret
 
 from .fakes import completed
@@ -18,11 +21,15 @@ from .rotation_world import (
     NEW_GATEWAY,
     NEW_PEM,
     NEW_TYPESAFE,
+    NOW,
     OLD,
     World,
     add_new_pem,
     build_world,
+    write_policy_file,
 )
+
+pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
 TS_NAMES = ("TS_OAUTH_CI_CLIENT_ID", "TS_OAUTH_CI_SECRET")
 
@@ -545,3 +552,72 @@ def test_a_provider_error_that_echoes_a_secret_is_scrubbed(world: World) -> None
     assert OLD["OPENAI_API_KEY"] not in report.text and NEW_TYPESAFE not in report.text
     assert "[redacted]" in report.text
     assert openai_old_works(world)
+
+
+# -- the command line -----------------------------------------------------------------------------------------
+
+
+def invoke(
+    world: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *argv: str
+) -> tuple[int, str, str]:
+    deps = infra_cli.Dependencies(http=world.http, run=world.runner, now=lambda: NOW)
+    monkeypatch.setattr(infra_cli, "DEPENDENCIES", deps)
+    capsys.readouterr()
+    code = main(["infra", "rotate", "--config", str(write_policy_file(world)), *argv])
+    out, err = capsys.readouterr()
+    return code, out, err
+
+
+def test_the_command_is_registered(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as stop:
+        main(["infra", "rotate", "--help"])
+    assert stop.value.code == 0
+    text = capsys.readouterr().out
+    for flag in ("--apply", "--only", "--resume", "--json", "--config"):
+        assert flag in text
+
+
+def test_cli_dry_run_is_the_default_and_changes_nothing(world: World, monkeypatch, capsys) -> None:
+    code, out, err = invoke(world, monkeypatch, capsys)
+    assert code == 0, err
+    assert "dry run" in out
+    assert world.http.mutating() == []
+    assert world.env["OPENAI_API_KEY"] == OLD["OPENAI_API_KEY"]
+
+
+def test_cli_apply_rotates_and_prints_no_value(world: World, monkeypatch, capsys) -> None:
+    add_new_pem(world)
+    world.store.put("TYPESAFE_API_KEY.next", Secret(NEW_TYPESAFE))
+    code, out, err = invoke(world, monkeypatch, capsys, "--apply")
+    assert code == 0, out + err
+    for value in world.every_value():
+        assert value not in out and value not in err
+    assert world.env["OPENAI_API_KEY"] != OLD["OPENAI_API_KEY"]
+    assert world.env["REVIEW_APP_PRIVATE_KEY"] == NEW_PEM
+    state = State.load(world.config.state_path)
+    assert not [key for key in state.providers if key.startswith("rotate:")]
+    assert not world.values_in_argv_or_urls(world.every_value())
+    text = world.config.state_path.read_text(encoding="utf-8")
+    assert not [value for value in world.every_value() if value in text]
+
+
+def test_cli_exits_non_zero_after_a_rollback_and_after_a_failed_revoke_until_resume(
+    world: World, monkeypatch, capsys
+) -> None:
+    world.fail_set.add("OPENAI_API_KEY")
+    code, out, _ = invoke(world, monkeypatch, capsys, "--apply", "--only", "OPENAI_API_KEY")
+    assert code == EXIT_FAILED and "rolled-back" in out
+    world.fail_delete.add("key_old")
+    code, out, _ = invoke(world, monkeypatch, capsys, "--apply", "--only", "OPENAI_API_KEY")
+    assert code == EXIT_FAILED and "rotate --resume" in out
+    world.fail_delete.clear()
+    code, out, _ = invoke(world, monkeypatch, capsys, "--apply", "--only", "OPENAI_API_KEY", "--resume")
+    assert code == 0 and "resumed" in out
+    assert list(world.openai_keys.values()) == [world.env["OPENAI_API_KEY"]]
+
+
+def test_cli_rejects_a_name_that_cannot_rotate_and_prints_json(world: World, monkeypatch, capsys) -> None:
+    code, _, _ = invoke(world, monkeypatch, capsys, "--only", "REVIEW_GATEWAY_URL")
+    assert code == EXIT_USAGE
+    code, out, _ = invoke(world, monkeypatch, capsys, "--apply", "--only", "OPENAI_API_KEY", "--json")
+    assert code == 0 and json.loads(out)["results"][0]["status"] == "rotated"

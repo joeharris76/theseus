@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from . import github_env
+from .config import ConfigError
 from .plan import Context
 from .rotate import Engine, Outcome, Rotator, SetSecret
 from .rotators import build_rotators
-from .store import Secret
+from .store import Secret, StoreError
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -120,3 +123,32 @@ def _plan(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool
         return Report(EXIT_OK, ctx.redactor.scrub(body))
     text = _render_text([(_title(item), steps) for item, steps in entries])
     return Report(EXIT_OK, ctx.redactor.scrub(text + "\n(dry run: nothing changed; add --apply to rotate)"))
+
+
+def command_rotate(args: argparse.Namespace) -> int:
+    from . import cli
+
+    code = EXIT_OK
+    only = [name for name in args.only.split(",") if name]
+    for path in args.config:
+        ctx: Context | None = None
+        try:
+            ctx = cli.open_for(path)
+            report = run(ctx, only=only, apply=args.apply, resume=args.resume, as_json=args.json)
+        except (ConfigError, StoreError, RuntimeError, OSError, ValueError) as exc:
+            return cli._fail(str(exc), ctx.redactor if ctx else None)
+        print(report.text)
+        code = max(code, report.code)
+    return code
+
+
+def register(sub: Any) -> None:
+    parser = sub.add_parser("rotate", help="rotate each credential: create, check, promote, then revoke the old one")
+    parser.add_argument(
+        "--config", nargs="+", required=True, metavar="PATH", help="policy file(s) with an infra: section"
+    )
+    parser.add_argument("--only", default="", help="comma-separated secret names to rotate")
+    parser.add_argument("--apply", action="store_true", help="rotate; without it nothing changes")
+    parser.add_argument("--resume", action="store_true", help="finish rotations an earlier run left unfinished")
+    parser.add_argument("--json", action="store_true")
+    parser.set_defaults(handler=command_rotate)
