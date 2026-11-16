@@ -10,12 +10,13 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from .config import InfraConfig
+from .config import InfraConfig, load_infra
 from .state import State
-from .store import Secret, Store
-from .transport import HttpTransport, Redactor, Runner
+from .store import Secret, Store, make_store
+from .transport import HttpTransport, Redactor, Runner, UrllibTransport, run_command
 
 OK = "ok"
 FAILED = "failed"
@@ -34,22 +35,50 @@ class Context:
     redactor: Redactor
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
+    def watch(self, value: str) -> None:
+        """Register a value, and each line of a multi-line one, so no part of it can be shown."""
+        self.redactor.add(value, *value.splitlines())
+
     def secret(self, name: str) -> Secret | None:
         """A stored value, registered for redaction as soon as it is read."""
         value = self.store.get(name)
         if value is not None:
-            self.redactor.add(value.reveal())
+            self.watch(value.reveal())
         return value
 
     def keep(self, name: str, value: Secret) -> None:
         """Put a new value in the store and mark it as needing delivery."""
-        self.redactor.add(value.reveal())
+        self.watch(value.reveal())
         self.store.put(name, value)
         self.state.bump(name)
         self.save_state()
 
     def save_state(self) -> None:
         self.state.save(self.redactor.values)
+
+
+def open_context(
+    config_path: Path,
+    http: HttpTransport | None = None,
+    run: Runner | None = None,
+    now: Callable[[], datetime] | None = None,
+) -> Context:
+    """Load a policy file's ``infra:`` section, its store and state, and register every stored value for redaction."""
+    config = load_infra(config_path)
+    runner = run or run_command
+    store = make_store(config.store.backend, config.store.directory, runner)
+    ctx = Context(
+        config=config,
+        store=store,
+        state=State.load(config.state_path),
+        http=http or UrllibTransport(),
+        run=runner,
+        redactor=Redactor(),
+        **({"now": now} if now else {}),
+    )
+    for name in store.names():
+        ctx.secret(name)
+    return ctx
 
 
 @dataclass
@@ -99,9 +128,15 @@ class Plan:
             "notes": list(self.notes),
         }
 
-    def render(self, redactor: Redactor, as_json: bool = False, applied: list[Outcome] | None = None) -> str:
+    def render(
+        self,
+        redactor: Redactor,
+        as_json: bool = False,
+        applied: list[Outcome] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> str:
         if as_json:
-            data = self.to_json()
+            data = {**(extra or {}), **self.to_json()}
             if applied is not None:
                 data["applied"] = [{"id": item.id, "status": item.status, "detail": item.detail} for item in applied]
             return redactor.scrub(json.dumps(data, indent=2, sort_keys=True))

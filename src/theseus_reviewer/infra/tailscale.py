@@ -221,22 +221,21 @@ def standardize(text: str) -> Any:
         elif text.startswith("/*", i):
             end = text.find("*/", i + 2)
             i = n if end < 0 else end + 2
-        elif c == ",":
-            k = i + 1
-            while k < n and text[k] in " \t\r\n":
-                k += 1
-            if k < n and text[k] in "}]":
-                i += 1
-            else:
-                out.append(c)
-                i += 1
         else:
+            if c in "}]":
+                while out and out[-1].isspace():
+                    out.pop()
+                if out and out[-1] == ",":
+                    out.pop()
             out.append(c)
             i += 1
     try:
-        return json.loads("".join(out))
+        policy = json.loads("".join(out))
     except ValueError as exc:
         raise TailscaleError("the policy file is not valid HuJSON") from exc
+    if not isinstance(policy, dict):
+        raise TailscaleError("the policy file is not a JSON object")
+    return policy
 
 
 def _insert(text: str, at: int, last_char: str, member: str, indent: str) -> str:
