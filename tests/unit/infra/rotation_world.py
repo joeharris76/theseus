@@ -6,12 +6,13 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
 
+from theseus_reviewer.infra import rotators
 from theseus_reviewer.infra.config import InfraConfig
 from theseus_reviewer.infra.plan import Context
 from theseus_reviewer.infra.state import State
@@ -19,7 +20,7 @@ from theseus_reviewer.infra.store import FileStore, Secret, StoreError
 from theseus_reviewer.infra.transport import Redactor
 
 from .example import example
-from .fakes import Call, FakeHttp, FakeRunner, RunCall, completed, json_response
+from .fakes import Call, FakeHttp, FakeRunner, FakeSecurity, RunCall, completed, json_response
 
 NOW = datetime(2026, 11, 15, 12, 0, 0, tzinfo=UTC)
 ENV_KEY = "Example-Org/example:review"
@@ -52,11 +53,22 @@ class FlakyStore(FileStore):
     def __init__(self, directory: Path) -> None:
         super().__init__(directory)
         self.fail_put: set[str] = set()
+        self.fail_delete: set[str] = set()
+        self.hook: Callable[[], None] = lambda: None
 
     def put(self, name: str, value: Secret) -> None:
+        self.hook()
         if name in self.fail_put:
             raise StoreError(f"the store refused {name}")
         super().put(name, value)
+        self.hook()
+
+    def delete(self, name: str) -> None:
+        self.hook()
+        if name in self.fail_delete:
+            raise StoreError(f"the store refused to delete {name}")
+        super().delete(name)
+        self.hook()
 
 
 @dataclass
@@ -81,6 +93,28 @@ class World:
     app_id_answer: str = APP_ID
     gateway_calls: int = 0
     reject_new: bool = False
+    gateway_keeps: set[str] = field(default_factory=set)  # tokens the gateway keeps accepting
+    sleeps: list[float] = field(default_factory=list)
+    security: FakeSecurity = field(default_factory=FakeSecurity)
+    trip_at: int | None = None
+    ticks: int = 0
+
+    def arm(self, at: int | None) -> None:
+        """Raise ``KeyboardInterrupt`` at the ``at``-th boundary (before and after each write) from now on."""
+        self.trip_at, self.ticks = at, 0
+
+    def tick(self) -> None:
+        if self.trip_at is None:
+            return
+        self.ticks += 1
+        if self.ticks == self.trip_at:
+            self.trip_at = None
+            raise KeyboardInterrupt
+
+    def reload(self) -> None:
+        """Read the state the command left on disk, as the next process would."""
+        self.state = self.ctx.state
+
     counter: count = field(default_factory=lambda: count(1))
     minted: list[str] = field(default_factory=list)
     identifiers: list[str] = field(default_factory=lambda: [OLD["TS_OAUTH_CI_CLIENT_ID"]])
@@ -118,7 +152,7 @@ class World:
 
 def build_world(tmp_path: Path, monkeypatch) -> World:  # noqa: ANN001 - pytest fixture
     config = example(tmp_path)
-    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
     store = FlakyStore(tmp_path / "store")
     for name, value in {**OLD, **ROOT}.items():
         store.put(name, Secret(value))
@@ -148,6 +182,25 @@ def build_world(tmp_path: Path, monkeypatch) -> World:  # noqa: ANN001 - pytest 
     }
     world.openai_keys = {"key_old": OLD["OPENAI_API_KEY"]}
     world.typesafe_keys = {OLD["TYPESAFE_API_KEY"], NEW_TYPESAFE}
+    world.store.hook = world.tick
+    original_save = State.save
+    original_request = http.request
+
+    def traced_save(self: State, forbidden=()) -> None:  # noqa: ANN001
+        world.tick()
+        original_save(self, forbidden)
+        world.tick()
+
+    def traced_request(method: str, url: str, **kwargs):  # noqa: ANN003, ANN202
+        if method != "GET":
+            world.tick()
+        response = original_request(method, url, **kwargs)
+        if method != "GET":
+            world.tick()
+        return response
+
+    monkeypatch.setattr(State, "save", traced_save)
+    monkeypatch.setattr(http, "request", traced_request)
     _routes(world, monkeypatch)
     return world
 
@@ -219,7 +272,7 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
 
     def gateway_models(call: Call):
         bearer = call.headers.get("Authorization", "").removeprefix("Bearer ")
-        ok = bearer in world.accepted_gateway_tokens() and bearer not in world.gateway_rejects
+        ok = bearer in world.accepted_gateway_tokens() | world.gateway_keeps and bearer not in world.gateway_rejects
         return json_response(200 if ok else 401, {})
 
     http.on("GET", rf"{GATEWAY_URL}/v1/models", gateway_models)
@@ -227,11 +280,13 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
     def gh_set(call: RunCall):
         name = call.argv[3]
         assert call.argv[4:] == ("--env", "review", "--repo", "Example-Org/example"), call.argv
+        world.tick()
         if name in world.fail_set and call.stdin not in OLD.values():
             world.fail_set.discard(name)
             return completed(returncode=1, stderr="gh: secret set failed")
         assert call.stdin is not None
         world.env[name] = call.stdin
+        world.tick()
         return completed()
 
     runner.on(lambda argv: tuple(argv[:3]) == ("gh", "secret", "set"), gh_set)
@@ -261,7 +316,7 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
     def curl(call: RunCall):
         assert call.stdin is not None and call.stdin.startswith("Authorization: Bearer ")
         bearer = call.stdin.removeprefix("Authorization: Bearer ").strip()
-        ok = bearer in world.accepted_gateway_tokens() and bearer not in world.gateway_rejects
+        ok = bearer in world.accepted_gateway_tokens() | world.gateway_keeps and bearer not in world.gateway_rejects
         return completed("200" if ok else "401")
 
     runner.on(lambda argv: argv[0] == "curl", curl)
@@ -272,9 +327,10 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
         return completed()
 
     runner.on(lambda argv: argv[0] == "openssl", openssl)
-    runner.on(lambda argv: argv[0] == "security", completed(returncode=44, stderr="could not be found"))
-    monkeypatch.setattr("theseus_reviewer.infra.rotators.secrets.token_urlsafe", lambda n=32: NEW_GATEWAY)
-    monkeypatch.setattr("theseus_reviewer.infra.rotators.getpass.getuser", lambda: "tester")
+    runner.on(lambda argv: argv[0] == "security", lambda call: world.security(call.argv, stdin=call.stdin))
+    monkeypatch.setattr(
+        rotators, "SEAMS", rotators.Seams(token=lambda: NEW_GATEWAY, user=lambda: "tester", sleep=world.sleeps.append)
+    )
 
 
 def add_new_pem(world: World) -> Path:

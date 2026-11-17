@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
-from collections.abc import Sequence
+import os
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from . import github_env
@@ -13,6 +17,7 @@ from .config import ConfigError
 from .plan import Context
 from .rotate import Engine, Outcome, Rotator, SetSecret
 from .rotators import build_rotators
+from .state import State
 from .store import Secret, StoreError
 
 EXIT_OK = 0
@@ -67,6 +72,28 @@ def _render_text(lines: Sequence[tuple[str, Sequence[str]]]) -> str:
     return "\n".join(out)
 
 
+class RotateLockedError(RuntimeError):
+    pass
+
+
+@contextmanager
+def _locked(state_path: Path) -> Iterator[None]:
+    """An exclusive lock beside the state file for a whole apply or resume; a second run is refused, not queued."""
+    lock = state_path.with_name(state_path.name + ".lock")
+    lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RotateLockedError(
+                f"another rotation is running (it holds {lock}); wait for it to finish, then run rotate again"
+            ) from exc
+        yield
+    finally:
+        os.close(fd)
+
+
 def run(ctx: Context, *, only: Sequence[str], apply: bool, resume: bool, as_json: bool) -> Report:
     try:
         rotators = select(ctx, only)
@@ -74,6 +101,16 @@ def run(ctx: Context, *, only: Sequence[str], apply: bool, resume: bool, as_json
         return Report(EXIT_USAGE, ctx.redactor.scrub(str(exc)))
     if not apply:
         return _plan(ctx, rotators, resume, as_json)
+    try:
+        with _locked(ctx.config.state_path):
+            # Another run may have finished while this one waited to start, so read the state again under the lock.
+            ctx.state = State.load(ctx.config.state_path)
+            return _apply(ctx, rotators, resume, as_json)
+    except RotateLockedError as exc:
+        return Report(EXIT_FAILED, str(exc))
+
+
+def _apply(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool) -> Report:
     engine = Engine(ctx.store, ctx.state, ctx.redactor, _setter(ctx), ctx.config.environment_key)
     outcomes: list[Outcome] = []
     for rotator in rotators:

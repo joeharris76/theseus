@@ -9,6 +9,7 @@ one live and the old one recorded in the state file, so ``--resume`` revokes it 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -18,11 +19,16 @@ from .store import PENDING_SUFFIX, Secret, Store
 from .transport import Redactor
 
 PHASE_CREATED = "created"
+PHASE_PROMOTING = "promoting"
 PHASE_PROMOTED = "promoted"
 STATE_KEY_PREFIX = "rotate:"
+PREVIOUS_SUFFIX = ".previous"
+
+log = logging.getLogger("theseus.infra")
 
 # Outcomes of one credential.
 ROTATED = "rotated"
+UNREVOKED = "rotated-nothing-revoked"
 UNCHANGED = "unchanged"
 ROLLED_BACK = "rolled-back"
 REVOKE_PENDING = "revoke-pending"
@@ -91,7 +97,7 @@ class Outcome:
 
     @property
     def ok(self) -> bool:
-        return self.status in (ROTATED, UNCHANGED, RESUMED, REPORTED)
+        return self.status in (ROTATED, UNREVOKED, UNCHANGED, RESUMED, REPORTED)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -132,6 +138,9 @@ class Engine:
     def _old_values(self, names: Sequence[str]) -> dict[str, Secret | None]:
         return {name: self.store.get(name) for name in names}
 
+    def _outcome(self, rotator: Rotator, status: str, detail: str = "", notes: tuple[str, ...] = ()) -> Outcome:
+        return Outcome(rotator.kind, rotator.names, status, detail, notes)
+
     def rotate(self, rotator: Rotator, *, resume: bool) -> Outcome:
         record = self.pending_record(rotator)
         if record:
@@ -141,14 +150,33 @@ class Engine:
             old_ids = rotator.old_ids()
             created = rotator.create()
         except Exception as exc:
-            return Outcome(rotator.kind, rotator.names, FAILED, f"creating the new credential: {self._scrub(exc)}")
+            return self._failed_create(rotator, exc)
         if created is None:
-            return Outcome(
-                rotator.kind, rotator.names, UNCHANGED, "no newer credential to adopt", self._manual(rotator, None)
-            )
+            return self._outcome(rotator, UNCHANGED, "no newer credential to adopt", self._manual(rotator, None))
         for value in created.values.values():
             self.redactor.add(value.reveal(), *value.reveal().splitlines())
         return self._run(rotator, created, old, old_ids)
+
+    def _failed_create(self, rotator: Rotator, exc: Exception) -> Outcome:
+        """Creation failed. If the provider may have made a credential anyway, delete it by the id it answered with."""
+        detail = f"creating the new credential: {self._scrub(exc)}"
+        partial = getattr(rotator, "partial_ids", None)
+        ids = dict(partial()) if callable(partial) else {}
+        if not ids:
+            return self._outcome(rotator, FAILED, detail)
+        log.warning("%s: the provider may have created a credential with id %s", rotator.kind, ids)
+        self.state.set_provider(
+            self._record_key(rotator), phase=PHASE_CREATED, **{f"new.{key}": value for key, value in ids.items()}
+        )
+        try:
+            self._save()
+        except Exception as save_error:
+            return self._outcome(
+                rotator, FAILED, f"{detail}; the credential {ids} may exist: {self._scrub(save_error)}"
+            )
+        outcome = self._rollback(rotator, Created({}, ids), detail, restore=False)
+        outcome.status = FAILED
+        return outcome
 
     def _run(
         self, rotator: Rotator, created: Created, old: Mapping[str, Secret | None], old_ids: Mapping[str, str]
@@ -160,40 +188,60 @@ class Engine:
         try:
             self._save()
         except Exception as exc:
-            return self._rollback(rotator, created, old, f"recording the new credential: {self._scrub(exc)}")
+            return self._rollback(rotator, created, f"recording the new credential: {self._scrub(exc)}")
         try:
+            for name, value in old.items():
+                if value is not None:
+                    self.store.put(name + PREVIOUS_SUFFIX, value)
             for name, value in created.values.items():
                 self.store.put(name + PENDING_SUFFIX, value)
+            rotator.health(created)
             environments = self._environments(created.values)
             for name, value in created.values.items():
                 for environment in environments[name]:
                     self.set_secret(environment, name, value)
             rotator.health(created)
             rotator.promote(created)
-            for name, value in created.values.items():
-                self.store.put(name, value)
-            rotator.committed(created)
-        except Exception as exc:
-            return self._rollback(rotator, created, old, self._scrub(exc))
-        for name in created.values:
-            self.store.delete(name + PENDING_SUFFIX)
-            self.state.bump(name)
-        self.state.set_provider(key, **{**record, "phase": PHASE_PROMOTED})
-        for name in created.values:
-            for environment in self._environments_of(name):
-                self.state.mark_delivered(name, environment)
+        except BaseException as exc:
+            outcome = self._rollback(rotator, created, self._scrub(exc))
+            if not isinstance(exc, Exception):
+                raise
+            return outcome
+        # From here the new credential is the live one: only roll forward. An interrupt leaves the record behind,
+        # and ``--resume`` finishes from either phase without ever deleting the credential in use.
+        record["phase"] = PHASE_PROMOTING
+        self.state.set_provider(key, **record)
         try:
             self._save()
         except Exception as exc:
-            return Outcome(
-                rotator.kind,
-                rotator.names,
-                REVOKE_PENDING,
-                f"the new credential is live but the state file was not saved: {self._scrub(exc)}",
-            )
-        return self._revoke(rotator, created, record, ROTATED)
+            record["phase"] = PHASE_CREATED
+            self.state.set_provider(key, **record)
+            return self._rollback(rotator, created, f"recording the promotion: {self._scrub(exc)}")
+        return self._forward(rotator, created, record, ROTATED)
 
-    def _rollback(self, rotator: Rotator, created: Created, old: Mapping[str, Secret | None], reason: str) -> Outcome:
+    def _forward(self, rotator: Rotator, created: Created, record: dict[str, str], status: str) -> Outcome:
+        """Finish a promotion: store the new values, record them, then revoke. Safe to repeat."""
+        key = self._record_key(rotator)
+        try:
+            for name, value in created.values.items():
+                if self.store.get(name + PENDING_SUFFIX) is not None:
+                    self.store.put(name, value)
+            rotator.committed(created)
+            for name in created.values:
+                self.state.bump(name)
+                for environment in self._environments_of(name):
+                    self.state.mark_delivered(name, environment)
+            self.state.set_provider(key, **{**record, "phase": PHASE_PROMOTED})
+            self._save()
+        except Exception as exc:
+            return self._outcome(
+                rotator,
+                REVOKE_PENDING,
+                f"the new credential is live but recording it failed: {self._scrub(exc)}; run rotate --resume",
+            )
+        return self._revoke(rotator, created, record, status)
+
+    def _rollback(self, rotator: Rotator, created: Created, reason: str, *, restore: bool = True) -> Outcome:
         problems: list[str] = []
 
         def attempt(label: str, action: Callable[[], None]) -> None:
@@ -202,7 +250,8 @@ class Engine:
             except Exception as exc:
                 problems.append(f"{label}: {self._scrub(exc)}")
 
-        for name, value in old.items():
+        for name in rotator.names if restore else ():
+            value = self.store.get(name + PREVIOUS_SUFFIX) or self.store.get(name)
             if value is None:
                 continue
             for environment in self._environments_of(name):
@@ -212,28 +261,31 @@ class Engine:
                 )
             attempt(f"restoring {name} in the store", lambda n=name, v=value: self.store.put(n, v))
         attempt("deleting the new credential", lambda: rotator.delete_new(created.ids))
-        for name in created.values:
-            attempt(f"dropping {name}{PENDING_SUFFIX}", lambda n=name: self.store.delete(n + PENDING_SUFFIX))
+        if not problems:
+            for name in rotator.names:
+                for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX):
+                    attempt(f"dropping {name}{suffix}", lambda n=name, s=suffix: self.store.delete(n + s))
         if problems:
             # Keep the record: the new credential may still exist and --resume rolls it back again.
-            detail = f"{reason}; rollback incomplete ({'; '.join(problems)})"
-            return Outcome(rotator.kind, rotator.names, FAILED, detail)
+            return self._outcome(rotator, FAILED, f"{reason}; rollback incomplete ({'; '.join(problems)})")
         self.state.clear_provider(self._record_key(rotator))
         try:
             self._save()
         except Exception as exc:
-            problems.append(f"saving the state file: {self._scrub(exc)}")
-            return Outcome(rotator.kind, rotator.names, FAILED, f"{reason}; rolled back; {'; '.join(problems)}")
-        return Outcome(rotator.kind, rotator.names, ROLLED_BACK, f"{reason}; the old credential is set again")
+            return self._outcome(rotator, FAILED, f"{reason}; rolled back; saving the state file: {self._scrub(exc)}")
+        return self._outcome(rotator, ROLLED_BACK, f"{reason}; the old credential is set again")
 
     def _revoke(self, rotator: Rotator, created: Created | None, record: Mapping[str, str], status: str) -> Outcome:
         old_ids = {key.removeprefix("old."): value for key, value in record.items() if key.startswith("old.")}
         try:
+            for name in rotator.names:
+                self.store.delete(name + PENDING_SUFFIX)
             rotator.revoke_old(old_ids)
+            for name in rotator.names:
+                self.store.delete(name + PREVIOUS_SUFFIX)
         except Exception as exc:
-            return Outcome(
-                rotator.kind,
-                rotator.names,
+            return self._outcome(
+                rotator,
                 REVOKE_PENDING,
                 f"the new credential is live; revoking the old one failed: {self._scrub(exc)}; run rotate --resume",
             )
@@ -241,32 +293,42 @@ class Engine:
         try:
             self._save()
         except Exception as exc:
-            return Outcome(
-                rotator.kind,
-                rotator.names,
-                REVOKE_PENDING,
-                f"revoked, but the state file was not saved: {self._scrub(exc)}",
+            return self._outcome(
+                rotator, REVOKE_PENDING, f"revoked, but the state file was not saved: {self._scrub(exc)}"
             )
-        return Outcome(rotator.kind, rotator.names, status, "", self._manual(rotator, created))
+        notes = self._manual(rotator, created)
+        if getattr(rotator, "revocable", False) and not old_ids:
+            return self._outcome(
+                rotator,
+                UNREVOKED,
+                "no previous credential id was recorded, so nothing was revoked; revoke the old credential by hand",
+                notes,
+            )
+        return self._outcome(rotator, status, "", notes)
 
     def _manual(self, rotator: Rotator, created: Created | None) -> tuple[str, ...]:
         return tuple(rotator.after_revoke(created))
 
     def _leftover(self, rotator: Rotator, record: Mapping[str, str], resume: bool) -> Outcome:
+        phase = record.get("phase", "?")
         if not resume:
-            return Outcome(
-                rotator.kind,
-                rotator.names,
-                FAILED,
-                f"an earlier rotation did not finish (phase {record.get('phase', '?')}); run rotate --resume",
+            return self._outcome(
+                rotator, FAILED, f"an earlier rotation did not finish (phase {phase}); run rotate --resume"
             )
-        if record.get("phase") == PHASE_PROMOTED:
-            return self._revoke(rotator, None, record, RESUMED)
-        # Interrupted before promotion: undo whatever it did, then a plain rotate can start again.
         new_ids = {key.removeprefix("new."): value for key, value in record.items() if key.startswith("new.")}
-        created = Created({name: Secret("") for name in rotator.names}, new_ids)
-        old = self._old_values(rotator.names)
-        outcome = self._rollback(rotator, created, old, "resuming an interrupted rotation")
+        if phase == PHASE_PROMOTED:
+            return self._revoke(rotator, None, record, RESUMED)
+        if phase == PHASE_PROMOTING:
+            values: dict[str, Secret] = {}
+            for name in rotator.names:
+                value = self.store.get(name + PENDING_SUFFIX) or self.store.get(name)
+                if value is None:
+                    return self._outcome(rotator, FAILED, f"cannot finish promoting: no value for {name} is stored")
+                self.redactor.add(value.reveal(), *value.reveal().splitlines())
+                values[name] = value
+            return self._forward(rotator, Created(values, new_ids), dict(record), RESUMED)
+        # Interrupted before promotion: undo whatever it did, then a plain rotate can start again.
+        outcome = self._rollback(rotator, Created({}, new_ids), "resuming an interrupted rotation")
         if outcome.status == ROLLED_BACK:
             outcome.status = RESUMED
             outcome.detail = "rolled back an interrupted rotation; run rotate again to start a new one"

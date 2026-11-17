@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import getpass
 import os
+import re
 import secrets
 import tempfile
-from collections.abc import Mapping, Sequence
-from datetime import datetime
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import app_key, gateway, github_env, openai_admin, tailscale, typesafe
@@ -23,14 +27,86 @@ from .config import (
     SecretSpec,
 )
 from .plan import Context
-from .rotate import Created, RotationError, Rotator
+from .rotate import PREVIOUS_SUFFIX, Created, RotationError, Rotator
 from .store import Secret, StoreError
+from .transport import HTTP_TIMEOUT_SECONDS, HttpResponse, HttpTransport, TransportError
 
 NEXT_SUFFIX = ".next"
 MODELS_PATH = "/v1/models"
 HEALTH_PATH = "/healthz"
 LOCAL_GATEWAY_PORT = 4000
 SECONDS_PER_DAY = 86400
+REVOKE_CHECKS = 6
+REVOKE_WAIT_SECONDS = 2.0
+_MDAT = re.compile(r'"mdat"<timedate>=(?:0x[0-9A-Fa-f]+\s+)?"(\d{14})')
+_PLAIN = re.compile(r"[A-Za-z0-9._~+/=@:-]+")
+
+
+@dataclass(frozen=True)
+class Seams:
+    """What the rotators take from the process: a token generator, the user name and a sleep. Tests replace these."""
+
+    token: Callable[[], str] = lambda: secrets.token_urlsafe(36)
+    user: Callable[[], str] = getpass.getuser
+    sleep: Callable[[float], None] = time.sleep
+
+
+SEAMS = Seams()
+
+
+def _quote(value: str) -> str:
+    """A word for ``security -i``: as is when plain, else double-quoted with backslash escapes."""
+    if _PLAIN.fullmatch(value):
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+class _Recorder:
+    """Wraps the HTTP transport to keep POST replies, so a credential made by a reply we cannot parse can be found."""
+
+    def __init__(self, inner: HttpTransport) -> None:
+        self.inner = inner
+        self.replies: list[HttpResponse] = []
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: bytes | None = None,
+        timeout: float = HTTP_TIMEOUT_SECONDS,
+    ) -> HttpResponse:
+        response = self.inner.request(method, url, headers=headers, body=body, timeout=timeout)
+        if method == "POST":
+            self.replies.append(response)
+        return response
+
+    def partial(self, label: str) -> dict[str, str]:
+        """The id of the last created credential in any reply, as ``{label: id}``; empty when none is visible."""
+        for response in reversed(self.replies):
+            if not response.ok:
+                continue
+            try:
+                data = response.json()
+            except TransportError:
+                continue
+            nested = data.get("api_key") if isinstance(data, dict) else None
+            for candidate in (nested, data):
+                if isinstance(candidate, dict) and isinstance(candidate.get("id"), str):
+                    return {label: candidate["id"]}
+        return {}
+
+
+@contextmanager
+def _recording(ctx: Context) -> Iterator[_Recorder]:
+    original = ctx.http
+    recorder = _Recorder(original)
+    ctx.http = recorder
+    try:
+        yield recorder
+    finally:
+        ctx.http = original
 
 
 def _days(now: datetime, then: datetime | None) -> float | None:
@@ -134,7 +210,7 @@ class GatewayRotator:
             raise RotationError("the gateway did not accept the new token over the tailnet")
 
     def create(self) -> Created | None:
-        token = Secret(secrets.token_urlsafe(36))
+        token = Secret(SEAMS.token())
         self.ctx.watch(token.reveal())
         temp_file = gateway.token_path(self._config, self._temp)
         try:
@@ -180,7 +256,16 @@ class GatewayRotator:
         """Nothing to record locally."""
 
     def revoke_old(self, ids: Mapping[str, str]) -> None:
-        """The swap already stopped the gateway accepting the old token; nothing is left to revoke."""
+        """The swap stopped the gateway accepting the old token; check the gateway really refuses it now."""
+        old = self.ctx.store.get(self.name + PREVIOUS_SUFFIX)
+        if old is None:
+            return
+        for attempt in range(REVOKE_CHECKS):
+            if self._local(old, MODELS_PATH) in (401, 403):
+                return
+            if attempt + 1 < REVOKE_CHECKS:
+                SEAMS.sleep(REVOKE_WAIT_SECONDS)
+        raise RotationError("the gateway still accepts the old token after the swap")
 
     def after_revoke(self, created: Created | None) -> Sequence[str]:
         return ()
@@ -190,6 +275,8 @@ class TailscaleRotator:
     """Create a tagged OAuth client, prove it by a token exchange, then delete the old one."""
 
     kind = "tailscale"
+    revocable = True
+    _partial: dict[str, str] = {}
 
     def __init__(self, ctx: Context, specs: Sequence[SecretSpec]) -> None:
         self.ctx = ctx
@@ -216,9 +303,14 @@ class TailscaleRotator:
         tailnet = self.ctx.config.tailnet
         assert tailnet is not None
         client = tailscale.TailscaleClient.from_root(self.ctx)
-        client_id, client_secret = client.create_oauth_client(
-            tailnet.oauth_client.description, tailnet.oauth_client.scopes, (tailnet.tag,)
-        )
+        with _recording(self.ctx) as recorder:
+            try:
+                client_id, client_secret = client.create_oauth_client(
+                    tailnet.oauth_client.description, tailnet.oauth_client.scopes, (tailnet.tag,)
+                )
+            except Exception:
+                self._partial = recorder.partial("client_id")
+                raise
         values: dict[str, Secret] = {}
         if "id" in self.by_field:
             values[self.by_field["id"]] = Secret(client_id)
@@ -226,6 +318,9 @@ class TailscaleRotator:
             values[self.by_field["secret"]] = client_secret
         self._new = (client_id, client_secret)
         return Created(values, {"client_id": client_id})
+
+    def partial_ids(self) -> dict[str, str]:
+        return self._partial
 
     def health(self, created: Created) -> None:
         client_id, client_secret = self._new
@@ -257,6 +352,8 @@ class OpenAIRotator:
     """Mint a second key on the service account, check it with GET /v1/models, then delete the old key."""
 
     kind = "openai"
+    revocable = True
+    _partial: dict[str, str] = {}
 
     def __init__(self, ctx: Context, spec: SecretSpec) -> None:
         assert spec.project is not None and spec.account_name is not None
@@ -280,8 +377,16 @@ class OpenAIRotator:
         if not account:
             raise RotationError("no OpenAI service account is recorded; run 'theseus infra setup' first")
         assert self.spec.account_name is not None
-        new = openai_admin.OpenAIAdmin(self.ctx).mint_key(self._project, account, self.spec.account_name)
+        with _recording(self.ctx) as recorder:
+            try:
+                new = openai_admin.OpenAIAdmin(self.ctx).mint_key(self._project, account, self.spec.account_name)
+            except Exception:
+                self._partial = recorder.partial("key_id")
+                raise
         return Created({self.spec.name: new.secret}, {"key_id": new.key_id, "service_account_id": account})
+
+    def partial_ids(self) -> dict[str, str]:
+        return self._partial
 
     def health(self, created: Created) -> None:
         if not openai_admin.check_key(self.ctx.http, created.values[self.spec.name]):
@@ -324,14 +429,28 @@ class TypesafeRotator:
     def old_ids(self) -> dict[str, str]:
         return {}
 
+    def _mirror(self) -> Secret | None:
+        """The ``mirror_keychain`` item, only when it was written after the stored key (the owner put it there)."""
+        mirror = self.spec.mirror_keychain
+        if mirror is None:
+            return None
+        user = SEAMS.user()
+        result = self.ctx.run(["security", "find-generic-password", "-s", mirror, "-a", user, "-w"])
+        text = result.stdout.removesuffix("\n") if result.returncode == 0 else ""
+        if not text.strip():
+            return None
+        attributes = self.ctx.run(["security", "find-generic-password", "-s", mirror, "-a", user])
+        found = _MDAT.search(attributes.stdout) if attributes.returncode == 0 else None
+        if found is None:
+            return None
+        written = datetime.strptime(found.group(1), "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+        stored = self.ctx.store.modified_at(self.spec.name)
+        return None if stored is not None and written <= stored else Secret(text)
+
     def _candidate(self) -> Secret | None:
         value = self.ctx.secret(self._next_name)
-        if value is None and self.spec.mirror_keychain:
-            result = self.ctx.run(
-                ["security", "find-generic-password", "-s", self.spec.mirror_keychain, "-a", getpass.getuser(), "-w"]
-            )
-            text = result.stdout.removesuffix("\n") if result.returncode == 0 else ""
-            value = Secret(text) if text.strip() else None
+        if value is None:
+            value = self._mirror()
             if value is not None:
                 self.ctx.watch(value.reveal())
         current = self.ctx.secret(self.spec.name)
@@ -377,7 +496,19 @@ class TypesafeRotator:
         """The owner's key stays in the console and in ``NAME.next``; only the pending item is dropped."""
 
     def revoke_old(self, ids: Mapping[str, str]) -> None:
-        """Typesafe has no API to revoke; the owner does it from the printed step."""
+        """Typesafe has no API to revoke the old key. Bring the local-review Keychain copy up to date instead."""
+        mirror = self.spec.mirror_keychain
+        current = self.ctx.store.get(self.spec.name)
+        if mirror is None or current is None:
+            return
+        user = SEAMS.user()
+        line = " ".join(
+            ["add-generic-password", "-U", "-s", _quote(mirror), "-a", _quote(user), "-w", _quote(current.reveal())]
+        )
+        self.ctx.run(["security", "-i"], stdin=line + "\n")
+        check = self.ctx.run(["security", "find-generic-password", "-s", mirror, "-a", user, "-w"])
+        if check.returncode != 0 or check.stdout.removesuffix("\n") != current.reveal():
+            raise RotationError(f"the Keychain item {mirror} was not updated with the new key")
 
     def after_revoke(self, created: Created | None) -> Sequence[str]:
         if created is None:
@@ -394,6 +525,7 @@ class AppKeyRotator:
         self.ctx = ctx
         self.spec = spec
         self.names = (spec.name,)
+        self._adopted: Path | None = None
 
     def _app_id(self) -> str:
         assert self.spec.app_id_secret is not None
@@ -457,6 +589,7 @@ class AppKeyRotator:
             app_key.validate(self.ctx, value, self._app_id(), self.spec.app_slug)
         except app_key.AppKeyError as exc:
             raise RotationError(f"{pem.name} did not validate: {exc}") from exc
+        self._adopted = pem
         return Created({self.spec.name: value})
 
     def health(self, created: Created) -> None:
@@ -476,7 +609,10 @@ class AppKeyRotator:
 
     def after_revoke(self, created: Created | None) -> Sequence[str]:
         if created is not None:
-            return (f"delete the old private key in the {self.spec.app_slug} GitHub App settings (Private keys)",)
+            lines = [f"delete the old private key in the {self.spec.app_slug} GitHub App settings (Private keys)"]
+            if self._adopted is not None:
+                lines.append(f"delete the adopted key file {self._adopted} from {self._adopted.parent}")
+            return tuple(lines)
         lines = [_age_line(self.spec.name, self._age(), self.spec.max_age_days)]
         if self._past_limit():
             lines.extend(self._steps())

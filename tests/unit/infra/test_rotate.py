@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from theseus_reviewer.cli import main
 from theseus_reviewer.infra import cli as infra_cli
-from theseus_reviewer.infra import rotate
+from theseus_reviewer.infra import rotate, rotators
 from theseus_reviewer.infra.rotate_command import EXIT_FAILED, EXIT_OK, EXIT_USAGE, Report, run
 from theseus_reviewer.infra.state import State
 from theseus_reviewer.infra.store import PENDING_SUFFIX, Secret
 
-from .fakes import completed
+from .fakes import json_response
 from .rotation_world import (
     ENV_KEY,
     NEW_GATEWAY,
@@ -23,6 +26,8 @@ from .rotation_world import (
     NEW_TYPESAFE,
     NOW,
     OLD,
+    PROJECT,
+    TS,
     World,
     add_new_pem,
     build_world,
@@ -40,7 +45,9 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
 
 
 def rotate_now(world: World, *only: str, resume: bool = False, as_json: bool = False) -> Report:
-    return run(world.ctx, only=list(only), apply=True, resume=resume, as_json=as_json)
+    report = run(world.ctx, only=list(only), apply=True, resume=resume, as_json=as_json)
+    world.reload()
+    return report
 
 
 def stored(world: World, name: str) -> str | None:
@@ -149,18 +156,41 @@ def test_typesafe_picks_up_a_newer_key_from_the_store(world: World) -> None:
     assert_no_values(world, report)
 
 
-def test_typesafe_picks_up_a_newer_key_from_the_configured_keychain_item(world: World) -> None:
-    world.runner.routes.insert(
-        0,
-        (
-            lambda argv: argv[0] == "security" and "TYPESAFE_API_KEY" in argv and "tester" in argv,
-            lambda call: completed(NEW_TYPESAFE + "\n"),
-        ),
-    )
+MIRROR = ("TYPESAFE_API_KEY", "tester")
+LATER, EARLIER = datetime(2099, 1, 1, tzinfo=UTC), datetime(2000, 1, 1, tzinfo=UTC)
+
+
+def put_mirror(world: World, value: str, written: datetime) -> None:
+    world.security.items[MIRROR] = (value, written)
+
+
+def test_typesafe_picks_up_a_newer_key_from_a_newer_keychain_item(world: World) -> None:
+    put_mirror(world, NEW_TYPESAFE, LATER)
     report = rotate_now(world, "TYPESAFE_API_KEY")
     assert report.code == EXIT_OK, report.text
     assert world.env["TYPESAFE_API_KEY"] == NEW_TYPESAFE
     assert not world.values_in_argv_or_urls([NEW_TYPESAFE])
+    assert world.security.items[MIRROR][0] == NEW_TYPESAFE
+
+
+def test_typesafe_ignores_a_keychain_item_older_than_the_stored_key(world: World) -> None:
+    put_mirror(world, "STALE-typesafe-key-mmmmmmmm", EARLIER)
+    report = rotate_now(world, "TYPESAFE_API_KEY")
+    assert report.code == EXIT_OK, report.text
+    assert "unchanged" in report.text
+    assert world.env["TYPESAFE_API_KEY"] == OLD["TYPESAFE_API_KEY"]
+    assert world.security.items[MIRROR][0] == "STALE-typesafe-key-mmmmmmmm"
+
+
+def test_adopting_from_next_updates_the_keychain_mirror_through_stdin(world: World) -> None:
+    put_mirror(world, OLD["TYPESAFE_API_KEY"], EARLIER)
+    world.store.put("TYPESAFE_API_KEY.next", Secret(NEW_TYPESAFE))
+    assert rotate_now(world, "TYPESAFE_API_KEY").code == EXIT_OK
+    assert world.security.items[MIRROR][0] == NEW_TYPESAFE
+    assert not world.values_in_argv_or_urls([NEW_TYPESAFE])
+    # The next run does not adopt the old value back.
+    again = rotate_now(world, "TYPESAFE_API_KEY")
+    assert again.code == EXIT_OK and world.env["TYPESAFE_API_KEY"] == NEW_TYPESAFE
 
 
 def test_typesafe_without_a_newer_key_reports_age_and_the_manual_step(world: World) -> None:
@@ -621,3 +651,261 @@ def test_cli_rejects_a_name_that_cannot_rotate_and_prints_json(world: World, mon
     assert code == EXIT_USAGE
     code, out, _ = invoke(world, monkeypatch, capsys, "--apply", "--only", "OPENAI_API_KEY", "--json")
     assert code == 0 and json.loads(out)["results"][0]["status"] == "rotated"
+
+
+# -- the promotion is rolled forward, never back --------------------------------------------------------------
+
+
+def in_use_works(world: World, names: tuple[str, ...], *, store: bool = True) -> bool:
+    """Whether what the environment (and the store) hold is accepted by the fake provider right now."""
+    for name in names:
+        for value in (world.env[name], stored(world, name)) if store else (world.env[name],):
+            if name == "OPENAI_API_KEY" and value not in world.openai_keys.values():
+                return False
+            if name == "REVIEW_GATEWAY_TOKEN" and value not in world.accepted_gateway_tokens():
+                return False
+            if name == "TS_OAUTH_CI_SECRET" and value not in world.ts_clients.values():
+                return False
+            if name == "TS_OAUTH_CI_CLIENT_ID" and value not in world.ts_clients:
+                return False
+    return True
+
+
+@pytest.mark.parametrize(
+    "names",
+    [("OPENAI_API_KEY",), TS_NAMES, ("REVIEW_GATEWAY_TOKEN",)],
+    ids=["openai", "tailscale", "gateway"],
+)
+def test_an_interrupt_at_every_step_boundary_never_deletes_the_credential_in_use(
+    tmp_path: Path, names: tuple[str, ...]
+) -> None:
+    tested = 0
+    for point in range(1, 500):
+        with pytest.MonkeyPatch.context() as patch:
+            world = build_world(tmp_path / f"point{point}", patch)
+            world.arm(point)
+            try:
+                first = rotate_now(world, *names)
+            except KeyboardInterrupt:
+                interrupted = True
+            else:
+                interrupted = False
+            world.arm(None)
+            world.reload()
+            # Mid-swap the gateway already refuses the stored old token; CI, which holds the environment value, must work.
+            assert in_use_works(world, names, store=False), f"after an interrupt at boundary {point}"
+            if not interrupted:
+                assert first.code == EXIT_OK, first.text
+                break
+            tested += 1
+            resumed = rotate_now(world, *names, resume=True)
+            assert resumed.code == EXIT_OK, f"boundary {point}: {resumed.text}"
+            assert in_use_works(world, names), f"after resuming from boundary {point}"
+            for name in names:
+                assert stored(world, name) == world.env[name], (point, name)
+                assert stored(world, name + PENDING_SUFFIX) is None, (point, name)
+                assert stored(world, name + rotate.PREVIOUS_SUFFIX) is None, (point, name)
+            assert not [key for key in world.state.providers if key.startswith(rotate.STATE_KEY_PREFIX)], point
+    else:
+        pytest.fail("the rotation never finished")
+    assert tested > 10
+
+
+def test_an_interrupt_right_after_the_store_put_resumes_forward(world: World) -> None:
+    original = world.store.put
+
+    def put_then_stop(name: str, value: Secret) -> None:
+        original(name, value)
+        if name == "OPENAI_API_KEY":
+            raise KeyboardInterrupt
+
+    world.store.put = put_then_stop  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        rotate_now(world, "OPENAI_API_KEY")
+    world.store.put = original  # type: ignore[method-assign]
+    world.reload()
+    new_value = world.env["OPENAI_API_KEY"]
+    assert new_value != OLD["OPENAI_API_KEY"] and stored(world, "OPENAI_API_KEY") == new_value
+    assert world.state.provider("rotate:openai")["phase"] == rotate.PHASE_PROMOTING
+    resumed = rotate_now(world, "OPENAI_API_KEY", resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert list(world.openai_keys.values()) == [new_value]
+    assert stored(world, "OPENAI_API_KEY") == new_value == world.env["OPENAI_API_KEY"]
+
+
+def test_a_failing_pending_delete_keeps_the_new_credential_and_resume_finishes(world: World) -> None:
+    world.store.fail_delete.add("OPENAI_API_KEY.pending")
+    report = rotate_now(world, "OPENAI_API_KEY")
+    assert report.code == EXIT_FAILED and "rotate --resume" in report.text
+    new_value = world.env["OPENAI_API_KEY"]
+    assert new_value in world.openai_keys.values() and stored(world, "OPENAI_API_KEY") == new_value
+    assert openai_old_works(world) is False or "key_old" in world.openai_keys
+    assert world.state.provider("rotate:openai")["phase"] == rotate.PHASE_PROMOTED
+    world.store.fail_delete.clear()
+    resumed = rotate_now(world, "OPENAI_API_KEY", resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert list(world.openai_keys.values()) == [new_value]
+    assert stored(world, "OPENAI_API_KEY.pending") is None
+
+
+def test_a_failing_promotion_store_put_is_finished_by_resume_not_undone(world: World) -> None:
+    world.store.fail_put.add("OPENAI_API_KEY")
+    report = rotate_now(world, "OPENAI_API_KEY")
+    assert report.code == EXIT_FAILED and "rotate --resume" in report.text
+    new_value = world.env["OPENAI_API_KEY"]
+    assert new_value in world.openai_keys.values() and "key_old" in world.openai_keys
+    assert world.state.provider("rotate:openai")["phase"] == rotate.PHASE_PROMOTING
+    world.store.fail_put.clear()
+    resumed = rotate_now(world, "OPENAI_API_KEY", resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert list(world.openai_keys.values()) == [new_value] and stored(world, "OPENAI_API_KEY") == new_value
+
+
+def test_the_old_value_is_kept_as_previous_until_the_revoke_succeeds(world: World) -> None:
+    world.fail_delete.add("key_old")
+    rotate_now(world, "OPENAI_API_KEY")
+    assert stored(world, "OPENAI_API_KEY.previous") == OLD["OPENAI_API_KEY"]
+    world.fail_delete.clear()
+    rotate_now(world, "OPENAI_API_KEY", resume=True)
+    assert stored(world, "OPENAI_API_KEY.previous") is None
+
+
+# -- one run at a time --------------------------------------------------------------------------------------------
+
+
+def hold_lock(world: World) -> int:
+    lock = world.config.state_path.with_name(world.config.state_path.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def test_a_second_run_is_refused_while_another_holds_the_lock(world: World) -> None:
+    fd = hold_lock(world)
+    try:
+        refused = rotate_now(world, "OPENAI_API_KEY")
+        refused_resume = rotate_now(world, "OPENAI_API_KEY", resume=True)
+        calls = len(world.http.calls) + len(world.runner.calls)
+        planned = run(world.ctx, only=[], apply=False, resume=False, as_json=False)
+    finally:
+        os.close(fd)
+    for report in (refused, refused_resume):
+        assert report.code == EXIT_FAILED and "another rotation is running" in report.text
+    assert calls == 0
+    assert planned.code == EXIT_OK  # a dry run changes nothing, so it needs no lock
+    assert rotate_now(world, "OPENAI_API_KEY").code == EXIT_OK
+
+
+def test_a_run_reads_the_state_again_once_it_holds_the_lock(world: World) -> None:
+    other = State.load(world.config.state_path)
+    other.set_provider("rotate:openai", phase=rotate.PHASE_PROMOTED, **{"old.key_id": "key_old"})
+    other.save()
+    report = rotate_now(world, "OPENAI_API_KEY", resume=True)
+    assert report.code == EXIT_OK, report.text
+    assert "key_old" not in world.openai_keys
+
+
+# -- the gateway's old token must really be refused ---------------------------------------------------------------
+
+
+def test_gateway_revoke_fails_loudly_while_the_gateway_still_accepts_the_old_token(world: World) -> None:
+    world.gateway_keeps.add(OLD["REVIEW_GATEWAY_TOKEN"])
+    report = rotate_now(world, "REVIEW_GATEWAY_TOKEN")
+    assert report.code == EXIT_FAILED, report.text
+    assert "still accepts the old token" in report.text and "rotate --resume" in report.text
+    assert world.env["REVIEW_GATEWAY_TOKEN"] == NEW_GATEWAY and NEW_GATEWAY in world.accepted_gateway_tokens()
+    assert world.sleeps == [rotators.REVOKE_WAIT_SECONDS] * (rotators.REVOKE_CHECKS - 1)
+    world.gateway_keeps.clear()
+    resumed = rotate_now(world, "REVIEW_GATEWAY_TOKEN", resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert stored(world, "REVIEW_GATEWAY_TOKEN.previous") is None
+
+
+def test_gateway_revoke_waits_for_the_gateway_to_drop_the_old_token(world: World) -> None:
+    calls = {"count": 0}
+    original = world.accepted_gateway_tokens
+
+    def lagging() -> set[str]:
+        calls["count"] += 1
+        return original() | ({OLD["REVIEW_GATEWAY_TOKEN"]} if world.sleeps == [] else set())
+
+    world.accepted_gateway_tokens = lagging  # type: ignore[method-assign]
+    report = rotate_now(world, "REVIEW_GATEWAY_TOKEN")
+    assert report.code == EXIT_OK, report.text
+    assert world.sleeps == [rotators.REVOKE_WAIT_SECONDS]
+
+
+# -- creation that fails after the provider made something -------------------------------------------------------
+
+
+def test_an_unparseable_openai_reply_deletes_the_key_it_may_have_made(world: World) -> None:
+    def keyless(call):  # noqa: ANN001
+        world.openai_keys["key_orphan"] = "NEVER-SEEN-orphan-0000"
+        return json_response(200, {"id": "key_orphan"})
+
+    world.http.routes.insert(0, ("POST", re.compile(rf"{PROJECT}/service_accounts/sa_1/api_keys"), keyless))
+    report = rotate_now(world, "OPENAI_API_KEY")
+    assert report.code == EXIT_FAILED, report.text
+    assert "key_orphan" not in world.openai_keys and openai_old_works(world)
+    assert world.state.provider("rotate:openai") == {}
+    assert not [c for c in world.runner.calls if c.argv[:3] == ("gh", "secret", "set")]
+
+
+def test_an_unparseable_tailscale_reply_deletes_the_client_it_may_have_made(world: World) -> None:
+    def keyless(call):  # noqa: ANN001
+        world.ts_clients["NEW-orphan-client"] = "NEVER-SEEN-orphan-0001"
+        return json_response(200, {"id": "NEW-orphan-client"})
+
+    world.http.routes.insert(0, ("POST", re.compile(rf"{TS}/tailnet/-/keys"), keyless))
+    report = rotate_now(world, *TS_NAMES)
+    assert report.code == EXIT_FAILED, report.text
+    assert "NEW-orphan-client" not in world.ts_clients and ts_old_works(world)
+    assert world.state.provider("rotate:tailscale") == {}
+
+
+def test_an_orphan_that_cannot_be_deleted_is_recorded_for_resume(world: World) -> None:
+    def keyless(call):  # noqa: ANN001
+        world.openai_keys["key_orphan"] = "NEVER-SEEN-orphan-0002"
+        return json_response(200, {"id": "key_orphan"})
+
+    world.http.routes.insert(0, ("POST", re.compile(rf"{PROJECT}/service_accounts/sa_1/api_keys"), keyless))
+    world.fail_delete.add("key_orphan")
+    assert rotate_now(world, "OPENAI_API_KEY").code == EXIT_FAILED
+    assert world.state.provider("rotate:openai")["new.key_id"] == "key_orphan"
+    world.fail_delete.clear()
+    assert rotate_now(world, "OPENAI_API_KEY", resume=True).code == EXIT_OK
+    assert "key_orphan" not in world.openai_keys
+
+
+# -- warnings, manual steps and checking before delivery ----------------------------------------------------------
+
+
+def test_nothing_is_reported_as_revoked_when_no_old_id_was_recorded(world: World) -> None:
+    world.store.delete("TS_OAUTH_CI_CLIENT_ID")
+    world.state.clear_provider("tailscale")
+    world.state.save()
+    report = rotate_now(world, *TS_NAMES)
+    assert report.code == EXIT_OK, report.text
+    assert rotate.UNREVOKED in report.text and "nothing was revoked" in report.text
+    assert OLD["TS_OAUTH_CI_CLIENT_ID"] in world.ts_clients
+
+
+def test_the_adopted_pem_file_is_named_for_deletion(world: World) -> None:
+    pem = add_new_pem(world)
+    report = rotate_now(world, "REVIEW_APP_PRIVATE_KEY")
+    assert f"delete the adopted key file {pem}" in report.text
+
+
+@pytest.mark.parametrize("which", ["openai", "gateway", "tailscale"])
+def test_a_credential_that_fails_its_direct_check_never_reaches_an_environment(world: World, which: str) -> None:
+    if which == "gateway":
+        world.gateway_rejects.add(NEW_GATEWAY)
+        names: tuple[str, ...] = ("REVIEW_GATEWAY_TOKEN",)
+    else:
+        world.reject_new = True
+        names = ("OPENAI_API_KEY",) if which == "openai" else TS_NAMES
+    report = rotate_now(world, *names)
+    assert report.code == EXIT_FAILED
+    sets = [c for c in world.runner.calls if c.argv[:3] == ("gh", "secret", "set")]
+    assert [c for c in sets if c.stdin not in OLD.values()] == []
