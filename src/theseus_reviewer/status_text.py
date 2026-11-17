@@ -88,6 +88,7 @@ GATE_PASS_VERDICT = SEP.join((GATE_PASS, f"review-verdict: {SHIP_LABEL}"))
 GATE_PASS_EXEMPT = SEP.join((GATE_PASS, EXEMPT_SUCCESS_DESCRIPTION))
 
 _URL = re.compile(r"\s*https?://\S+")
+_REQUEST_FAILURE = re.compile(r"GitHub request to\s+https?://[^/\s]+(?P<path>/[^?\s]*)\S*\s+failed")
 _HTTP_FAILURE = re.compile(r":?\s*GitHub returned HTTP (?P<code>[0-9]{3}) for\s+\S+")
 _SHA = re.compile(r"\b(?:[0-9a-f]{64}|[0-9a-f]{40})\b")
 SHORT_SHA = 12
@@ -288,6 +289,7 @@ def gate_refusals(what: str, reasons: Sequence[str], limit: int = DESCRIPTION_LI
 def gate_error(cause: object) -> str:
     text = " ".join(str(cause).split())
     text = _HTTP_FAILURE.sub(" (HTTP \\g<code>)", text)
+    text = _REQUEST_FAILURE.sub(r"GitHub request to \g<path> failed", text)
     text = _URL.sub("", text).strip()
     tail = f"{SEP}see the run log"
     stem = f"{GATE_ERROR}{SEP}"
