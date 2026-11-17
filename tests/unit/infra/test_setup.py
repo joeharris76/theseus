@@ -653,3 +653,61 @@ def test_a_symlinked_pem_is_never_picked_up(world: World, monkeypatch, capsys, t
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 3 and "! app-key:REVIEW_APP_PRIVATE_KEY: no key yet" in out
     assert "REVIEW_APP_PRIVATE_KEY" not in world.secrets
+
+
+def test_an_environment_opened_between_planning_and_delivery_gets_no_secret(world: World, monkeypatch, capsys) -> None:
+    world.environment = {
+        "name": "review",
+        "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+    }
+    world.policies = ["develop", "release/*"]
+    world.open_env_after_gets = 1
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert code == 1 and "allows every branch; TYPESAFE_API_KEY was not set" in out
+    assert world.secrets == {} and not mutating_gh(world)
+
+
+def _stale_oauth(world: World, monkeypatch, capsys) -> FileStore:
+    setup(world, monkeypatch, capsys, "--apply")
+    store = FileStore(Path(world.infra["store"]["dir"]))
+    store.delete("TS_OAUTH_CI_SECRET")
+    return store
+
+
+OAUTH_ONLY = "TS_OAUTH_CI_CLIENT_ID,TS_OAUTH_CI_SECRET"
+
+
+def test_an_open_environment_plans_no_client_creation_and_no_revocation(world: World, monkeypatch, capsys) -> None:
+    _stale_oauth(world, monkeypatch, capsys)
+    world.environment["deployment_branch_policy"] = None
+    clients = dict(world.clients)
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", OAUTH_ONLY)
+    assert code == 3 and "tailscale" not in out.replace("! github.environment", "")
+    assert world.clients == clients
+    code, out, _ = setup(world, monkeypatch, capsys, "--json", "--only", OAUTH_ONLY)
+    assert json.loads(out)["actions"] == []
+
+
+def test_a_retired_client_is_not_revoked_while_its_replacement_is_undelivered(
+    world: World, monkeypatch, capsys
+) -> None:
+    store = _stale_oauth(world, monkeypatch, capsys)
+    world.gh_fail_secret = "TS_OAUTH_CI_SECRET"
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", OAUTH_ONLY)
+    assert code == 1 and "skipped tailscale.revoke-previous" in out
+    assert set(world.clients) == {"kclient1", "kclient2"}
+    world.gh_fail_secret = ""
+    code, _, _ = setup(world, monkeypatch, capsys, "--apply", "--only", OAUTH_ONLY)
+    assert code == 0 and set(world.clients) == {"kclient2"}
+
+
+def test_a_gated_action_with_no_prerequisites_never_runs() -> None:
+    from theseus_reviewer.infra.plan import SKIPPED, Plan
+    from theseus_reviewer.infra.transport import Redactor
+
+    ran: list[str] = []
+    plan = Plan()
+    plan.add("gated", "x", lambda: ran.append("gated"), (), gated=True)
+    plan.add("plain", "y", lambda: ran.append("plain"))
+    outcomes = {o.id: o for o in plan.execute(Redactor())}
+    assert ran == ["plain"] and outcomes["gated"].status == SKIPPED

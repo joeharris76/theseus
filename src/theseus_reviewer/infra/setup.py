@@ -112,6 +112,8 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
             f"environment {env} allows deployments from every branch, so no secret is delivered to it; "
             "run setup without --only to restrict it",
         )
+        # Nothing is created that could not be delivered: no key, client or revocation is planned.
+        return plan
     producers: dict[str, str] = {}
     _tailnet(ctx, plan, selected, only is None, producers)
     for spec in selected:
@@ -128,11 +130,24 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
     for spec in selected:
         if not unrestricted:
             _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
-    revoke = [action for action in plan.actions if action.id == REVOKE_ACTION]
-    for action in revoke:
+    for action in [action for action in plan.actions if action.id == REVOKE_ACTION]:
         plan.actions.remove(action)
-        action.requires = tuple(f"deliver:{name}" for name in sorted(oauth_names) if plan.has(f"deliver:{name}"))
-        plan.actions.append(action)
+        needs: list[str] = []
+        ready = True
+        for name in sorted(oauth_names):
+            if plan.has(f"deliver:{name}"):
+                needs.append(f"deliver:{name}")
+            elif not (
+                name in remote
+                and ctx.secret(name) is not None
+                and ctx.state.delivered(name, config.environment_key) >= max(ctx.state.version(name), 1)
+            ):
+                ready = False
+                break
+        if ready:  # revoke only once both OAuth secrets are verified delivered, or their deliveries are planned
+            action.requires = tuple(needs)
+            action.gated = bool(needs)
+            plan.actions.append(action)
     for line in aged(ctx):
         plan.note(line)
     return plan
@@ -189,6 +204,7 @@ def _tailnet(
             REVOKE_ACTION,
             "revoke the previous OAuth client once every OAuth secret is delivered",
             lambda: _revoke_retired(ctx),
+            gated=True,
         )
 
 
