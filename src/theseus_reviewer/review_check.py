@@ -235,6 +235,58 @@ def _open_findings_message(verdicts: list[dict[str, Any]]) -> str:
     return status_text.gate_open_findings(COMMENT_DISPUTE_GRAMMAR)
 
 
+def _open_findings_tail(verdicts: list[dict[str, Any]]) -> str:
+    decisive = _latest_decisive(verdicts)
+    match = ESCALATED.search((decisive or {}).get("description") or "")
+    if match:
+        ruling = " need an owner ruling"
+        ids = status_text.ids_text(
+            match.group("ids").split(","), OWNER_RULING_IDS_LIMIT, unseen=int(match.group("more") or 0)
+        )
+        return f"{ids}{ruling}"
+    return "open review findings"
+
+
+OWNER_RULING_IDS_LIMIT = 24
+
+
+def _ignored_adjudications(
+    comments: Iterable[dict[str, Any]], reviews: Iterable[dict[str, Any]], head_sha: str, binding: Binding
+) -> list[str]:
+    from . import adjudication, protocol
+    from .edits import EditStateError
+
+    own = [review for review in reviews if review.get("commit_id") == head_sha and "last_edited_at" in review]
+    try:
+        found = protocol.history(own, binding.bot_login)
+    except EditStateError:
+        return []
+    latest, after = found.latest, found.latest_at
+    if found.error is not None or latest is None or after is None:
+        return []
+    prefix = adjudication.PREFIX.rstrip().casefold()
+    ignored = []
+    for comment in comments:
+        body = comment.get("body") or ""
+        if not body.lstrip().casefold().startswith(prefix):
+            continue
+        try:
+            if _parse_time(comment["created_at"]) <= after:
+                continue
+        except (KeyError, ValueError):
+            continue
+        ruling, problem = adjudication.assess(comment, after, binding.attesters)
+        if ruling is not None:
+            problem = protocol.ruling_problem(latest, head_sha, ruling.defect_id)
+        if problem:
+            quoted = status_text.hard_clip(" ".join(body.split()[2:]), IGNORED_QUOTE_LIMIT)
+            ignored.append(f"{problem} ({comment.get('login')}: '{quoted}')")
+    return ignored
+
+
+IGNORED_QUOTE_LIMIT = 24
+
+
 def decide(
     head_sha: str,
     files: Iterable[str],
@@ -277,6 +329,12 @@ def decide(
         if (latest.get("description") or "").startswith(REFUSED_DESCRIPTION_PREFIX):
             return WAITING, status_text.GATE_REFUSED
         if findings_open:
+            ignored = _ignored_adjudications(comments, reviews, head_sha, binding)
+            if ignored:
+                tail = _open_findings_tail(verdicts)
+                room = status_text.DESCRIPTION_LIMIT - len(status_text.SEP) - len(tail)
+                refusal = status_text.gate_refusals("owner adjudication ignored", ignored, room)
+                return WAITING, f"{refusal}{status_text.SEP}{tail}"
             return WAITING, _open_findings_message(verdicts)
         if verdict == "pending":
             return WAITING, status_text.GATE_NOT_REVIEWED

@@ -278,11 +278,11 @@ def gate_state(verdict: object) -> str:
     return SEP.join((GATE_BLOCKED, f"review-verdict is {verdict}", f"{PUSH_NEW_HEAD}, or {OWNER_STANDIN}"))
 
 
-def gate_refusals(what: str, reasons: Sequence[str]) -> str:
+def gate_refusals(what: str, reasons: Sequence[str], limit: int = DESCRIPTION_LIMIT) -> str:
     stem = f"{GATE_BLOCKED}{SEP}{what}{SEP}"
     more = f" (+{len(reasons) - 1} more)" if len(reasons) > 1 else ""
     first = " ".join(short_sha(reasons[0]).split()) if reasons else ""
-    return f"{stem}{hard_clip(first, DESCRIPTION_LIMIT - len(stem) - len(more))}{more}"
+    return f"{stem}{hard_clip(first, limit - len(stem) - len(more))}{more}"
 
 
 def gate_error(cause: object) -> str:

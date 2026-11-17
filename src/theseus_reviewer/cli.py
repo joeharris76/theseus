@@ -482,13 +482,14 @@ def _ruling(
     latest = found.latest
     if found.error is not None:
         return None, found.error
-    if latest is None or latest["head_sha"] != head_sha:
+    if latest is None:
         return None, "the adjudication is not for the current head"
-    ruling = adjudication.valid(view, found.latest_at, attesters)
+    ruling, problem = adjudication.assess(view, found.latest_at, attesters)
     if ruling is None:
-        return None, "the adjudication is not an unedited attester comment posted after the latest review of this head"
-    if latest["decision"] != protocol.SHIP_WITH_FIXES or ruling.defect_id not in latest.get("escalated", ()):
-        return None, f"{ruling.defect_id} is not escalated to the owner on this head"
+        return None, f"the adjudication cannot apply: {problem}"
+    problem = protocol.ruling_problem(latest, head_sha, ruling.defect_id)
+    if problem:
+        return None, problem
     return ruling, ""
 
 
@@ -2935,9 +2936,11 @@ def _parser() -> argparse.ArgumentParser:
     install_omp.add_argument("--policy", required=True)
     install_omp.set_defaults(handler=omp_pin.command_install)
     from . import audit, driver, preflight
+    from .infra import cli as infra_cli
 
     audit.register(commands)
     driver.register(commands)
+    infra_cli.register(commands)
     preflight.register(commands)
     _register_passthrough(commands)
     return parser

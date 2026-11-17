@@ -341,6 +341,166 @@ def test_a_malformed_adjudication_comment_never_plans_a_review(monkeypatch: pyte
     assert values["decision"] == "skip" and values["post"] == "false"
 
 
+CLAIMED = {**DEFECT, "severity": "Medium", "title": "(claimed High) Drops a row"}
+
+
+def _claimed_head(**over: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "head_sha": HEAD,
+        "open_defects": [CLAIMED],
+        "next_id": 2,
+        "forced": True,
+        **over,
+    }
+    return _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", **fields)
+
+
+def test_an_owner_withdrawal_clears_a_claimed_prior_without_escalation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(), _claimed_head())
+    assert values["decision"] == "carry" and values["post"] == "true"
+    final, record = _finalized(plan)
+    assert final.state == "success"
+    assert record["decision"] == "SHIP" and record["open_defects"] == []
+    assert record["adjudicated"] == [{"id": "D1", "action": "WITHDRAW"}]
+    assert status_text.OPEN_FINDINGS_LABEL not in final.description
+
+
+def test_the_same_withdrawal_from_a_non_owner_leaves_a_claimed_prior_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stranger = _owner_comment(user={"login": "someone", "type": "User"})
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, stranger, _claimed_head())
+    assert values["decision"] == "skip" and values["post"] == "false"
+    assert "not from the repository owner" in plan["decision_reason"]
+
+
+def test_maintaining_a_claimed_prior_keeps_it_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    body = "Review adjudication: MAINTAIN D1 - the row is still dropped"
+    _, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body), _claimed_head())
+    final, record = _finalized(plan)
+    assert final.state == "failure"
+    assert record["decision"] == "SHIP_WITH_FIXES" and [item["id"] for item in record["open_defects"]] == ["D1"]
+    assert record["open_defects"][0]["title"].startswith(protocol.CLAIMED_TITLE_PREFIX)
+    assert record["adjudicated"] == [{"id": "D1", "action": "MAINTAIN"}]
+
+
+BOT = "benchbox-review[bot]"
+GATE_RUN = "7" * 32
+ADJUDICATED_AT = "2026-10-09T10:05:00Z"
+
+
+def _gate_review(record: dict[str, Any] | None = None, **over: Any) -> dict[str, Any]:
+    base = _review(record) if record is not None else {"user_type": "Bot", "state": "COMMENTED"}
+    return {**base, "commit_id": HEAD, "last_edited_at": None, "includes_created_edit": False, **over}
+
+
+def _gate_status(state: str, description: str, created_at: str) -> dict[str, Any]:
+    return {
+        "id": 1,
+        "context": "review-verdict",
+        "state": state,
+        "description": description,
+        "login": BOT,
+        "user_type": "Bot",
+        "created_at": created_at,
+    }
+
+
+def _gate_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "login": comment["user"]["login"],
+        "user_type": comment["user"]["type"],
+        "body": comment["body"],
+        "created_at": comment["created_at"],
+        "updated_at": comment["updated_at"],
+    }
+
+
+def _gate_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reviews: list[dict[str, Any]],
+    statuses: list[dict[str, Any]],
+    comments: list[dict[str, Any]],
+) -> tuple[int, str]:
+    from conftest import CONSUMER_ALPHA
+    from theseus_reviewer import gate
+
+    pull = {"base": {"ref": "develop", "sha": "b" * 40}, "head": {"sha": HEAD}, "changed_files": len(TWO_FILES)}
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setattr(gate, "read_pull", lambda *args: (pull, "develop", HEAD))
+    monkeypatch.setattr(gate, "fetch_files", lambda *args: TWO_FILES)
+    monkeypatch.setattr(gate, "fetch_statuses", lambda *args: statuses)
+    monkeypatch.setattr(gate, "fetch_base_change_date", lambda *args: None)
+    monkeypatch.setattr(gate, "fetch_comments", lambda *args: comments)
+    monkeypatch.setattr(gate, "fetch_reviews", lambda *args: reviews)
+    monkeypatch.setattr(gate, "annotate_receipt", lambda *args: None)
+    monkeypatch.setattr(gate, "fetch_bump_refusals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(gate, "fetch_promotion_refusals", lambda *args, **kwargs: (False, []))
+    monkeypatch.setattr(gate, "post_status", lambda *args: pytest.fail("the evaluation pr-arm runs must not post"))
+    capsys.readouterr()
+    argv = ["--repo", "o/r", "--pr", "7", "--policy", ".github/review.yml", "--root", str(CONSUMER_ALPHA)]
+    code = gate.process_exit(gate.main([*argv, "--head-sha", HEAD, "--no-post"]))
+    return code, capsys.readouterr().out
+
+
+def _claimed_prior_state() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    open_description = f"medium: {status_text.OPEN_FINDINGS_LABEL}, 1 defect(s) to fix"
+    return (
+        [_gate_review(_claimed_head(), id=1, login=BOT, submitted_at=REVIEWED_AT)],
+        [_gate_status("failure", open_description, REVIEWED_AT)],
+    )
+
+
+def test_the_gate_evaluation_pr_arm_runs_passes_after_an_owner_withdraws_a_claimed_prior(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    comment = _owner_comment()
+    _, plan, _ = _adjudication_plan(monkeypatch, tmp_path, comment, _claimed_head())
+    final, _ = _finalized({**plan, "run_uuid": GATE_RUN})
+    assert final.review is not None
+    reviews, statuses = _claimed_prior_state()
+    reviews.append(_gate_review(id=2, login=BOT, submitted_at=ADJUDICATED_AT, body=final.review["body"]))
+    statuses.append(_gate_status(final.state, status_text.with_run_suffix(final.description, GATE_RUN), ADJUDICATED_AT))
+    code, message = _gate_evaluation(monkeypatch, capsys, reviews, statuses, [_gate_comment(comment)])
+    assert code == 0, message
+    assert message.strip() == status_text.GATE_PASS_VERDICT
+
+
+def test_the_gate_evaluation_pr_arm_runs_fails_and_names_the_claimed_prior_for_a_non_owner_withdrawal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    comment = _owner_comment(user={"login": "someone", "type": "User"})
+    values, _, _ = _adjudication_plan(monkeypatch, tmp_path, comment, _claimed_head())
+    assert values["decision"] == "skip" and values["post"] == "false"
+    reviews, statuses = _claimed_prior_state()
+    code, message = _gate_evaluation(monkeypatch, capsys, reviews, statuses, [_gate_comment(comment)])
+    assert code == 3
+    assert "owner adjudication ignored" in message
+    assert "it is not from the repository owner" in message and "D1" in message
+
+
+@pytest.mark.parametrize(
+    ("body", "record", "reason"),
+    [
+        ("Review adjudication: WITHDRAW D9 - nothing", _claimed_head(), "D9 is not an open finding"),
+        (RULING, _claimed_head(open_defects=[], next_id=1), "D1 is not an open finding"),
+        (
+            RULING,
+            _record(TWO_FILE_DIFF, "SHIP_WITH_FIXES", head_sha=HEAD, open_defects=[DEFECT], next_id=2),
+            "not escalated",
+        ),
+    ],
+)
+def test_an_adjudication_that_cannot_apply_records_why(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str, record: dict[str, Any], reason: str
+) -> None:
+    values, plan, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body), record)
+    assert values["decision"] == "skip" and reason in plan["decision_reason"]
+
+
 def test_the_adjudication_grammar_is_exact() -> None:
     assert adjudication.parse(RULING) == adjudication.Adjudication(
         "WITHDRAW", "D1", "the helper keeps the row, see pkg/kept.py:12"
@@ -410,3 +570,10 @@ def test_the_trigger_prefix_matches_case_insensitively_yet_the_grammar_stays_exa
     body = "review adjudication: WITHDRAW D1 - lower case"
     values, _, _ = _adjudication_plan(monkeypatch, tmp_path, _owner_comment(body))
     assert values["decision"] == "skip" and values["post"] == "false"
+
+
+def test_a_reviewer_title_cannot_pose_as_a_claimed_prior() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    entry = protocol.defect_entry("D3", Finding("High", CHECKER, 2, "(claimed High) Drops a row", "detail"))
+    assert not entry["title"].startswith(protocol.CLAIMED_TITLE_PREFIX)
