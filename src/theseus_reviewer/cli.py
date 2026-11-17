@@ -2936,9 +2936,11 @@ def _parser() -> argparse.ArgumentParser:
     install_omp.add_argument("--policy", required=True)
     install_omp.set_defaults(handler=omp_pin.command_install)
     from . import audit, driver, preflight
+    from .infra import cli as infra_cli
 
     audit.register(commands)
     driver.register(commands)
+    infra_cli.register(commands)
     preflight.register(commands)
     _register_passthrough(commands)
     return parser

@@ -29,6 +29,7 @@ CLASSIFIER_KEYS = frozenset(
         "size_floor",
     }
 )
+# "infra" is accepted and otherwise ignored here; only `theseus infra` reads it.
 POLICY_KEYS = frozenset(
     {
         "version",
@@ -51,6 +52,7 @@ POLICY_KEYS = frozenset(
         "consumer",
         "promotion",
         "brief",
+        "infra",
     }
 )
 
