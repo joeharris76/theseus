@@ -33,11 +33,11 @@ uv build
 
 ## Worktree hygiene
 
-A session removes its own worktree and local branch after its pull request has merged: `git worktree remove <path>` followed by `git branch -D <branch>`, without `--force`.
+A session removes its own worktree and local branch after its pull request has merged, once the first two conditions below hold for it: `git worktree remove <path>` (never with `--force`), then `git branch -D <branch>`. `-D` is needed because a squash-merged branch is not an ancestor of `main`; the conditions are what make it safe.
 
 To clean up leftover linked worktrees by hand, run `git fetch --prune origin` and inspect each entry of `git worktree list --porcelain`. Remove a worktree only when all of these hold:
 
-- `git -C <path> status --porcelain` prints nothing, so there are no tracked changes and no untracked files.
+- `git -C <path> status --porcelain` prints nothing, so there are no tracked changes and no untracked files. `git worktree remove` also deletes ignored files without asking, so check `git -C <path> status --porcelain --ignored` too: every `!!` entry must be rebuildable output such as `.venv/`, `__pycache__/` or a test cache.
 - The branch change is provably on `origin/main`: the tip is an ancestor of `origin/main`; or a squash-equivalent commit (`t=$(git commit-tree <tip>^{tree} -p $(git merge-base origin/main <tip>) -m x)`) is reported by `git cherry origin/main $t` with a leading `-`; or `gh pr list --head <branch> --state merged --json headRefOid` shows a merged pull request whose `headRefOid` equals the worktree HEAD. A detached HEAD counts only by the ancestor test.
 - No process has the path as its working directory (`lsof -a -d cwd | grep <path>`), and nothing in it changed in the last 24 hours.
 
