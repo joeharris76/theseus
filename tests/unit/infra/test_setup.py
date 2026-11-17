@@ -487,3 +487,114 @@ def test_a_config_without_an_infra_section_exits_2(tmp_path: Path, monkeypatch, 
     monkeypatch.setattr(infra_cli, "DEPENDENCIES", infra_cli.Dependencies())
     assert main(["infra", "setup", "--config", str(path)]) == 2
     assert "no infra: section" in capsys.readouterr().err
+
+
+# --- review fixes --------------------------------------------------------------------------------------------
+
+PROTECTED = {
+    "name": "review",
+    "can_admins_bypass": False,
+    "protection_rules": [
+        {"type": "wait_timer", "wait_timer": 30},
+        {
+            "type": "required_reviewers",
+            "prevent_self_review": True,
+            "reviewers": [
+                {"type": "User", "reviewer": {"id": 7, "login": "joe"}},
+                {"type": "Team", "reviewer": {"id": 9}},
+            ],
+        },
+        {"type": "branch_policy"},
+    ],
+    "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False},
+}
+
+
+def env_puts(world: World) -> list[Any]:
+    return [
+        json.loads(c.stdin)
+        for c in world.run.calls
+        if c.argv[:2] == ("gh", "api") and c.argv[3] == "PUT" and c.argv[-3].endswith("environments/review")
+    ]
+
+
+def test_switching_an_existing_environment_keeps_every_protection(world: World, monkeypatch, capsys) -> None:
+    world.environment = json.loads(json.dumps(PROTECTED))
+    code, out, _ = setup(world, monkeypatch, capsys)
+    assert "from protected branches only to custom deployment branch policies" in out
+    assert "2 required reviewer(s), wait timer 30 min, prevent self-review, admins can bypass: False" in out
+    assert env_puts(world) == []
+    setup(world, monkeypatch, capsys, "--apply")
+    assert env_puts(world) == [
+        {
+            "wait_timer": 30,
+            "prevent_self_review": True,
+            "reviewers": [{"type": "User", "id": 7}, {"type": "Team", "id": 9}],
+            "can_admins_bypass": False,
+            "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+        }
+    ]
+
+
+def test_a_new_environment_is_created_with_only_the_branch_policy(world: World, monkeypatch, capsys) -> None:
+    setup(world, monkeypatch, capsys, "--apply")
+    assert env_puts(world) == [
+        {"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+    ]
+
+
+def test_only_never_switches_an_existing_environment(world: World, monkeypatch, capsys) -> None:
+    world.environment = json.loads(json.dumps(PROTECTED))
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert code == 0 and env_puts(world) == [] and world.environment == PROTECTED
+    assert "TYPESAFE_API_KEY" in world.secrets
+
+
+def test_only_creates_a_missing_environment_without_a_branch_policy(world: World, monkeypatch, capsys) -> None:
+    setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert env_puts(world) == [{}]
+
+
+def test_only_must_name_both_oauth_secrets_or_neither(world: World, monkeypatch, capsys) -> None:
+    for only in ("TS_OAUTH_CI_SECRET", "TS_OAUTH_CI_CLIENT_ID,TYPESAFE_API_KEY"):
+        code, _, err = setup(world, monkeypatch, capsys, "--apply", "--only", only)
+        assert code == 2 and "every tailscale_oauth secret together" in err
+    assert world.clients == {} and world.secrets == {}
+    code, _, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TS_OAUTH_CI_CLIENT_ID,TS_OAUTH_CI_SECRET")
+    assert code == 0 and set(world.secrets) == {"TS_OAUTH_CI_CLIENT_ID", "TS_OAUTH_CI_SECRET"}
+
+
+def test_the_previous_oauth_client_stays_alive_until_both_secrets_are_delivered(
+    world: World, monkeypatch, capsys
+) -> None:
+    setup(world, monkeypatch, capsys, "--apply")
+    FileStore(Path(world.infra["store"]["dir"])).delete("TS_OAUTH_CI_SECRET")
+    world.gh_fail_secret = "TS_OAUTH_CI_CLIENT_ID"
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert code == 1 and "skipped tailscale.revoke-previous" in out
+    assert set(world.clients) == {"kclient1", "kclient2"}
+    assert world.secrets["TS_OAUTH_CI_CLIENT_ID"][0] == "kclient1"
+    world.gh_fail_secret = ""
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert code == 0 and set(world.clients) == {"kclient2"}
+    assert world.secrets["TS_OAUTH_CI_CLIENT_ID"][0] == "kclient2"
+    code, out, _ = setup(world, monkeypatch, capsys, "--json")
+    assert json.loads(out)["actions"] == []
+
+
+def test_the_app_key_plan_tells_the_owner_to_delete_the_pem(world: World, monkeypatch, capsys) -> None:
+    code, out, _ = setup(world, monkeypatch, capsys)
+    assert "afterwards delete " in out and "example-app.2026-11-14.private-key.pem" in out
+
+
+def test_a_symlinked_pem_is_never_picked_up(world: World, monkeypatch, capsys, tmp_path: Path) -> None:
+    config = world.context().config
+    real = world.put_pem(config)
+    target = tmp_path / "elsewhere.pem"
+    target.write_text(real.read_text())
+    real.unlink()
+    link = real.parent / "example-app.2026-11-16.private-key.pem"
+    link.symlink_to(target)
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert code == 3 and "! app-key:REVIEW_APP_PRIVATE_KEY: no key yet" in out
+    assert "REVIEW_APP_PRIVATE_KEY" not in world.secrets

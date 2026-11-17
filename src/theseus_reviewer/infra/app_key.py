@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -31,13 +32,17 @@ def newest_pem(spec: SecretSpec) -> Path | None:
     """The most recently written ``<slug>.*.private-key.pem`` in the key directory, if any."""
     if spec.pem_dir is None or spec.app_slug is None or not spec.pem_dir.is_dir():
         return None
-    found = [path for path in spec.pem_dir.glob(f"{spec.app_slug}.*.private-key.pem") if path.is_file()]
-    return max(found, key=lambda path: (path.stat().st_mtime, path.name), default=None)
+    found = [
+        path
+        for path in spec.pem_dir.glob(f"{spec.app_slug}.*.private-key.pem")
+        if stat.S_ISREG(path.lstat().st_mode)  # lstat: a symlink is never picked up
+    ]
+    return max(found, key=lambda path: (path.lstat().st_mtime, path.name), default=None)
 
 
 def fingerprint(path: Path) -> str:
     """A name and modification time that changes when a new key file appears; never the content."""
-    return f"{path.name}@{int(path.stat().st_mtime)}"
+    return f"{path.name}@{int(path.lstat().st_mtime)}"
 
 
 def _b64(data: bytes) -> str:

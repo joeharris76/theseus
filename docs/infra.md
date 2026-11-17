@@ -50,7 +50,7 @@ Unknown keys are refused. Sources:
 | Source | What `setup` does |
 |---|---|
 | `literal` | Keeps the configured value in the store and delivers it. |
-| `app_key` | Picks up the newest `<app_slug>.*.private-key.pem` in `pem_dir`, signs a JWT with it and requires `GET /app` to return the App with the id in the numeric literal secret named by `app_id_secret` (default `REVIEW_APP_ID`) before storing it. A key file already picked up (same name and modification time) is not picked up again. |
+| `app_key` | Picks up the newest `<app_slug>.*.private-key.pem` in `pem_dir`, signs a JWT with it and requires `GET /app` to return the App with the id in the numeric literal secret named by `app_id_secret` (default `REVIEW_APP_ID`) before storing it. A symlink is never picked up, and a key file already picked up (same name and modification time) is not picked up again. The plan reminds you to delete the `.pem` afterwards; it stays readable in `pem_dir`. |
 | `gateway_token`, `gateway_url` | Runs `<host_script> gateway` (the consumer's script, unchanged), reads the token file it leaves and the `gateway: published at https://…` line it prints. |
 | `tailscale_oauth` | Creates one OAuth client with the configured scopes and tag, and keeps its id and secret. The client is created only after the policy has the tag. |
 | `openai_service_account` | Creates the service account in the project (or mints another key if one was recorded), checks the key with `GET /v1/models`, and keeps it. A key OpenAI rejects is revoked and not stored. |
@@ -60,7 +60,7 @@ Unknown keys are refused. Sources:
 
 ### Stores
 
-- `keychain`: service `theseus.infra`, one account per name, written by feeding `security -i` on stdin and read back. A value that is not plain printable text is stored base64-encoded behind `b64:`.
+- `keychain`: service `theseus.infra`, one account per name, written by feeding `security -i` on stdin and read back. A value that is not plain printable text is stored base64-encoded behind `b64:`. `security -i` reads at most 4096 bytes of a line, so a value over 2000 characters is stored in numbered parts (`NAME#<id>#<n>`) written first and a short header under `NAME` written last: a failed write leaves the old value intact.
 - `file`: a `0700` directory with one `0600` file per name, written atomically. A wider mode is refused, not repaired.
 
 The state file holds ids and versions only (which OAuth client and service account exist, which version of each secret each environment received), never a value. Losing it is safe: the next `setup --apply` sets every secret again.
@@ -77,7 +77,9 @@ theseus infra seed   NAME --config PATH [--from-file PATH]
 
 The tailnet policy is edited as text, so comments and layout survive. Setup adds only what is missing: the tag in `tagOwners`, a grant from the tag to `gateway_dst` on `gateway_port`, and a test that the tag can reach `gateway_port` and cannot reach `deny_port`. Tailscale validates the edit (which runs the tests) before it is saved, and the save carries `If-Match` with the ETag that was read; a policy changed in between is refused.
 
-An existing environment that already uses custom deployment branch policies is left alone. One that does not is updated through `PUT`, which GitHub treats as a replacement of the environment's protection settings, so review them afterwards.
+An existing environment that already uses custom deployment branch policies is left alone. One that does not is switched with a `PUT`, which GitHub treats as a replacement of the environment's protection settings, so setup reads the environment first and sends back its required reviewers, wait timer, prevent-self-review and admin-bypass settings. The plan line says what the switch changes (for example from protected branches only to custom policies) and which protections are kept. Check the environment in GitHub afterwards.
+
+`--only` never switches an existing environment (that needs the branch list a full run adds) and creates a missing one without a branch policy. The two `tailscale_oauth` secrets are one client: `--only` must name both or neither. A replaced OAuth client is revoked only after both secrets are delivered, so a failed delivery leaves the old client working.
 
 Exit codes: `0` done or nothing to do; `1` an action failed, or `status` found drift (something due, blocked or aged); `2` unusable configuration, read or input; `3` owner action is still needed.
 

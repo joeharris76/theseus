@@ -54,14 +54,54 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
-def ensure_environment(ctx: Context) -> None:
-    """Create the environment, or make it use custom deployment branch policies. Existing reviewers and wait timers are kept."""
-    _api(
-        ctx,
-        "PUT",
-        _base(ctx),
-        {"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}},
-    )
+def kept_protections(environment: dict[str, Any]) -> dict[str, Any]:
+    """The protections of an existing environment, in the shape a ``PUT`` takes, so a ``PUT`` does not drop them."""
+    kept: dict[str, Any] = {}
+    reviewers: list[dict[str, Any]] = []
+    for rule in environment.get("protection_rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        if rule.get("type") == "wait_timer" and rule.get("wait_timer") is not None:
+            kept["wait_timer"] = rule["wait_timer"]
+        if rule.get("type") == "required_reviewers":
+            kept["prevent_self_review"] = bool(rule.get("prevent_self_review"))
+            for entry in rule.get("reviewers") or []:
+                who = entry.get("reviewer") if isinstance(entry, dict) else None
+                if isinstance(who, dict) and "id" in who and entry.get("type") in ("User", "Team"):
+                    reviewers.append({"type": entry["type"], "id": who["id"]})
+    if reviewers:
+        kept["reviewers"] = reviewers
+    if "can_admins_bypass" in environment:
+        kept["can_admins_bypass"] = bool(environment["can_admins_bypass"])
+    return kept
+
+
+def describe_protections(environment: dict[str, Any] | None) -> str:
+    if environment is None:
+        return "no existing protections"
+    kept = kept_protections(environment)
+    parts = [f"{len(kept['reviewers'])} required reviewer(s)"] if "reviewers" in kept else []
+    if "wait_timer" in kept:
+        parts.append(f"wait timer {kept['wait_timer']} min")
+    if kept.get("prevent_self_review"):
+        parts.append("prevent self-review")
+    if "can_admins_bypass" in kept:
+        parts.append(f"admins can bypass: {kept['can_admins_bypass']}")
+    return "kept as they are: " + ", ".join(parts) if parts else "it has no reviewers or wait timer to keep"
+
+
+def ensure_environment(ctx: Context, environment: dict[str, Any] | None, custom_policies: bool) -> None:
+    """Create the environment, or switch it to custom deployment branch policies, re-sending its existing protections.
+
+    A ``PUT`` replaces the environment's protection settings, so the reviewers, wait timer, self-review and admin
+    bypass settings read from ``environment`` go into the body.
+    """
+    body: dict[str, Any] = kept_protections(environment) if environment else {}
+    if custom_policies:
+        body["deployment_branch_policy"] = {"protected_branches": False, "custom_branch_policies": True}
+    elif environment and isinstance(environment.get("deployment_branch_policy"), dict):
+        body["deployment_branch_policy"] = environment["deployment_branch_policy"]
+    _api(ctx, "PUT", _base(ctx), body)
 
 
 def branch_policies(ctx: Context) -> list[str]:

@@ -125,6 +125,7 @@ class FakeSecurity:
     items: dict[tuple[str, str], tuple[str, datetime]] = field(default_factory=dict)
     clock: datetime = datetime(2026, 11, 1, 12, 0, 0, tzinfo=UTC)
     argv_seen: list[tuple[str, ...]] = field(default_factory=list)
+    fail_writes_after: int | None = None
 
     def __call__(self, argv: Sequence[str], *, stdin: str | None = None, timeout: float = 0) -> Answer:
         self.argv_seen.append(tuple(argv))
@@ -153,6 +154,12 @@ class FakeSecurity:
 
     def _interactive(self, stdin: str) -> Answer:
         for line in stdin.splitlines():
+            if len(line) > 4096:  # the real tool silently drops what it cannot read
+                continue
+            if self.fail_writes_after is not None:
+                if self.fail_writes_after <= 0:
+                    continue
+                self.fail_writes_after -= 1
             tokens = shlex.split(line)
             assert tokens[0] == "add-generic-password"
             value = _flag(tokens, "-w")

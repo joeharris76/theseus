@@ -190,22 +190,88 @@ def test_a_secret_shows_nothing_however_it_is_formatted() -> None:
     assert secret.reveal() == "SENTINEL-value-1234"
 
 
-@pytest.mark.skipif(
+def _full_size_pem() -> str:
+    if shutil.which("openssl") is None:
+        return PEM * 40
+    return subprocess.run(["openssl", "genrsa", "4096"], capture_output=True, text=True, check=True).stdout
+
+
+LIVE = pytest.mark.skipif(
     os.environ.get("THESEUS_INFRA_LIVE_KEYCHAIN") != "1" or not shutil.which("security"),
     reason="opt-in: set THESEUS_INFRA_LIVE_KEYCHAIN=1 on macOS to run against a temporary keychain",
 )
-@pytest.mark.parametrize("value", AWKWARD[:7])
-def test_live_keychain_round_trips_through_a_temporary_keychain(tmp_path: Path, value: str) -> None:
+
+
+@pytest.fixture
+def live_keychain(tmp_path: Path):  # type: ignore[no-untyped-def]
+    """A temporary keychain. The user's search list is restored and the keychain deleted, even on failure."""
+    listed = subprocess.run(["security", "list-keychains", "-d", "user"], capture_output=True, text=True, check=True)
+    before = [line.strip().strip('"') for line in listed.stdout.splitlines() if line.strip()]
     keychain = str(tmp_path / "temp.keychain-db")
-    subprocess.run(["security", "create-keychain", "-p", "temp-pass", keychain], check=True)
     try:
+        subprocess.run(["security", "create-keychain", "-p", "temp-pass", keychain], check=True)
         subprocess.run(["security", "unlock-keychain", "-p", "temp-pass", keychain], check=True)
-        store = KeychainStore(keychain=keychain)
-        store.put("LIVE_ITEM", Secret(value))
-        got = store.get("LIVE_ITEM")
-        assert got is not None and got.reveal() == value
-        assert store.names() == ["LIVE_ITEM"] and store.modified_at("LIVE_ITEM") is not None
-        store.delete("LIVE_ITEM")
-        assert store.get("LIVE_ITEM") is None
+        yield keychain
     finally:
         subprocess.run(["security", "delete-keychain", keychain], check=False)
+        subprocess.run(["security", "list-keychains", "-d", "user", "-s", *before], check=True)
+        after = subprocess.run(["security", "list-keychains", "-d", "user"], capture_output=True, text=True, check=True)
+        assert [line.strip().strip('"') for line in after.stdout.splitlines() if line.strip()] == before
+
+
+@LIVE
+@pytest.mark.parametrize("kind", ["awkward", "pem4096", "long-unicode", "very-long"])
+def test_live_keychain_round_trips_through_a_temporary_keychain(live_keychain: str, kind: str) -> None:
+    values = {
+        "awkward": "\n".join(AWKWARD[:7]),
+        "pem4096": _full_size_pem(),
+        "long-unicode": "ünïcödé-✓-" * 600,
+        "very-long": "x" * 20000,
+    }
+    value = values[kind]
+    store = KeychainStore(keychain=live_keychain)
+    store.put("LIVE_ITEM", Secret("old-value-that-must-survive"))
+    store.put("LIVE_ITEM", Secret(value))
+    got = store.get("LIVE_ITEM")
+    assert got is not None and got.reveal() == value
+    assert store.names() == ["LIVE_ITEM"] and store.modified_at("LIVE_ITEM") is not None
+    store.delete("LIVE_ITEM")
+    assert store.get("LIVE_ITEM") is None
+
+
+@pytest.mark.parametrize("size", [1999, 2000, 2001, 4000, 4500, 20000, 100000])
+def test_a_value_longer_than_a_security_line_is_kept_in_parts(size: int) -> None:
+    fake = FakeSecurity()
+    store = KeychainStore(fake)
+    value = "ünï" * size
+    store.put("A", Secret(value))
+    assert store.get("A") == Secret(value)
+    assert store.names() == ["A"]
+    assert max(len(line) for call in fake.argv_seen for line in call) < 4096
+    store.put("A", Secret("short-again"))
+    assert store.get("A") == Secret("short-again")
+    assert [account for _, account in fake.items] == ["A"]
+    store.put("A", Secret(value))
+    store.delete("A")
+    assert fake.items == {} and store.get("A") is None
+
+
+def test_a_failed_long_write_keeps_the_old_value_and_leaves_no_parts() -> None:
+    fake = FakeSecurity()
+    store = KeychainStore(fake)
+    old = "old-" + "o" * 5000
+    store.put("A", Secret(old))
+    before = dict(fake.items)
+    for allowed in range(0, 4):
+        fake.fail_writes_after = allowed
+        with pytest.raises(StoreError):
+            store.put("A", Secret("n" * 9000))
+        fake.fail_writes_after = None
+        assert store.get("A") == Secret(old)
+        assert fake.items == before
+
+
+def test_a_value_that_looks_like_a_parts_header_is_stored_as_itself() -> None:
+    store = KeychainStore(FakeSecurity())
+    store.put("A", Secret("chunks:deadbeef:3"))
+    assert store.get("A") == Secret("chunks:deadbeef:3")
