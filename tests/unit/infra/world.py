@@ -61,6 +61,8 @@ class World:
     gh_fail_secret: str = ""
     host_fail: bool = False
     jwt_signed_with: list[str] = field(default_factory=list)
+    open_env_after_gets: int | None = None
+    env_gets: int = 0
 
     def __post_init__(self) -> None:
         self._routes_gh()
@@ -118,6 +120,13 @@ class World:
         missing = completed(returncode=1, stderr="gh: Not Found (HTTP 404)")
         if rest == "":
             if method == "GET":
+                self.env_gets += 1
+                if (
+                    self.open_env_after_gets is not None
+                    and self.env_gets > self.open_env_after_gets
+                    and self.environment
+                ):
+                    self.environment["deployment_branch_policy"] = None
                 return missing if self.environment is None else completed(json.dumps(self.environment))
             self.environment = {"name": "review", **body}
             return completed(json.dumps(self.environment))

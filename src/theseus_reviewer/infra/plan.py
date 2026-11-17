@@ -87,6 +87,7 @@ class Action:
     summary: str
     run: Callable[[], None]
     requires: tuple[str, ...] = ()
+    gated: bool = False  # runs only after prerequisites; with none named it is refused, never run
 
 
 @dataclass(frozen=True)
@@ -108,8 +109,10 @@ class Plan:
     blocked: list[Blocked] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
-    def add(self, id: str, summary: str, run: Callable[[], None], requires: tuple[str, ...] = ()) -> str:
-        self.actions.append(Action(id, summary, run, requires))
+    def add(
+        self, id: str, summary: str, run: Callable[[], None], requires: tuple[str, ...] = (), gated: bool = False
+    ) -> str:
+        self.actions.append(Action(id, summary, run, requires, gated))
         return id
 
     def block(self, id: str, reason: str) -> None:
@@ -158,6 +161,9 @@ class Plan:
         """Run the actions in order. An action whose prerequisite did not succeed is skipped, not attempted."""
         outcomes: dict[str, Outcome] = {}
         for action in self.actions:
+            if action.gated and not action.requires:
+                outcomes[action.id] = Outcome(action.id, SKIPPED, "its prerequisites were not planned")
+                continue
             unmet = [need for need in action.requires if outcomes.get(need, Outcome(need, SKIPPED)).status != OK]
             if unmet:
                 outcomes[action.id] = Outcome(action.id, SKIPPED, f"needs {', '.join(unmet)}")
