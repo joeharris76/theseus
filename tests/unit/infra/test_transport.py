@@ -53,3 +53,47 @@ def test_the_redactor_hides_every_value_it_knows_and_ignores_short_ones() -> Non
 
 def test_a_bearer_header_carries_extras() -> None:
     assert bearer("tok", Accept="application/json") == {"Authorization": "Bearer tok", "Accept": "application/json"}
+
+
+def test_a_redirect_is_refused_and_authorization_never_reaches_another_host() -> None:
+    import http.server
+    import threading
+    import urllib.request
+
+    from theseus_reviewer.infra import transport
+
+    seen: list[str | None] = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    class Redirector(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{target.server_port}/stolen")
+            self.end_headers()
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+    redirector = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+    for server in (target, redirector):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{redirector.server_port}/", headers={"Authorization": "Bearer SENTINEL-redirect-0001"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            transport.OPENER.open(request, timeout=5)
+        assert caught.value.code == 302
+    finally:
+        for server in (target, redirector):
+            server.shutdown()
+    assert seen == []

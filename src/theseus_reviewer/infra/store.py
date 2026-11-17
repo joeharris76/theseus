@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import tempfile
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,9 @@ KEYCHAIN_SERVICE = "theseus.infra"
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 PENDING_SUFFIX = ".pending"
 _ENCODED = "b64:"
+_CHUNKS = "chunks:"
+_HEADER = re.compile(r"chunks:([0-9a-f]{8}):([0-9]+)")
+CHUNK = 2000
 _PLAIN = re.compile(r"[A-Za-z0-9._~+/=@:-]+")
 _MDAT = re.compile(r'"mdat"<timedate>=(?:0x[0-9A-Fa-f]+\s+)?"(\d{14})')
 _STORE_DIR_MODE = 0o700
@@ -162,7 +166,7 @@ def encode(value: str) -> str:
     ``security -w`` prints a value with control characters or non-ASCII bytes as hex, and ``security -i`` splits
     its command line on spaces and quotes, so only a plain value goes in unencoded.
     """
-    if _PLAIN.fullmatch(value) is not None and not value.startswith(_ENCODED):
+    if _PLAIN.fullmatch(value) is not None and not value.startswith((_ENCODED, _CHUNKS)):
         return value
     return _ENCODED + base64.b64encode(value.encode("utf-8")).decode("ascii")
 
@@ -195,41 +199,77 @@ class KeychainStore:
     def _tail(self) -> list[str]:
         return [self._keychain] if self._keychain else []
 
-    def get(self, name: str) -> Secret | None:
-        check_name(name)
+    def _read(self, account: str) -> str | None:
         code, out, err = self._security(
-            ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w", *self._tail()]
+            ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", *self._tail()]
         )
         if code == 44 or "could not be found" in err:
             return None
         if code != 0:
             raise StoreError(f"security find-generic-password failed with exit {code}")
-        return Secret(decode(out.removesuffix("\n")))
+        return out.removesuffix("\n")
 
-    def put(self, name: str, value: Secret) -> None:
-        check_name(name)
+    def _write(self, account: str, text: str) -> None:
+        """One item. ``security -i`` reads at most 4096 bytes of a line, so ``text`` is at most ``CHUNK`` long."""
         line = " ".join(
-            [
-                "add-generic-password",
-                "-U",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-                "-w",
-                encode(value.reveal()),
-                *self._tail(),
-            ]
+            ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", text, *self._tail()]
         )
         code, _, _ = self._security(["-i"], stdin=line + "\n")
-        if code != 0 or self.get(name) != value:
-            raise StoreError(f"the Keychain did not keep {name}")
+        if code != 0 or self._read(account) != text:
+            raise StoreError(f"the Keychain did not keep {account.split('#', 1)[0]}")
+
+    def _remove(self, account: str) -> None:
+        code, _, err = self._security(["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, *self._tail()])
+        if code not in (0, 44) and "could not be found" not in err:
+            raise StoreError(f"security delete-generic-password failed with exit {code}")
+
+    def _chunk_accounts(self, name: str, header: str | None) -> list[str]:
+        match = _HEADER.fullmatch(header or "")
+        if match is None:
+            return []
+        return [f"{name}#{match.group(1)}#{index}" for index in range(int(match.group(2)))]
+
+    def get(self, name: str) -> Secret | None:
+        check_name(name)
+        stored = self._read(name)
+        if stored is None:
+            return None
+        accounts = self._chunk_accounts(name, stored)
+        if not accounts:
+            return Secret(decode(stored))
+        parts = [self._read(account) for account in accounts]
+        if any(part is None for part in parts):
+            raise StoreError(f"a Keychain item is damaged: part of {name} is missing")
+        return Secret(decode("".join(part for part in parts if part is not None)))
+
+    def put(self, name: str, value: Secret) -> None:
+        """Write a value. A long one goes in numbered parts first and its header last, so an old value is replaced
+        only by a complete one and a failed write leaves the old header and parts in place."""
+        check_name(name)
+        text = encode(value.reveal())
+        old = self._chunk_accounts(name, self._read(name))
+        if len(text) <= CHUNK:
+            self._write(name, text)
+        else:
+            generation = uuid.uuid4().hex[:8]
+            pieces = [text[start : start + CHUNK] for start in range(0, len(text), CHUNK)]
+            accounts = [f"{name}#{generation}#{index}" for index in range(len(pieces))]
+            try:
+                for account, piece in zip(accounts, pieces, strict=True):
+                    self._write(account, piece)
+                self._write(name, f"{_CHUNKS}{generation}:{len(pieces)}")
+            except StoreError:
+                for account in accounts:
+                    self._remove(account)
+                raise
+        for account in old:
+            self._remove(account)
 
     def delete(self, name: str) -> None:
         check_name(name)
-        code, _, err = self._security(["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, *self._tail()])
-        if code not in (0, 44) and "could not be found" not in err:
-            raise StoreError(f"security delete-generic-password failed with exit {code}")
+        for account in self._chunk_accounts(name, self._read(name)):
+            self._remove(account)
+        self._remove(name)
 
     def modified_at(self, name: str) -> datetime | None:
         check_name(name)
@@ -250,7 +290,8 @@ class KeychainStore:
             service = re.search(r'"svce"<blob>="([^"]*)"', block)
             account = re.search(r'"acct"<blob>="([^"]*)"', block)
             if service and account and service.group(1) == KEYCHAIN_SERVICE:
-                found.add(account.group(1))
+                if NAME_PATTERN.fullmatch(account.group(1)):  # part items ("NAME#gen#n") are not names
+                    found.add(account.group(1))
         return sorted(found)
 
 

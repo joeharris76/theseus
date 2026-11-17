@@ -28,6 +28,8 @@ ENV_ACTION = "github.environment"
 POLICY_ACTION = "tailscale.policy"
 GATEWAY_ACTION = "gateway.obtain"
 OAUTH_ACTION = "tailscale.oauth-client"
+REVOKE_ACTION = "tailscale.revoke-previous"
+STATE_RETIRED = "tailscale_retired"
 STATE_OPENAI = "openai"
 STATE_TAILSCALE = "tailscale"
 STATE_APP_KEY = "app_key"
@@ -59,16 +61,41 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
     config = ctx.config
     plan = Plan()
     selected = [spec for spec in config.secrets if only is None or spec.name in only]
+    oauth_names = {spec.name for spec in config.secrets if spec.source == TAILSCALE_OAUTH}
+    if only is not None and only & oauth_names and not oauth_names <= only:
+        raise ValueError(
+            f"--only must name every tailscale_oauth secret together ({', '.join(sorted(oauth_names))}): "
+            "they are one client"
+        )
     environment = github_env.get_environment(ctx)
     remote = github_env.list_secrets(ctx) if environment is not None else {}
 
     env_action: tuple[str, ...] = ()
-    if environment is None or not github_env.has_custom_policies(environment):
+    env = config.github.environment
+    if environment is None:
         plan.add(
             ENV_ACTION,
-            f"create or update environment {config.github.environment} in {config.github.repository} "
-            "with custom deployment branch policies",
-            lambda: github_env.ensure_environment(ctx),
+            f"create environment {env} in {config.github.repository}"
+            + (
+                " with custom deployment branch policies"
+                if only is None
+                else " (no branch policy; --only leaves that to a full run)"
+            ),
+            lambda: github_env.ensure_environment(ctx, None, only is None),
+        )
+        env_action = (ENV_ACTION,)
+    elif only is None and not github_env.has_custom_policies(environment):
+        before = environment.get("deployment_branch_policy")
+        was = (
+            "protected branches only"
+            if isinstance(before, dict) and before.get("protected_branches")
+            else "all branches"
+        )
+        plan.add(
+            ENV_ACTION,
+            f"change environment {env} in {config.github.repository} from {was} to custom deployment branch "
+            f"policies; its protections are {github_env.describe_protections(environment)}",
+            lambda: github_env.ensure_environment(ctx, environment, True),
         )
         env_action = (ENV_ACTION,)
     if only is None:
@@ -97,6 +124,11 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
 
     for spec in selected:
         _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
+    revoke = [action for action in plan.actions if action.id == REVOKE_ACTION]
+    for action in revoke:
+        plan.actions.remove(action)
+        action.requires = tuple(f"deliver:{name}" for name in sorted(oauth_names) if plan.has(f"deliver:{name}"))
+        plan.actions.append(action)
     for line in aged(ctx):
         plan.note(line)
     return plan
@@ -147,6 +179,13 @@ def _tailnet(
         )
         for spec in oauth:
             producers[spec.name] = OAUTH_ACTION
+    retired = ctx.state.provider(STATE_RETIRED).get("client_id")
+    if retired or (stale and ctx.state.provider(STATE_TAILSCALE).get("client_id")):
+        plan.add(
+            REVOKE_ACTION,
+            "revoke the previous OAuth client once every OAuth secret is delivered",
+            lambda: _revoke_retired(ctx),
+        )
 
 
 def _save_policy(ctx: Context) -> None:
@@ -178,7 +217,17 @@ def _create_oauth(ctx: Context, specs: list[SecretSpec]) -> None:
         client.delete_key(client_id)
         raise
     if previous and previous != client_id:
-        client.delete_key(previous)
+        ctx.state.set_provider(STATE_RETIRED, client_id=previous)
+        ctx.save_state()
+
+
+def _revoke_retired(ctx: Context) -> None:
+    retired = ctx.state.provider(STATE_RETIRED).get("client_id")
+    if not retired:
+        return
+    tailscale.TailscaleClient.from_root(ctx).delete_key(retired)
+    ctx.state.clear_provider(STATE_RETIRED)
+    ctx.save_state()
 
 
 def _literal(ctx: Context, plan: Plan, spec: SecretSpec, producers: dict[str, str]) -> None:
@@ -245,7 +294,8 @@ def _app_key(ctx: Context, plan: Plan, spec: SecretSpec, producers: dict[str, st
         return
     producers[spec.name] = plan.add(
         f"app-key:{spec.name}",
-        f"pick up {pem.name}, check it against App {spec.app_slug} and keep it in the store",
+        f"pick up {pem.name}, check it against App {spec.app_slug} and keep it in the store; "
+        f"afterwards delete {pem} (it stays readable in {pem.parent})",
         lambda: _pick_up_app_key(ctx, spec, pem),
     )
 

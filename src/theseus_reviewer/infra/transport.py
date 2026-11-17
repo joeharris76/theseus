@@ -56,6 +56,16 @@ class HttpTransport(Protocol):
     ) -> HttpResponse: ...
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the Authorization header to another host, so none is followed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        raise urllib.error.HTTPError(req.full_url, code, f"redirect refused ({code})", headers, fp)
+
+
+OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class UrllibTransport:
     """The real HTTP transport. A non-2xx answer is returned, not raised; only a failure to get any answer raises."""
 
@@ -72,7 +82,7 @@ class UrllibTransport:
             raise TransportError(f"refusing a non-https url: {url.split('?', 1)[0]}")
         request = urllib.request.Request(url, data=body, method=method, headers=dict(headers or {}))
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https only, checked above
+            with OPENER.open(request, timeout=timeout) as response:
                 return HttpResponse(response.status, _lower(response.headers.items()), response.read())
         except urllib.error.HTTPError as exc:
             return HttpResponse(exc.code, _lower(exc.headers.items()), exc.read())
