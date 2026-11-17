@@ -691,7 +691,7 @@ def test_an_open_environment_plans_no_client_creation_and_no_revocation(world: W
 def test_a_retired_client_is_not_revoked_while_its_replacement_is_undelivered(
     world: World, monkeypatch, capsys
 ) -> None:
-    store = _stale_oauth(world, monkeypatch, capsys)
+    _stale_oauth(world, monkeypatch, capsys)
     world.gh_fail_secret = "TS_OAUTH_CI_SECRET"
     code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", OAUTH_ONLY)
     assert code == 1 and "skipped tailscale.revoke-previous" in out
