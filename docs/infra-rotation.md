@@ -25,6 +25,15 @@ If steps 2 to 5 fail, the old value is set again from the store, the new credent
 the pending item is dropped; the old credential keeps working and the command exits 1. If the rollback itself
 cannot finish, the record stays in the state file and `--resume` repeats it.
 
+Before step 2 the old value is copied to `NAME.previous`, and it stays until the old credential is revoked. From
+step 5 on, the rotation only rolls forward: the record moves to `promoting` before the new value reaches the store, and
+`--resume` finishes a `promoting` or `promoted` record instead of undoing it, so an interrupt (Ctrl-C included) never
+deletes the credential CI is using. A record still in `created` is rolled back from `NAME.previous`.
+
+Each credential is health-checked directly before it is set in any environment, and again after.
+
+`--apply` and `--resume` hold an exclusive lock on `<state file>.lock`; a second run is refused, not queued.
+
 If step 6 fails, the new credential stays live, the old one stays recorded in the state file and the command exits
 1. Fix the cause and run `rotate --resume`, which revokes the old credential and nothing else. A plain `rotate` is
 refused while a record is unfinished. `--resume` never creates a credential.
@@ -33,17 +42,17 @@ refused while a record is unfinished. `--resume` never creates a credential.
 
 | Credential | Create | Health check | Revoke old |
 | --- | --- | --- | --- |
-| Gateway token | the new token becomes a temporary client `<client>-next`; the host script's `gateway` step registers it | `/healthz` and `/v1/models` on 127.0.0.1 and `/v1/models` on the tailnet URL | the swap into the review client's `client.token` and a second `gateway` step stop the old token |
+| Gateway token | the new token becomes a temporary client `<client>-next`; the host script's `gateway` step registers it | `/healthz` and `/v1/models` on 127.0.0.1 and `/v1/models` on the tailnet URL | the swap into the review client's `client.token` and a second `gateway` step stop the old token; the old token must then get a 401 from the gateway, or the revoke fails |
 | Tailscale CI OAuth client | a new tagged client with the configured scopes | client-credentials token exchange | delete the old client |
 | OpenAI service-account key | a further key on the recorded service account | `GET /v1/models` | delete the old key |
 | Typesafe key | none: the owner creates it in the console | `GET /v1/models` | printed step: revoke the old key in the console |
-| GitHub App private key | none: the owner generates it in the App settings | validated by signing a JWT and calling `GET /app` | printed step: delete the old key in the App settings |
+| GitHub App private key | none: the owner generates it in the App settings | validated by signing a JWT and calling `GET /app` | printed steps: delete the old key in the App settings and the adopted `.pem` file |
 
 Typesafe and GitHub offer no API to create or revoke these two, so they rotate by pickup.
 
 - **Typesafe.** Seed the new key with `theseus infra seed TYPESAFE_API_KEY.next`, or put it in the Keychain item
   named by `mirror_keychain`. `rotate` adopts a value that differs from the stored one, sets it, checks it, stores it
-  and removes `.next`. With nothing to adopt it reports the key's age against `max_age_days` and the manual steps.
+  and removes `.next`. A key found in the Keychain item is adopted only when that item is newer than the stored key, and after an adoption the item is updated through stdin. With nothing to adopt it reports the key's age against `max_age_days` and the manual steps.
 - **GitHub App key.** The age comes from the secret's `updated_at`. When the newest `<slug>.*.private-key.pem` in
   `pem_dir` is newer than the secret, it is validated before anything changes, then set and stored. Otherwise
   `rotate` reports the age and, past `max_age_days`, the manual step.
@@ -55,5 +64,5 @@ value in the store and of every value created in the run; the state file holds p
 
 ## Exit codes
 
-0 every credential rotated, was resumed or had nothing to do; 1 a credential failed, was rolled back or has an
+0 every credential rotated (a Tailscale or OpenAI rotation with no recorded old id is reported as `rotated-nothing-revoked`), was resumed or had nothing to do; 1 a credential failed, was rolled back or has an
 unrevoked old credential; 2 the configuration, a read or a `--only` name is unusable.
