@@ -292,7 +292,7 @@ def test_a_failing_host_script_is_reported_and_leaves_the_gateway_secrets_unset(
 def test_only_limits_the_plan_to_the_named_secrets(world: World, monkeypatch, capsys) -> None:
     code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
     assert code == 0
-    assert list(world.secrets) == ["TYPESAFE_API_KEY"] and world.policies == []
+    assert list(world.secrets) == ["TYPESAFE_API_KEY"] and world.policies == ["develop", "release/*"]
     assert world.policy_text.startswith("// Example")
     code, _, err = setup(world, monkeypatch, capsys, "--only", "NOPE")
     assert code == 2 and "NOPE" in err
@@ -550,9 +550,64 @@ def test_only_never_switches_an_existing_environment(world: World, monkeypatch, 
     assert "TYPESAFE_API_KEY" in world.secrets
 
 
-def test_only_creates_a_missing_environment_without_a_branch_policy(world: World, monkeypatch, capsys) -> None:
-    setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
-    assert env_puts(world) == [{}]
+def test_only_creates_a_missing_environment_restricted_with_its_branch_policies(
+    world: World, monkeypatch, capsys
+) -> None:
+    code, _, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert code == 0
+    assert env_puts(world) == [
+        {"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+    ]
+    assert world.policies == ["develop", "release/*"] and "TYPESAFE_API_KEY" in world.secrets
+
+
+def test_no_secret_is_delivered_to_an_environment_open_to_every_branch(world: World, monkeypatch, capsys) -> None:
+    world.environment = {"name": "review", "deployment_branch_policy": None}
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert code == 3 and "allows deployments from every branch" in out
+    assert world.secrets == {} and env_puts(world) == []
+
+
+def test_delivery_re_checks_the_environment_and_refuses_an_open_one(world: World, monkeypatch, capsys) -> None:
+    setup(world, monkeypatch, capsys, "--apply")
+    world.secrets.clear()
+    FileStore(Path(world.infra["store"]["dir"])).put(
+        "TYPESAFE_API_KEY",
+        __import__("theseus_reviewer.infra.store", fromlist=["Secret"]).Secret("SENTINEL-new-ts-0021"),
+    )
+    world.environment["deployment_branch_policy"] = None
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply", "--only", "TYPESAFE_API_KEY")
+    assert code == 3 and world.secrets == {}
+
+
+def test_status_reports_an_environment_with_no_branch_restriction(world: World, monkeypatch, capsys) -> None:
+    setup(world, monkeypatch, capsys, "--apply")
+    world.environment["deployment_branch_policy"] = None
+    code, out, _ = cli(world, monkeypatch, capsys, "status", "--config", str(world.policy_path))
+    assert code == 1 and "no branch restriction" in out
+    code, out, _ = cli(world, monkeypatch, capsys, "status", "--config", str(world.policy_path), "--json")
+    assert json.loads(out)["environment_restricted"] is False
+
+
+def test_every_retired_oauth_client_is_revoked_even_when_delivery_fails_between_rotations(
+    world: World, monkeypatch, capsys
+) -> None:
+    setup(world, monkeypatch, capsys, "--apply")
+    store = FileStore(Path(world.infra["store"]["dir"]))
+    world.gh_fail_secret = "TS_OAUTH_CI_CLIENT_ID"
+    for _ in range(2):
+        store.delete("TS_OAUTH_CI_SECRET")
+        code, _, _ = setup(world, monkeypatch, capsys, "--apply")
+        assert code == 1
+    assert set(world.clients) == {"kclient1", "kclient2", "kclient3"}
+    assert sorted(State.load(Path(world.infra["state"])).provider("tailscale_retired").values()) == [
+        "kclient1",
+        "kclient2",
+    ]
+    world.gh_fail_secret = ""
+    code, _, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert code == 0 and set(world.clients) == {"kclient3"}
+    assert State.load(Path(world.infra["state"])).provider("tailscale_retired") == {}
 
 
 def test_only_must_name_both_oauth_secrets_or_neither(world: World, monkeypatch, capsys) -> None:

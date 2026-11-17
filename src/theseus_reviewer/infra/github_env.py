@@ -54,6 +54,12 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
+def is_restricted(environment: dict[str, Any] | None) -> bool:
+    """Whether deployments to the environment are limited to chosen branches (custom policies or protected branches)."""
+    policy = environment.get("deployment_branch_policy") if environment else None
+    return isinstance(policy, dict) and bool(policy.get("custom_branch_policies") or policy.get("protected_branches"))
+
+
 def kept_protections(environment: dict[str, Any]) -> dict[str, Any]:
     """The protections of an existing environment, in the shape a ``PUT`` takes, so a ``PUT`` does not drop them."""
     kept: dict[str, Any] = {}

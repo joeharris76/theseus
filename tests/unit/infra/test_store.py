@@ -275,3 +275,23 @@ def test_a_value_that_looks_like_a_parts_header_is_stored_as_itself() -> None:
     store = KeychainStore(FakeSecurity())
     store.put("A", Secret("chunks:deadbeef:3"))
     assert store.get("A") == Secret("chunks:deadbeef:3")
+
+
+def test_a_failure_at_every_part_write_and_at_the_header_keeps_the_old_value() -> None:
+    fake = FakeSecurity()
+    store = KeychainStore(fake)
+    old = "old-" + "o" * 5000
+    store.put("A", Secret(old))
+    before = dict(fake.items)
+    new = "n" * 11000
+    parts = -(-len(new) // 2000)
+    assert parts >= 5
+    for allowed in range(0, parts + 1):  # 0..parts-1 fail a part write; parts fails the header write
+        fake.fail_writes_after = allowed
+        with pytest.raises(StoreError):
+            store.put("A", Secret(new))
+        fake.fail_writes_after = None
+        assert store.get("A") == Secret(old)
+        assert fake.items == before
+    store.put("A", Secret(new))
+    assert store.get("A") == Secret(new)
