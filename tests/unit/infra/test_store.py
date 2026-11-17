@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import pickle
+import shutil
 import stat
+import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -186,3 +188,24 @@ def test_a_secret_shows_nothing_however_it_is_formatted() -> None:
     with pytest.raises(TypeError):
         pickle.dumps(secret)
     assert secret.reveal() == "SENTINEL-value-1234"
+
+
+@pytest.mark.skipif(
+    os.environ.get("THESEUS_INFRA_LIVE_KEYCHAIN") != "1" or not shutil.which("security"),
+    reason="opt-in: set THESEUS_INFRA_LIVE_KEYCHAIN=1 on macOS to run against a temporary keychain",
+)
+@pytest.mark.parametrize("value", AWKWARD[:7])
+def test_live_keychain_round_trips_through_a_temporary_keychain(tmp_path: Path, value: str) -> None:
+    keychain = str(tmp_path / "temp.keychain-db")
+    subprocess.run(["security", "create-keychain", "-p", "temp-pass", keychain], check=True)
+    try:
+        subprocess.run(["security", "unlock-keychain", "-p", "temp-pass", keychain], check=True)
+        store = KeychainStore(keychain=keychain)
+        store.put("LIVE_ITEM", Secret(value))
+        got = store.get("LIVE_ITEM")
+        assert got is not None and got.reveal() == value
+        assert store.names() == ["LIVE_ITEM"] and store.modified_at("LIVE_ITEM") is not None
+        store.delete("LIVE_ITEM")
+        assert store.get("LIVE_ITEM") is None
+    finally:
+        subprocess.run(["security", "delete-keychain", keychain], check=False)

@@ -310,11 +310,9 @@ def test_an_existing_environment_with_custom_policies_is_left_alone(world: World
     assert world.policies == ["develop", "release/*"]
 
 
-def test_a_lost_oauth_client_is_recreated_and_the_old_id_revoked(world: World, monkeypatch, capsys) -> None:
+def test_an_oauth_client_that_no_longer_exists_is_recreated(world: World, monkeypatch, capsys) -> None:
     setup(world, monkeypatch, capsys, "--apply")
-    first = world.clients.pop("kclient1")
-    world.clients["kclient1"] = first
-    del world.clients["kclient1"]
+    world.clients.clear()
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 0 and "tailscale.oauth-client" in out
     assert list(world.clients) == ["kclient1"] and world.secrets["TS_OAUTH_CI_CLIENT_ID"][0] == "kclient1"
