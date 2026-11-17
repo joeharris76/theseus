@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from theseus_reviewer import github, transient_reads
+
 from .harness import CHECKER, Harness, ago
 from .test_sweep_scenarios import VERDICT, _failed_run, _pending_review
 
@@ -9,12 +11,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
 LISTING = r"/actions/workflows/review-verdict\.yml/runs\?.*created="
 ACTIVE = r"/actions/workflows/review-verdict\.yml/runs\?.*status="
+LISTING_OUTAGE = github.RUN_LIST_ATTEMPTS * (len(transient_reads.RETRY_DELAYS_SECONDS) + 1)
 
 
 def test_a_failing_runs_listing_still_dispatches_a_due_retry_and_fails_the_sweep(harness: Harness) -> None:
     head, run = _pending_review(harness, 65, "feat/listing")
     harness.github.age(run, 180)
-    harness.github.fail("GET", LISTING, 502, 2)
+    harness.github.fail("GET", LISTING, 502, LISTING_OUTAGE)
 
     sweep = harness.sweep()
 
@@ -43,7 +46,7 @@ def test_a_degraded_sweep_keeps_the_two_failure_stop_on_a_due_head(harness: Harn
     last = _failed_run(harness, 68, head, "workflow_dispatch", 30, "Run the attempt loop")
     posted = len(harness.github.review_statuses(head))
     before = list(harness.github.dispatches)
-    harness.github.fail("GET", LISTING, 502, 2)
+    harness.github.fail("GET", LISTING, 502, LISTING_OUTAGE)
 
     sweep = harness.sweep()
 
@@ -105,7 +108,7 @@ def test_a_degraded_sweep_finds_a_busy_pull_request_beyond_the_first_page_of_act
         VERDICT, event="workflow_dispatch", pr=69, head_sha=head, title_head=head, created_at=ago(50)
     )
     _fill_active_page(harness, 500, 100)
-    harness.github.fail("GET", LISTING, 502, 2)
+    harness.github.fail("GET", LISTING, 502, LISTING_OUTAGE)
     before = list(harness.github.dispatches)
 
     sweep = harness.sweep()
@@ -120,7 +123,7 @@ def test_a_degraded_sweep_with_an_incomplete_active_run_listing_dispatches_nothi
     harness.github.age(run, 180)
     _fill_active_page(harness, 500, 5)
     harness.github.run_listing_cap = 3
-    harness.github.fail("GET", LISTING, 502, 2)
+    harness.github.fail("GET", LISTING, 502, LISTING_OUTAGE)
     before = list(harness.github.dispatches)
 
     sweep = harness.sweep()

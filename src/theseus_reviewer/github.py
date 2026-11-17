@@ -14,7 +14,7 @@ from time import monotonic, sleep
 from typing import Any
 from urllib.parse import quote
 
-from . import edits, reset
+from . import edits, reset, transient_reads
 from .retry import State
 
 STATE_ARTIFACT_PREFIX = "review-verdict-state-"
@@ -28,13 +28,21 @@ class GitHubError(RuntimeError):
     pass
 
 
+def _run_api(argv: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(argv, capture_output=True, check=False)
+
+
 def _gh_bytes(*args: str, accept: str | None = None) -> bytes:
     argv = ["gh", "api", *(("-H", f"Accept: {accept}") if accept else ()), *args]
-    result = subprocess.run(argv, capture_output=True, check=False)
-    if result.returncode != 0:
+    delays = list(transient_reads.RETRY_DELAYS_SECONDS) if transient_reads.gh_call_is_read(args) else []
+    while True:
+        result = _run_api(argv)
+        if result.returncode == 0:
+            return result.stdout
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:500]
-        raise GitHubError(f"gh api {' '.join(args)} failed: {detail}")
-    return result.stdout
+        if not delays or not transient_reads.gh_failure_is_transient(detail):
+            raise GitHubError(f"gh api {' '.join(args)} failed: {detail}")
+        transient_reads.sleep(delays.pop(0))
 
 
 def _gh(*args: str, accept: str | None = None) -> str:

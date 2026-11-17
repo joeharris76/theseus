@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from . import status_text
+from . import status_text, transient_reads
 from .matchers import Matchers
 from .policy import Binding, PromotionRules
 from .status_text import (
@@ -369,9 +369,9 @@ def _request(token: str, url: str, body: dict[str, Any] | None = None) -> Any:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers)
+    read_only = body is None or not str(body.get("query", "")).lstrip().startswith("mutation")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+        return json.loads(transient_reads.open_read(request, retry=read_only))
     except urllib.error.HTTPError as exc:
         raise CheckError(f"GitHub returned HTTP {exc.code} for {url}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
@@ -518,8 +518,7 @@ def fetch_text(token: str, repo: str, path: str, ref: str) -> str:
         "User-Agent": "theseus-review-check",
     }
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
-            return response.read().decode("utf-8")
+        return transient_reads.open_read(urllib.request.Request(url, headers=headers)).decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise CheckError(f"GitHub returned HTTP {exc.code} for {url}") from exc
     except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
@@ -535,8 +534,7 @@ def fetch_optional_bytes(token: str, repo: str, path: str, ref: str) -> bytes | 
         "User-Agent": "theseus-review-check",
     }
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
-            return response.read()
+        return transient_reads.open_read(urllib.request.Request(url, headers=headers))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
