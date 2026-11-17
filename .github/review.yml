@@ -137,6 +137,7 @@ infra:
   github:
     repository: joeharris76/theseus
     environment: theseus
+    branch_policies: [main]
   tailnet:
     tag: tag:theseus-ci
     tag_owners: [autogroup:admin]
