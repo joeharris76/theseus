@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import re
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Sequence
+
+RETRY_DELAYS_SECONDS = (2.0, 5.0)
+REQUEST_TIMEOUT_SECONDS = 30
+TRANSIENT_GH_FAILURE = re.compile(
+    r"HTTP 5[0-9]{2}|timed out|timeout|TLS handshake|connection reset|connection refused|unexpected EOF",
+    re.IGNORECASE,
+)
+GH_WRITE_FLAG_PREFIXES = ("-f", "-F", "-X", "--field", "--raw-field", "--input", "--method")
+GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field")
+MUTATION = re.compile(r"\s*(#[^\n]*\n\s*)*mutation\b")
+
+sleep: Callable[[float], None] = time.sleep
+
+
+def _graphql_query(args: Sequence[str]) -> str | None:
+    values: list[str] = []
+    for index, arg in enumerate(args):
+        if arg in GH_FIELD_FLAGS and index + 1 < len(args):
+            values.append(args[index + 1])
+        elif arg.startswith(GH_FIELD_FLAGS):
+            values.append(arg.split("=", 1)[1] if arg.startswith("--") else arg[2:])
+    queries = [value[6:] for value in values if value.startswith("query=")]
+    return queries[0] if len(queries) == 1 else None
+
+
+def gh_call_is_read(args: Sequence[str]) -> bool:
+    if args and args[0] == "graphql":
+        if any(arg.startswith(("--input", "-X", "--method")) for arg in args):
+            return False
+        query = _graphql_query(args)
+        return query is not None and not query.startswith("@") and MUTATION.match(query) is None
+    return not any(arg.startswith(GH_WRITE_FLAG_PREFIXES) for arg in args)
+
+
+def gh_failure_is_transient(stderr: str) -> bool:
+    return TRANSIENT_GH_FAILURE.search(stderr) is not None
+
+
+def _read_once(request: urllib.request.Request) -> bytes:
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        return response.read()
+
+
+def open_read(request: urllib.request.Request, *, retry: bool = True) -> bytes:
+    for delay in RETRY_DELAYS_SECONDS if retry else ():
+        try:
+            return _read_once(request)
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            pass
+        sleep(delay)
+    return _read_once(request)
