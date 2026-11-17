@@ -13,7 +13,7 @@ import re
 import stat
 import tempfile
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -95,8 +95,9 @@ def check_name(name: str) -> str:
 class FileStore:
     """A 0700 directory with one 0600 file per name. A wider mode is refused, never repaired."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, replace: Callable[[str, str], None] = os.replace) -> None:
         self.directory = directory
+        self._replace = replace
 
     def _checked_dir(self, create: bool) -> Path | None:
         directory = self.directory
@@ -135,7 +136,7 @@ class FileStore:
                 handle.write(value.reveal())
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(staged, path)
+            self._replace(staged, str(path))
         except BaseException:
             Path(staged).unlink(missing_ok=True)
             raise

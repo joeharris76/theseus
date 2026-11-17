@@ -200,7 +200,7 @@ def test_typesafe_without_a_newer_key_reports_age_and_the_manual_step(world: Wor
     assert "TYPESAFE_API_KEY: " in report.text and "limit" in report.text
     assert "theseus infra seed TYPESAFE_API_KEY.next" in report.text
     assert world.runner.calls  # only the keychain pickup probe ran
-    assert not [c for c in world.runner.calls if c.argv[0] == "gh"]
+    assert not [c for c in world.runner.calls if c.argv[:3] == ("gh", "secret", "set")]
     assert world.http.mutating() == []
 
 
@@ -922,3 +922,78 @@ def test_a_resumed_app_key_rotation_still_names_the_pem_for_deletion(world: Worl
     assert resumed.code == EXIT_OK, resumed.text
     assert f"delete the adopted key file {pem}" in resumed.text
     assert "delete the old private key in the example-app GitHub App settings" in resumed.text
+
+
+# -- hosts without fcntl, dry-run wording, and unrestricted environments ---------------------------------------
+
+
+def test_the_cli_imports_without_fcntl_and_apply_is_refused_there(world: World) -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; sys.modules['fcntl'] = None\n"
+        "import theseus_reviewer.cli, theseus_reviewer.infra.rotate_command as r\n"
+        "from pathlib import Path\n"
+        "try:\n"
+        "    with r._locked(Path(sys.argv[1]) / 's.json'): pass\n"
+        "except r.RotateUnavailableError as e: print('refused', e)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code, str(world.tmp)], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "refused rotate --apply needs POSIX file locking" in done.stdout
+
+
+def test_a_dry_run_says_a_promoting_record_resumes_forward(world: World) -> None:
+    world.state.set_provider("rotate:openai", phase=rotate.PHASE_PROMOTING, **{"new.key_id": "key_new_1"})
+    world.state.save()
+    text = run(world.ctx, only=["OPENAI_API_KEY"], apply=False, resume=False, as_json=False).text
+    assert "phase promoting" in text and "finish the promotion forward" in text
+    assert "roll the interrupted rotation back" not in text
+
+
+def mutating_calls(world: World) -> list[object]:
+    return [
+        *world.http.mutating(),
+        *[
+            c
+            for c in world.runner.calls
+            if c.argv[:3] == ("gh", "secret", "set") or c.argv[:4] == ("gh", "api", "-X", "PUT")
+        ],
+    ]
+
+
+def test_apply_refuses_an_unrestricted_environment_before_any_call(world: World) -> None:
+    world.environments["review"] = {"deployment_branch_policy": None}
+    report = rotate_now(world)
+    assert report.code == EXIT_FAILED and "allows deployments from every branch" in report.text
+    assert mutating_calls(world) == []
+    assert not [c for c in world.runner.calls if c.argv[0] in ("curl", "openssl")]
+    assert world.openai_keys == {"key_old": OLD["OPENAI_API_KEY"]}
+
+
+def test_apply_refuses_a_recorded_environment_that_is_unrestricted_or_foreign(world: World) -> None:
+    world.state.mark_delivered("OPENAI_API_KEY", "Example-Org/example:staging")
+    world.state.save()
+    world.environments["staging"] = {"deployment_branch_policy": None}
+    report = rotate_now(world, "OPENAI_API_KEY")
+    assert report.code == EXIT_FAILED and "Example-Org/example:staging" in report.text
+    assert mutating_calls(world) == []
+    world.environments["staging"] = world.environments["review"]
+    world.state.mark_delivered("OPENAI_API_KEY", "Other-Org/other:review")
+    world.state.save()
+    foreign = rotate_now(world, "OPENAI_API_KEY")
+    assert foreign.code == EXIT_FAILED and "not an environment of Example-Org/example" in foreign.text
+    assert mutating_calls(world) == []
+
+
+def test_the_setter_backstop_refuses_if_the_environment_opens_mid_run(world: World) -> None:
+    world.open_after_reads = 1  # the pre-check passes, then the environment is opened to every branch
+    report = rotate_now(world, "OPENAI_API_KEY")
+    assert report.code == EXIT_FAILED
+    assert "allows deployments from every branch" in report.text
+    assert [
+        c for c in world.runner.calls if c.argv[:3] == ("gh", "secret", "set") and c.stdin not in OLD.values()
+    ] == []
+    assert world.env["OPENAI_API_KEY"] == OLD["OPENAI_API_KEY"]
+    assert openai_old_works(world)

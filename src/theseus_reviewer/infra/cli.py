@@ -52,9 +52,6 @@ def _open(path: str) -> Context:
     return ctx
 
 
-open_for = _open
-
-
 def _fail(message: str, redactor: Redactor | None = None) -> int:
     print(f"error: {redactor.scrub(message) if redactor else message}", file=sys.stderr)
     return EXIT_UNUSABLE

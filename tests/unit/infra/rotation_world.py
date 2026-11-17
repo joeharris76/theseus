@@ -96,6 +96,13 @@ class World:
     gateway_keeps: set[str] = field(default_factory=set)  # tokens the gateway keeps accepting
     sleeps: list[float] = field(default_factory=list)
     security: FakeSecurity = field(default_factory=FakeSecurity)
+    environments: dict[str, dict] = field(
+        default_factory=lambda: {
+            "review": {"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+        }
+    )
+    environment_reads: int = 0
+    open_after_reads: int | None = None  # after this many environment reads, the environment opens to every branch
     trip_at: int | None = None
     ticks: int = 0
 
@@ -292,6 +299,15 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
     runner.on(lambda argv: tuple(argv[:3]) == ("gh", "secret", "set"), gh_set)
 
     def gh_api(call: RunCall):
+        target = call.argv[-1]
+        if "/environments/" in target and "/secrets" not in target:
+            world.environment_reads += 1
+            if world.open_after_reads is not None and world.environment_reads > world.open_after_reads:
+                world.environments["review"] = {"deployment_branch_policy": None}
+            found = world.environments.get(target.rsplit("/", 1)[1])
+            if found is None:
+                return completed(returncode=1, stderr="gh: Not Found (HTTP 404)")
+            return completed(json.dumps(found))
         assert "/secrets?per_page" in call.argv[-1], call.argv
         body = {"secrets": [{"name": n, "updated_at": t} for n, t in world.secret_updated.items()]}
         return completed(json.dumps(body))

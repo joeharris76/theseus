@@ -32,6 +32,11 @@ deletes the credential CI is using. A record still in `created` is rolled back f
 
 Each credential is health-checked directly before it is set in any environment, and again after.
 
+Before anything is created, `--apply` reads the configured environment and every environment recorded for the
+credentials from GitHub and refuses the whole run (making no change) if any allows deployments from every branch
+or is outside the configured repository; each secret write repeats the check. Rotation needs POSIX file locking, so
+`--apply` is refused on Windows while the rest of the CLI still loads.
+
 `--apply` and `--resume` hold an exclusive lock on `<state file>.lock`; a second run is refused, not queued.
 
 If step 6 fails, the new credential stays live, the old one stays recorded in the state file and the command exits

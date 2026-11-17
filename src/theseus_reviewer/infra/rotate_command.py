@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 from collections.abc import Iterator, Sequence
@@ -48,14 +47,30 @@ def select(ctx: Context, only: Sequence[str]) -> list[Rotator]:
     return [rotator for rotator in rotators if set(rotator.names) & set(only)]
 
 
-def _setter(ctx: Context) -> SetSecret:
+def _environment_problem(ctx: Context, key: str) -> str | None:
+    """Why ``key`` (``owner/repo:environment``) must not receive credentials, from a fresh read; ``None`` if it may."""
     repository = ctx.config.github.repository
+    repo, _, environment = key.partition(":")
+    if repo != repository or not environment:
+        return f"{key} is not an environment of {repository}"
+    result = ctx.run(["gh", "api", "-X", "GET", "-H", github_env.ACCEPT, f"repos/{repo}/environments/{environment}"])
+    try:
+        found = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        found = None
+    if not isinstance(found, dict):
+        return f"cannot read environment {key}, so no credential is created or delivered"
+    if not github_env.is_restricted(found):
+        return f"environment {key} allows deployments from every branch, so no credential is created or delivered"
+    return None
 
+
+def _setter(ctx: Context) -> SetSecret:
     def set_in(environment_key: str, name: str, value: Secret) -> None:
-        repo, _, environment = environment_key.partition(":")
-        if repo != repository or not environment:
-            raise github_env.GithubError(f"cannot set {name} in {environment_key}: it is not in {repository}")
-        github_env.set_secret(ctx, name, value, environment)
+        problem = _environment_problem(ctx, environment_key)
+        if problem:
+            raise github_env.GithubError(f"cannot set {name}: {problem}")
+        github_env.set_secret(ctx, name, value, environment_key.partition(":")[2])
 
     return set_in
 
@@ -76,9 +91,19 @@ class RotateLockedError(RuntimeError):
     pass
 
 
+class RotateUnavailableError(RuntimeError):
+    pass
+
+
 @contextmanager
 def _locked(state_path: Path) -> Iterator[None]:
     """An exclusive lock beside the state file for a whole apply or resume; a second run is refused, not queued."""
+    try:
+        import fcntl  # POSIX only; imported here so the rest of the CLI still loads where it is missing
+    except ImportError as exc:
+        raise RotateUnavailableError(
+            "rotate --apply needs POSIX file locking and runs only on macOS or Linux hosts"
+        ) from exc
     lock = state_path.with_name(state_path.name + ".lock")
     lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
@@ -106,11 +131,28 @@ def run(ctx: Context, *, only: Sequence[str], apply: bool, resume: bool, as_json
             # Another run may have finished while this one waited to start, so read the state again under the lock.
             ctx.state = State.load(ctx.config.state_path)
             return _apply(ctx, rotators, resume, as_json)
+    except RotateUnavailableError as exc:
+        return Report(EXIT_USAGE, str(exc))
     except RotateLockedError as exc:
         return Report(EXIT_FAILED, str(exc))
 
 
+def _targets(ctx: Context, rotators: Sequence[Rotator]) -> list[str]:
+    """The configured environment and every environment recorded for the credentials being rotated."""
+    keys = {ctx.config.environment_key}
+    for rotator in rotators:
+        for name in rotator.names:
+            keys.update(ctx.state.environments(name))
+    return sorted(keys)
+
+
 def _apply(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool) -> Report:
+    if not resume:
+        for key in _targets(ctx, rotators):
+            problem = _environment_problem(ctx, key)
+            if problem:
+                body = json.dumps({"applied": False, "refused": problem}) if as_json else f"refused: {problem}"
+                return Report(EXIT_FAILED, ctx.redactor.scrub(body))
     engine = Engine(ctx.store, ctx.state, ctx.redactor, _setter(ctx), ctx.config.environment_key)
     outcomes: list[Outcome] = []
     for rotator in rotators:
@@ -140,7 +182,10 @@ def _plan(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool
         record = engine.pending_record(rotator)
         if record:
             phase = record.get("phase", "?")
-            step = "revoke the old credential" if phase == "promoted" else "roll the interrupted rotation back"
+            step = {
+                "promoted": "revoke the old credential",
+                "promoting": "finish the promotion forward (the new credential is live and is never undone)",
+            }.get(phase, "roll the interrupted rotation back")
             entries.append((rotator, [f"an earlier rotation did not finish (phase {phase}); with --resume: {step}"]))
         elif resume:
             entries.append((rotator, ["nothing to resume"]))
@@ -170,7 +215,7 @@ def command_rotate(args: argparse.Namespace) -> int:
     for path in args.config:
         ctx: Context | None = None
         try:
-            ctx = cli.open_for(path)
+            ctx = cli._open(path)
             report = run(ctx, only=only, apply=args.apply, resume=args.resume, as_json=args.json)
         except (ConfigError, StoreError, RuntimeError, OSError, ValueError) as exc:
             return cli._fail(str(exc), ctx.redactor if ctx else None)
