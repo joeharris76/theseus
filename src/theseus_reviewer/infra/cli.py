@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import github_env, setup
+from . import github_env, rotate_command, setup
 from .config import ConfigError
 from .plan import OK, Context, Plan, open_context
 from .store import Secret, StoreError
@@ -178,7 +178,7 @@ def _register_seed(sub: Any) -> None:
     parser.set_defaults(handler=command_seed)
 
 
-SUBCOMMANDS: list[Callable[[Any], None]] = [_register_setup, _register_status, _register_seed]
+SUBCOMMANDS: list[Callable[[Any], None]] = [_register_setup, _register_status, _register_seed, rotate_command.register]
 
 
 def register(commands: Any) -> None:
