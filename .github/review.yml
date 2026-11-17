@@ -145,8 +145,8 @@ infra:
     gateway_dst: ["100.69.6.83"]
     oauth_client: {scopes: [auth_keys], description: theseus-review-ci}
   secrets:
-    REVIEW_APP_ID: {source: store}
-    REVIEW_APP_PRIVATE_KEY: {source: store}
+    REVIEW_APP_ID: {source: literal, value: "5620429"}
+    REVIEW_APP_PRIVATE_KEY: {source: app_key, app_slug: theseus-review, pem_dir: ~/Downloads}
     REVIEW_GATEWAY_TOKEN: {source: store}
     REVIEW_GATEWAY_URL: {source: store}
     TS_OAUTH_CI_CLIENT_ID: {source: tailscale_oauth, field: id}
