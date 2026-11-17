@@ -5,7 +5,6 @@ import pickle
 import shutil
 import stat
 import subprocess
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -108,23 +107,18 @@ def test_the_file_store_refuses_a_wider_mode_instead_of_repairing_it(tmp_path: P
     assert stat.S_IMODE(directory.stat().st_mode) == 0o755
 
 
-def test_a_failed_file_write_leaves_the_old_value_and_no_stray_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = FileStore(tmp_path / "store")
-    store.put("A", Secret("old-value-aaaa"))
-    real_replace: Callable[..., None] = os.replace
-
+def test_a_failed_file_write_leaves_the_old_value_and_no_stray_file(tmp_path: Path) -> None:
     def failing(src: str, dst: str) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(os, "replace", failing)
+    directory = tmp_path / "store"
+    FileStore(directory).put("A", Secret("old-value-aaaa"))
+    store = FileStore(directory, replace=failing)
     with pytest.raises(OSError):
         store.put("A", Secret("new-value-bbbb"))
-    monkeypatch.setattr(os, "replace", real_replace)
     assert store.get("A") == Secret("old-value-aaaa")
     assert store.names() == ["A"]
-    assert sorted(entry.name for entry in (tmp_path / "store").iterdir()) == ["A"]
+    assert sorted(entry.name for entry in directory.iterdir()) == ["A"]
 
 
 def test_the_keychain_never_puts_a_value_in_argv() -> None:
