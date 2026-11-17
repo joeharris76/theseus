@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import setup
+from . import github_env, setup
 from .config import ConfigError
 from .plan import OK, Context, Plan, open_context
 from .store import Secret, StoreError
@@ -95,12 +95,25 @@ def command_status(args: argparse.Namespace) -> int:
             rows = setup.report(ctx)
         except (ConfigError, StoreError, RuntimeError, OSError, ValueError) as exc:
             return _fail(str(exc), ctx.redactor if ctx else None)
-        drift = bool(plan.actions or plan.blocked or any(note.startswith("aged:") for note in plan.notes))
+        restricted = github_env.is_restricted(github_env.get_environment(ctx))
+        drift = bool(
+            not restricted or plan.actions or plan.blocked or any(note.startswith("aged:") for note in plan.notes)
+        )
         if args.json:
-            data = {"config": path, "secrets": rows, "drift": drift, **plan.to_json()}
+            data = {
+                "config": path,
+                "environment_restricted": restricted,
+                "secrets": rows,
+                "drift": drift,
+                **plan.to_json(),
+            }
             print(ctx.redactor.scrub(json.dumps(data, indent=2, sort_keys=True)))
         else:
             lines = [f"{path}: {ctx.config.github.repository} environment {ctx.config.github.environment}"]
+            if not restricted:
+                lines.append(
+                    "  environment has no branch restriction: deployments from every branch can read its secrets"
+                )
             for row in rows:
                 stored = row["stored_at"] or "not in the store"
                 delivered = "set" if row["in_environment"] else "not set"

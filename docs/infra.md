@@ -79,7 +79,7 @@ The tailnet policy is edited as text, so comments and layout survive. Setup adds
 
 An existing environment that already uses custom deployment branch policies is left alone. One that does not is switched with a `PUT`, which GitHub treats as a replacement of the environment's protection settings, so setup reads the environment first and sends back its required reviewers, wait timer, prevent-self-review and admin-bypass settings. The plan line says what the switch changes (for example from protected branches only to custom policies) and which protections are kept. Check the environment in GitHub afterwards.
 
-`--only` never switches an existing environment (that needs the branch list a full run adds) and creates a missing one without a branch policy. The two `tailscale_oauth` secrets are one client: `--only` must name both or neither. A replaced OAuth client is revoked only after both secrets are delivered, so a failed delivery leaves the old client working.
+`--only` never switches an existing environment. An environment is never left open to every branch: a missing one is always created with custom deployment branch policies and the configured branches (even under `--only`), delivery re-checks that the environment is restricted and refuses otherwise, and `status` reports one with no branch restriction. The two `tailscale_oauth` secrets are one client: `--only` must name both or neither. A replaced OAuth client is revoked only after both secrets are delivered, so a failed delivery leaves the old client working.
 
 Exit codes: `0` done or nothing to do; `1` an action failed, or `status` found drift (something due, blocked or aged); `2` unusable configuration, read or input; `3` owner action is still needed.
 

@@ -75,13 +75,9 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
     if environment is None:
         plan.add(
             ENV_ACTION,
-            f"create environment {env} in {config.github.repository}"
-            + (
-                " with custom deployment branch policies"
-                if only is None
-                else " (no branch policy; --only leaves that to a full run)"
-            ),
-            lambda: github_env.ensure_environment(ctx, None, only is None),
+            f"create environment {env} in {config.github.repository} with custom deployment branch policies "
+            "(an environment is never created open to every branch)",
+            lambda: github_env.ensure_environment(ctx, None, True),
         )
         env_action = (ENV_ACTION,)
     elif only is None and not github_env.has_custom_policies(environment):
@@ -98,7 +94,7 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
             lambda: github_env.ensure_environment(ctx, environment, True),
         )
         env_action = (ENV_ACTION,)
-    if only is None:
+    if only is None or environment is None:
         have = set(github_env.branch_policies(ctx)) if environment is not None else set()
         for branch in config.github.branch_policies:
             if branch not in have:
@@ -109,6 +105,13 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
                     env_action,
                 )
 
+    unrestricted = environment is not None and only is not None and not github_env.is_restricted(environment)
+    if unrestricted:
+        plan.block(
+            "github.environment",
+            f"environment {env} allows deployments from every branch, so no secret is delivered to it; "
+            "run setup without --only to restrict it",
+        )
     producers: dict[str, str] = {}
     _tailnet(ctx, plan, selected, only is None, producers)
     for spec in selected:
@@ -123,7 +126,8 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
     _gateway(ctx, plan, selected, producers)
 
     for spec in selected:
-        _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
+        if not unrestricted:
+            _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
     revoke = [action for action in plan.actions if action.id == REVOKE_ACTION]
     for action in revoke:
         plan.actions.remove(action)
@@ -179,7 +183,7 @@ def _tailnet(
         )
         for spec in oauth:
             producers[spec.name] = OAUTH_ACTION
-    retired = ctx.state.provider(STATE_RETIRED).get("client_id")
+    retired = _retired(ctx)
     if retired or (stale and ctx.state.provider(STATE_TAILSCALE).get("client_id")):
         plan.add(
             REVOKE_ACTION,
@@ -217,17 +221,26 @@ def _create_oauth(ctx: Context, specs: list[SecretSpec]) -> None:
         client.delete_key(client_id)
         raise
     if previous and previous != client_id:
-        ctx.state.set_provider(STATE_RETIRED, client_id=previous)
+        ctx.state.set_provider(STATE_RETIRED, **{str(i): cid for i, cid in enumerate([*_retired(ctx), previous])})
         ctx.save_state()
 
 
+def _retired(ctx: Context) -> list[str]:
+    record = ctx.state.provider(STATE_RETIRED)
+    return [record[key] for key in sorted(record, key=int)]
+
+
 def _revoke_retired(ctx: Context) -> None:
-    retired = ctx.state.provider(STATE_RETIRED).get("client_id")
-    if not retired:
-        return
-    tailscale.TailscaleClient.from_root(ctx).delete_key(retired)
-    ctx.state.clear_provider(STATE_RETIRED)
-    ctx.save_state()
+    """Revoke every retired client, recording each as it goes so a failure part-way loses none."""
+    client = tailscale.TailscaleClient.from_root(ctx)
+    remaining = _retired(ctx)
+    while remaining:
+        client.delete_key(remaining[0])
+        remaining.pop(0)
+        ctx.state.clear_provider(STATE_RETIRED)
+        if remaining:
+            ctx.state.set_provider(STATE_RETIRED, **{str(i): cid for i, cid in enumerate(remaining)})
+        ctx.save_state()
 
 
 def _literal(ctx: Context, plan: Plan, spec: SecretSpec, producers: dict[str, str]) -> None:
@@ -370,6 +383,8 @@ def _set_in_environment(ctx: Context, spec: SecretSpec) -> None:
     value = ctx.secret(spec.name)
     if value is None:
         raise RuntimeError(f"{spec.name} is not in the store")
+    if not github_env.is_restricted(github_env.get_environment(ctx)):
+        raise RuntimeError(f"environment {ctx.config.github.environment} allows every branch; {spec.name} was not set")
     verify: Verifier | None = (
         openai_admin.check_key if spec.source == OPENAI_SERVICE_ACCOUNT else VERIFIERS.get(spec.name)
     )
