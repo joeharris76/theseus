@@ -909,3 +909,16 @@ def test_a_credential_that_fails_its_direct_check_never_reaches_an_environment(w
     assert report.code == EXIT_FAILED
     sets = [c for c in world.runner.calls if c.argv[:3] == ("gh", "secret", "set")]
     assert [c for c in sets if c.stdin not in OLD.values()] == []
+
+
+def test_a_resumed_app_key_rotation_still_names_the_pem_for_deletion(world: World) -> None:
+    pem = add_new_pem(world)
+    world.store.fail_delete.add("REVIEW_APP_PRIVATE_KEY.pending")
+    first = rotate_now(world, "REVIEW_APP_PRIVATE_KEY")
+    assert first.code == EXIT_FAILED
+    assert world.state.provider("rotate:app_key")["new.pem"] == str(pem)
+    world.store.fail_delete.clear()
+    resumed = rotate_now(world, "REVIEW_APP_PRIVATE_KEY", resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert f"delete the adopted key file {pem}" in resumed.text
+    assert "delete the old private key in the example-app GitHub App settings" in resumed.text

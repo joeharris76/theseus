@@ -590,7 +590,7 @@ class AppKeyRotator:
         except app_key.AppKeyError as exc:
             raise RotationError(f"{pem.name} did not validate: {exc}") from exc
         self._adopted = pem
-        return Created({self.spec.name: value})
+        return Created({self.spec.name: value}, {"pem": str(pem)})
 
     def health(self, created: Created) -> None:
         """The key was validated before anything changed."""
@@ -610,8 +610,9 @@ class AppKeyRotator:
     def after_revoke(self, created: Created | None) -> Sequence[str]:
         if created is not None:
             lines = [f"delete the old private key in the {self.spec.app_slug} GitHub App settings (Private keys)"]
-            if self._adopted is not None:
-                lines.append(f"delete the adopted key file {self._adopted} from {self._adopted.parent}")
+            adopted = Path(created.ids["pem"]) if created.ids.get("pem") else self._adopted
+            if adopted is not None:
+                lines.append(f"delete the adopted key file {adopted} from {adopted.parent}")
             return tuple(lines)
         lines = [_age_line(self.spec.name, self._age(), self.spec.max_age_days)]
         if self._past_limit():

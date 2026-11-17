@@ -317,7 +317,7 @@ class Engine:
             )
         new_ids = {key.removeprefix("new."): value for key, value in record.items() if key.startswith("new.")}
         if phase == PHASE_PROMOTED:
-            return self._revoke(rotator, None, record, RESUMED)
+            return self._revoke(rotator, Created({}, new_ids), record, RESUMED)
         if phase == PHASE_PROMOTING:
             values: dict[str, Secret] = {}
             for name in rotator.names:
