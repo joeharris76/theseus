@@ -12,15 +12,16 @@ TRANSIENT_GH_FAILURE = re.compile(
     r"HTTP 5[0-9]{2}|timed out|timeout|TLS handshake|connection reset|connection refused|unexpected EOF",
     re.IGNORECASE,
 )
-GH_WRITE_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field", "--input", "--method", "-X"})
+GH_WRITE_FLAG_PREFIXES = ("-f", "-F", "-X", "--field", "--raw-field", "--input", "--method")
 
 sleep: Callable[[float], None] = time.sleep
 
 
 def gh_call_is_read(args: Sequence[str]) -> bool:
     if args and args[0] == "graphql":
-        return not any(arg.startswith("query=") and arg[6:].lstrip().startswith("mutation") for arg in args)
-    return GH_WRITE_FLAGS.isdisjoint(args)
+        query = next((arg[6:] for arg in args if arg.startswith("query=")), "")
+        return "--input" not in args and not re.match(r"\s*(#[^\n]*\n\s*)*mutation\b", query)
+    return not any(arg.startswith(GH_WRITE_FLAG_PREFIXES) for arg in args)
 
 
 def gh_failure_is_transient(stderr: str) -> bool:
