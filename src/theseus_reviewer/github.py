@@ -28,11 +28,15 @@ class GitHubError(RuntimeError):
     pass
 
 
+def _run_api(argv: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(argv, capture_output=True, check=False)
+
+
 def _gh_bytes(*args: str, accept: str | None = None) -> bytes:
     argv = ["gh", "api", *(("-H", f"Accept: {accept}") if accept else ()), *args]
     delays = list(transient_reads.RETRY_DELAYS_SECONDS) if transient_reads.gh_call_is_read(args) else []
     while True:
-        result = subprocess.run(argv, capture_output=True, check=False)
+        result = _run_api(argv)
         if result.returncode == 0:
             return result.stdout
         detail = result.stderr.decode("utf-8", errors="replace").strip()[:500]

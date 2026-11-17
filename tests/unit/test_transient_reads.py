@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import email.message
-import io
 import subprocess
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
 
@@ -29,7 +27,7 @@ class FakeGh:
         self.results: Iterator[tuple[int, str]] = iter(results)
         self.calls: list[list[str]] = []
 
-    def __call__(self, argv: list[str], **_: Any) -> subprocess.CompletedProcess[bytes]:
+    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess[bytes]:
         self.calls.append(argv)
         code, text = next(self.results)
         return subprocess.CompletedProcess(argv, code, text.encode() if code == 0 else b"", text.encode())
@@ -37,7 +35,7 @@ class FakeGh:
 
 def _gh(monkeypatch: pytest.MonkeyPatch, results: list[tuple[int, str]]) -> FakeGh:
     fake = FakeGh(results)
-    monkeypatch.setattr(github.subprocess, "run", fake)
+    monkeypatch.setattr(github, "_run_api", fake)
     return fake
 
 
@@ -97,6 +95,13 @@ def test_a_gh_write_is_never_repeated(monkeypatch: pytest.MonkeyPatch, sleeps: l
         (("repos/o/r/statuses/abc", "-f", "state=success"), False),
         (("repos/o/r/check-runs", "--input", "-"), False),
         (("-X", "PATCH", "repos/o/r/check-runs/1"), False),
+        (("graphql", "-fquery=mutation { minimizeComment }"), False),
+        (("graphql", "--field=query=mutation { x }"), False),
+        (("graphql", "--raw-field=query=query { viewer { login } }"), True),
+        (("graphql", "-F", "query=@mutation.graphql"), False),
+        (("graphql", "-f", "owner=o"), False),
+        (("graphql", "--input=-"), False),
+        (("graphql", "-f", "query=query { a }", "-f", "query=mutation { b }"), False),
     ],
 )
 def test_only_gh_reads_are_retryable(args: tuple[str, ...], read: bool) -> None:
@@ -108,12 +113,12 @@ class FakeOpen:
         self.outcomes = iter(outcomes)
         self.calls = 0
 
-    def __call__(self, request: urllib.request.Request, timeout: float) -> io.BytesIO:
+    def __call__(self, request: urllib.request.Request) -> bytes:
         self.calls += 1
         outcome = next(self.outcomes)
         if isinstance(outcome, Exception):
             raise outcome
-        return io.BytesIO(outcome)
+        return outcome
 
 
 def _http(code: int) -> urllib.error.HTTPError:
@@ -122,7 +127,7 @@ def _http(code: int) -> urllib.error.HTTPError:
 
 def _urlopen(monkeypatch: pytest.MonkeyPatch, outcomes: list[Exception | bytes]) -> FakeOpen:
     fake = FakeOpen(outcomes)
-    monkeypatch.setattr(transient_reads.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(transient_reads, "_read_once", fake)
     return fake
 
 

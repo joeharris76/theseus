@@ -13,14 +13,29 @@ TRANSIENT_GH_FAILURE = re.compile(
     re.IGNORECASE,
 )
 GH_WRITE_FLAG_PREFIXES = ("-f", "-F", "-X", "--field", "--raw-field", "--input", "--method")
+GH_FIELD_FLAGS = ("-f", "-F", "--field", "--raw-field")
+MUTATION = re.compile(r"\s*(#[^\n]*\n\s*)*mutation\b")
 
 sleep: Callable[[float], None] = time.sleep
 
 
+def _graphql_query(args: Sequence[str]) -> str | None:
+    values: list[str] = []
+    for index, arg in enumerate(args):
+        if arg in GH_FIELD_FLAGS and index + 1 < len(args):
+            values.append(args[index + 1])
+        elif arg.startswith(GH_FIELD_FLAGS):
+            values.append(arg.split("=", 1)[1] if arg.startswith("--") else arg[2:])
+    queries = [value[6:] for value in values if value.startswith("query=")]
+    return queries[0] if len(queries) == 1 else None
+
+
 def gh_call_is_read(args: Sequence[str]) -> bool:
     if args and args[0] == "graphql":
-        query = next((arg[6:] for arg in args if arg.startswith("query=")), "")
-        return "--input" not in args and not re.match(r"\s*(#[^\n]*\n\s*)*mutation\b", query)
+        if any(arg.startswith(("--input", "-X", "--method")) for arg in args):
+            return False
+        query = _graphql_query(args)
+        return query is not None and not query.startswith("@") and MUTATION.match(query) is None
     return not any(arg.startswith(GH_WRITE_FLAG_PREFIXES) for arg in args)
 
 
