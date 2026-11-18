@@ -17,7 +17,7 @@ from theseus_reviewer.infra.store import FileStore, Secret
 from theseus_reviewer.infra.tailscale import standardize
 
 from .fakes import SENTINELS
-from .world import NOW, PUBLISHED, World, make_world
+from .world import NOW, PUBLISHED, World, make_world, scoped_store
 
 pytestmark = [pytest.mark.unit, pytest.mark.fast]
 
@@ -94,7 +94,7 @@ def test_a_dry_run_changes_nothing_and_shows_the_plan(world: World, monkeypatch,
     assert world.environment is None and world.secrets == {} and world.policies == []
     assert not world.policy_path.parent.parent.joinpath("state").exists()
     assert not Path(world.infra["state"]).exists()
-    assert FileStore(Path(world.infra["store"]["dir"])).names() == [
+    assert scoped_store(world).names() == [
         "OPENAI_ADMIN_KEY",
         "TAILSCALE_ROOT_CLIENT_ID",
         "TAILSCALE_ROOT_CLIENT_SECRET",
@@ -208,12 +208,12 @@ def test_an_openai_key_the_provider_rejects_is_revoked_and_not_stored(world: Wor
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 1 and "OpenAI does not accept the new key" in out
     assert world.openai_keys == {}
-    assert "OPENAI_API_KEY" not in FileStore(Path(world.infra["store"]["dir"])).names()
+    assert "OPENAI_API_KEY" not in scoped_store(world).names()
     assert "OPENAI_API_KEY" not in world.secrets
 
 
 def test_a_missing_manual_secret_blocks_only_itself_and_exits_3(world: World, monkeypatch, capsys) -> None:
-    FileStore(Path(world.infra["store"]["dir"])).delete("TYPESAFE_API_KEY")
+    scoped_store(world).delete("TYPESAFE_API_KEY")
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 3
     assert "! seed:TYPESAFE_API_KEY: not in the store; run: theseus infra seed TYPESAFE_API_KEY" in out
@@ -247,7 +247,7 @@ def test_the_app_key_is_checked_against_the_app_before_it_is_stored(world: World
     world.app_id = 999
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 1 and "the key belongs to App 999, not 123456" in out
-    assert "REVIEW_APP_PRIVATE_KEY" not in FileStore(Path(world.infra["store"]["dir"])).names()
+    assert "REVIEW_APP_PRIVATE_KEY" not in scoped_store(world).names()
     assert "REVIEW_APP_PRIVATE_KEY" not in world.secrets
 
 
@@ -393,7 +393,7 @@ def test_seed_reads_stdin_and_stores_without_echo_or_argv(world: World, monkeypa
         world, monkeypatch, capsys, "seed", "TYPESAFE_API_KEY", "--config", str(world.policy_path), stdin=value + "\n"
     )
     assert (code, out, err) == (0, "seeded TYPESAFE_API_KEY\n", "")
-    assert FileStore(Path(world.infra["store"]["dir"])).get("TYPESAFE_API_KEY").reveal() == value
+    assert scoped_store(world).get("TYPESAFE_API_KEY").reveal() == value
     assert State.load(Path(world.infra["state"])).version("TYPESAFE_API_KEY") == 1
 
 
@@ -405,7 +405,7 @@ def test_seed_prompts_when_stdin_is_a_terminal(world: World, monkeypatch, capsys
     deps = infra_cli.Dependencies(stdin=Tty(), prompt=lambda text: "SENTINEL-prompted-0011")
     monkeypatch.setattr(infra_cli, "DEPENDENCIES", deps)
     assert main(["infra", "seed", "OPENAI_ADMIN_KEY", "--config", str(world.policy_path)]) == 0
-    assert FileStore(Path(world.infra["store"]["dir"])).get("OPENAI_ADMIN_KEY").reveal() == "SENTINEL-prompted-0011"
+    assert scoped_store(world).get("OPENAI_ADMIN_KEY").reveal() == "SENTINEL-prompted-0011"
     assert "SENTINEL" not in capsys.readouterr().out
 
 
@@ -425,7 +425,7 @@ def test_seed_from_a_file_keeps_a_multiline_pem_intact(world: World, monkeypatch
         str(path),
     )
     assert code == 0
-    assert FileStore(Path(world.infra["store"]["dir"])).get("REVIEW_APP_PRIVATE_KEY").reveal() == pem
+    assert scoped_store(world).get("REVIEW_APP_PRIVATE_KEY").reveal() == pem
 
 
 def test_seed_accepts_a_pickup_name_and_the_roots_but_nothing_else(world: World, monkeypatch, capsys) -> None:
@@ -475,7 +475,7 @@ def test_status_reports_a_manual_key_past_its_age_limit(world: World, monkeypatc
     import os
 
     old = NOW.timestamp() - 91 * 86400
-    path = Path(world.infra["store"]["dir"]) / "TYPESAFE_API_KEY"
+    path = Path(world.infra["store"]["dir"]) / "Example-Org%2Fexample%3Areview%3ATYPESAFE_API_KEY"
     os.utime(path, (old, old))
     code, out, _ = cli(world, monkeypatch, capsys, "status", "--config", str(world.policy_path))
     assert code == 1 and re.search(r"aged: TYPESAFE_API_KEY is 91 days old \(limit 90\)", out)
@@ -571,7 +571,7 @@ def test_no_secret_is_delivered_to_an_environment_open_to_every_branch(world: Wo
 def test_delivery_re_checks_the_environment_and_refuses_an_open_one(world: World, monkeypatch, capsys) -> None:
     setup(world, monkeypatch, capsys, "--apply")
     world.secrets.clear()
-    FileStore(Path(world.infra["store"]["dir"])).put(
+    scoped_store(world).put(
         "TYPESAFE_API_KEY",
         __import__("theseus_reviewer.infra.store", fromlist=["Secret"]).Secret("SENTINEL-new-ts-0021"),
     )
@@ -593,7 +593,7 @@ def test_every_retired_oauth_client_is_revoked_even_when_delivery_fails_between_
     world: World, monkeypatch, capsys
 ) -> None:
     setup(world, monkeypatch, capsys, "--apply")
-    store = FileStore(Path(world.infra["store"]["dir"]))
+    store = scoped_store(world)
     world.gh_fail_secret = "TS_OAUTH_CI_CLIENT_ID"
     for _ in range(2):
         store.delete("TS_OAUTH_CI_SECRET")
@@ -623,7 +623,7 @@ def test_the_previous_oauth_client_stays_alive_until_both_secrets_are_delivered(
     world: World, monkeypatch, capsys
 ) -> None:
     setup(world, monkeypatch, capsys, "--apply")
-    FileStore(Path(world.infra["store"]["dir"])).delete("TS_OAUTH_CI_SECRET")
+    scoped_store(world).delete("TS_OAUTH_CI_SECRET")
     world.gh_fail_secret = "TS_OAUTH_CI_CLIENT_ID"
     code, out, _ = setup(world, monkeypatch, capsys, "--apply")
     assert code == 1 and "skipped tailscale.revoke-previous" in out
@@ -669,7 +669,7 @@ def test_an_environment_opened_between_planning_and_delivery_gets_no_secret(worl
 
 def _stale_oauth(world: World, monkeypatch, capsys) -> FileStore:
     setup(world, monkeypatch, capsys, "--apply")
-    store = FileStore(Path(world.infra["store"]["dir"]))
+    store = scoped_store(world)
     store.delete("TS_OAUTH_CI_SECRET")
     return store
 
@@ -749,6 +749,6 @@ def test_the_age_warning_for_an_owner_secret_says_to_reseed_it(world: World, mon
     _declare(world, "TYPESAFE_API_KEY", "owner")
     setup(world, monkeypatch, capsys, "--apply")
     old = NOW.timestamp() - 91 * 86400
-    os.utime(Path(world.infra["store"]["dir"]) / "TYPESAFE_API_KEY", (old, old))
+    os.utime(Path(world.infra["store"]["dir"]) / "Example-Org%2Fexample%3Areview%3ATYPESAFE_API_KEY", (old, old))
     code, out, _ = cli(world, monkeypatch, capsys, "status", "--config", str(world.policy_path))
     assert "re-seed it with: theseus infra seed TYPESAFE_API_KEY" in out and "console" not in out

@@ -16,7 +16,7 @@ from theseus_reviewer.infra import rotators
 from theseus_reviewer.infra.config import InfraConfig
 from theseus_reviewer.infra.plan import Context
 from theseus_reviewer.infra.state import State
-from theseus_reviewer.infra.store import FileStore, Secret, StoreError
+from theseus_reviewer.infra.store import FileStore, ScopedStore, Secret, StoreError
 from theseus_reviewer.infra.transport import Redactor
 
 from .example import example
@@ -47,11 +47,11 @@ OAI = "https://api.openai.com/v1"
 PROJECT = f"{OAI}/organization/projects/proj_abc"
 
 
-class FlakyStore(FileStore):
-    """A file store that refuses to write chosen names, to fail the store step of a rotation."""
+class FlakyStore(ScopedStore):
+    """The example repository's scoped file store, refusing to write chosen names to fail the store step of a rotation."""
 
     def __init__(self, directory: Path) -> None:
-        super().__init__(directory)
+        super().__init__(FileStore(directory), "Example-Org/example", "review")
         self.fail_put: set[str] = set()
         self.fail_delete: set[str] = set()
         self.hook: Callable[[], None] = lambda: None
@@ -300,6 +300,8 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
 
     def gh_api(call: RunCall):
         target = call.argv[-1]
+        if "/deployment-branch-policies" in target:
+            return completed(json.dumps({"total_count": 1, "branch_policies": [{"name": "develop", "type": "branch"}]}))
         if "/environments/" in target and "/secrets" not in target:
             world.environment_reads += 1
             if world.open_after_reads is not None and world.environment_reads > world.open_after_reads:

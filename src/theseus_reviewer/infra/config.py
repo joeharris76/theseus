@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .._vendor import yaml
+from .store import SHARED_NAMES
 
 DEFAULT_STORE_DIR = "~/.config/theseus/infra"
 DEFAULT_STATE_DIR = "~/.config/theseus/infra-state"
@@ -238,6 +239,11 @@ def _secret(name: str, data: Any) -> SecretSpec:
     where = f"infra.secrets.{name}"
     if SECRET_NAME.fullmatch(name) is None:
         raise ConfigError(f"{where}: {name!r} is not a valid secret name")
+    if name in SHARED_NAMES:
+        raise ConfigError(
+            f"{where}: {name} is a shared root credential kept outside any repository's secrets; "
+            "seed it with 'theseus infra seed' and do not declare it in infra.secrets"
+        )
     base = _mapping(data, where)
     source = _text(base.get("source"), f"{where}.source")
     if source not in _SOURCE_KEYS:

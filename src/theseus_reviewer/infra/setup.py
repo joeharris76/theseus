@@ -105,12 +105,19 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
                     env_action,
                 )
 
-    unrestricted = environment is not None and only is not None and not github_env.is_restricted(environment)
-    if unrestricted:
+    # A full run can switch an environment that has no custom policies; a custom list that is a wildcard or
+    # unreadable is never changed automatically, so it stops the run before any credential is created.
+    open_now = environment is not None and not github_env.is_restricted(ctx, environment)
+    if open_now and (only is not None or github_env.has_custom_policies(environment or {})):
         plan.block(
             "github.environment",
-            f"environment {env} allows deployments from every branch, so no secret is delivered to it; "
-            "run setup without --only to restrict it",
+            f"environment {env} allows deployments from every branch (a wildcard branch policy, or a policy list that "
+            "cannot be read), so no credential is created and no secret is delivered to it; "
+            + (
+                "remove the wildcard policy by hand in the environment's settings, then run setup again"
+                if only is None
+                else "run setup without --only to restrict it"
+            ),
         )
         # Nothing is created that could not be delivered: no key, client or revocation is planned.
         return plan
@@ -128,8 +135,7 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
     _gateway(ctx, plan, selected, producers)
 
     for spec in selected:
-        if not unrestricted:
-            _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
+        _deliver(ctx, plan, spec, producers, env_action, environment is not None, remote)
     for action in [action for action in plan.actions if action.id == REVOKE_ACTION]:
         plan.actions.remove(action)
         needs: list[str] = []
@@ -408,7 +414,7 @@ def _set_in_environment(ctx: Context, spec: SecretSpec) -> None:
     value = ctx.secret(spec.name)
     if value is None:
         raise RuntimeError(f"{spec.name} is not in the store")
-    if not github_env.is_restricted(github_env.get_environment(ctx)):
+    if not github_env.is_restricted(ctx, github_env.get_environment(ctx)):
         raise RuntimeError(f"environment {ctx.config.github.environment} allows every branch; {spec.name} was not set")
     verify: Verifier | None = _verifier(spec)
     if verify is not None and not verify(ctx.http, value):

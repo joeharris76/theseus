@@ -15,7 +15,7 @@ together). Names that cannot rotate, such as a literal or the gateway URL, are r
 For each credential, in this order:
 
 1. Create the new credential at the provider and record its id in the state file.
-2. Store the value as `NAME.pending`.
+2. Store the value as `NAME.pending`. (Every store name here is kept under the repository and environment, as in "Store layout" in [infra.md](infra.md); the root credentials are the only shared items. A rotation never reads or changes another repository's items.)
 3. Set it in every environment recorded for `NAME` (the configured environment when none is recorded yet).
 4. Health-check it.
 5. Promote it: store it as `NAME` and drop `NAME.pending`.
@@ -57,12 +57,12 @@ Typesafe and GitHub offer no API to create or revoke these two, so they rotate b
 
 - **Typesafe.** Only a `store` secret declared `rotator: typesafe` is treated this way (`rotator` is required on every `store`
   secret). A secret declared `rotator: owner` is
-  owner-seeded: `rotate` reports its age and that it is re-seeded with `theseus infra seed NAME`, and never adopts a
+  owner-seeded: `rotate` reports its age and that it is re-seeded with `theseus infra seed NAME --config PATH`, and never adopts a
   `.next` value for it or sends it to a provider, and reports any leftover `NAME.pending` or `NAME.previous` item.
   Each unfinished-rotation record names its secrets; a record left for other secrets, or for a rotation kind no secret
   uses any more, is reported as `stale` (exit 1) and never resumed. A record written by an earlier release has no
   names: a Typesafe one resumes only when that secret has a leftover `.pending` or `.previous` item, and every other
-  kind resumes as before. Seed the new key with `theseus infra seed TYPESAFE_API_KEY.next`, or put it in the Keychain item
+  kind resumes as before. Seed the new key with `theseus infra seed TYPESAFE_API_KEY.next --config PATH`, or put it in the Keychain item
   named by `mirror_keychain`. `rotate` adopts a value that differs from the stored one, sets it, checks it, stores it
   and removes `.next`. A key found in the Keychain item is adopted only when that item is newer than the stored key, and after an adoption the item is updated through stdin. With nothing to adopt it reports the key's age against `max_age_days` and the manual steps.
 - **GitHub App key.** The age comes from the secret's `updated_at`. When the newest `<slug>.*.private-key.pem` in

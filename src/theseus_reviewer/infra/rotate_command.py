@@ -60,7 +60,7 @@ def _environment_problem(ctx: Context, key: str) -> str | None:
         found = None
     if not isinstance(found, dict):
         return f"cannot read environment {key}, so no credential is created or delivered"
-    if not github_env.is_restricted(found):
+    if not github_env.is_restricted(ctx, found, environment):
         return f"environment {key} allows deployments from every branch, so no credential is created or delivered"
     return None
 

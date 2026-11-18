@@ -54,10 +54,30 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
-def is_restricted(environment: dict[str, Any] | None) -> bool:
-    """Whether deployments to the environment are limited to chosen branches (custom policies or protected branches)."""
+GLOB_CHARACTERS = frozenset("*?[{")
+
+
+def is_open_pattern(pattern: str) -> bool:
+    """Whether a branch pattern lets a contributor choose the branch name that deploys.
+
+    That is so when its first path segment (the text before the first ``/``) holds any glob character.
+    """
+    return any(char in GLOB_CHARACTERS for char in pattern.split("/", 1)[0]) or not pattern
+
+
+def is_restricted(ctx: Context, environment: dict[str, Any] | None, name: str | None = None) -> bool:
+    """Whether deployments to the environment are limited to chosen branches.
+
+    Protected branches count. Custom policies count only from a successful listing of all its pages whose
+    branch patterns all have a literal first path segment; a missing or unreadable listing is unrestricted.
+    """
     policy = environment.get("deployment_branch_policy") if environment else None
-    return isinstance(policy, dict) and bool(policy.get("custom_branch_policies") or policy.get("protected_branches"))
+    if not isinstance(policy, dict):
+        return False
+    if policy.get("custom_branch_policies"):
+        listed = list_branch_policies(ctx, name)
+        return listed is not None and not any(is_open_pattern(n) for n, kind in listed if kind == "branch")
+    return bool(policy.get("protected_branches"))
 
 
 def kept_protections(environment: dict[str, Any]) -> dict[str, Any]:
@@ -110,11 +130,34 @@ def ensure_environment(ctx: Context, environment: dict[str, Any] | None, custom_
     _api(ctx, "PUT", _base(ctx), body)
 
 
-def branch_policies(ctx: Context) -> list[str]:
-    found = _api(ctx, "GET", f"{_base(ctx)}/deployment-branch-policies?per_page=100", missing_ok=True)
-    if not isinstance(found, dict):
-        return []
-    return [str(item["name"]) for item in found.get("branch_policies", []) if item.get("type", "branch") == "branch"]
+PAGE_SIZE = 100
+MAX_PAGES = 100
+
+
+def list_branch_policies(ctx: Context, environment: str | None = None) -> list[tuple[str, str]] | None:
+    """Every ``(name, type)`` of the environment's deployment branch policies, over all pages; ``None`` if unreadable."""
+    found: list[tuple[str, str]] = []
+    for page in range(1, MAX_PAGES + 1):
+        try:
+            data = _api(
+                ctx,
+                "GET",
+                f"{_base(ctx, environment)}/deployment-branch-policies?per_page={PAGE_SIZE}&page={page}",
+                missing_ok=True,
+            )
+        except GithubError:
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("branch_policies"), list):
+            return None
+        items = data["branch_policies"]
+        found.extend((str(item["name"]), str(item.get("type", "branch"))) for item in items)
+        if len(items) < PAGE_SIZE:
+            return found
+    return None
+
+
+def branch_policies(ctx: Context, environment: str | None = None) -> list[str]:
+    return [name for name, kind in list_branch_policies(ctx, environment) or [] if kind == "branch"]
 
 
 def add_branch_policy(ctx: Context, name: str) -> None:
