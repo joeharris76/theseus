@@ -13,7 +13,7 @@ import pytest
 
 from theseus_reviewer.cli import main
 from theseus_reviewer.infra import cli as infra_cli
-from theseus_reviewer.infra import rotate, rotators
+from theseus_reviewer.infra import rotate, rotate_command, rotators
 from theseus_reviewer.infra.rotate_command import EXIT_FAILED, EXIT_OK, EXIT_USAGE, Report, run
 from theseus_reviewer.infra.state import State
 from theseus_reviewer.infra.store import PENDING_SUFFIX, Secret
@@ -945,7 +945,9 @@ def test_the_cli_imports_without_fcntl_and_apply_is_refused_there(world: World) 
 
 
 def test_a_dry_run_says_a_promoting_record_resumes_forward(world: World) -> None:
-    world.state.set_provider("rotate:openai", phase=rotate.PHASE_PROMOTING, **{"new.key_id": "key_new_1"})
+    world.state.set_provider(
+        "rotate:openai", phase=rotate.PHASE_PROMOTING, names="OPENAI_API_KEY", **{"new.key_id": "key_new_1"}
+    )
     world.state.save()
     text = run(world.ctx, only=["OPENAI_API_KEY"], apply=False, resume=False, as_json=False).text
     assert "phase promoting" in text and "finish the promotion forward" in text
@@ -1025,13 +1027,89 @@ def test_a_plain_store_secret_is_never_adopted_checked_or_sent(world: World) -> 
     assert [c for c in world.runner.calls if c.argv[0] != "gh"] == []
     assert stored(world, "PLAIN_TOKEN") == secret and stored(world, "PLAIN_TOKEN.next") == "PLAIN-next-value-oooooooo"
     assert "PLAIN_TOKEN" not in world.env
+    assert [r.kind for r in rotate_command.select(world.ctx, ["PLAIN_TOKEN"])] == ["owner-seeded"]
     planned = run(world.ctx, only=["PLAIN_TOKEN"], apply=False, resume=False, as_json=False)
     assert "owner-seeded" in planned.text and "Typesafe" not in planned.text
 
 
 def test_without_only_a_plain_store_secret_sends_nothing_to_typesafe(world: World) -> None:
-    with_plain_store_secret(world, "PLAIN_TOKEN", "PLAIN-gateway-url-secret-nnnnnnnn")
+    secret = "PLAIN-gateway-url-secret-nnnnnnnn"
+    with_plain_store_secret(world, "PLAIN_TOKEN", secret)
+    world.store.put("PLAIN_TOKEN.next", Secret("PLAIN-next-value-oooooooo"))
     rotate_now(world)
-    assert not [c for c in world.http.calls if "typesafe" in c.url and "PLAIN" in str(c.headers)]
-    assert not world.values_in_argv_or_urls(["PLAIN-gateway-url-secret-nnnnnnnn"])
-    assert not [c for c in world.http.calls if "PLAIN-gateway-url-secret-nnnnnnnn" in str(c.headers)]
+    assert not [c for c in world.http.calls if secret in str(c.headers) or secret in str(c.body)]
+    assert not [c for c in world.http.calls if "PLAIN-next-value-oooooooo" in str(c.headers)]
+    assert stored(world, "PLAIN_TOKEN") == secret
+
+
+def test_an_owner_secret_reports_leftover_rotation_items(world: World) -> None:
+    with_plain_store_secret(world, "PLAIN_TOKEN", "PLAIN-gateway-url-secret-nnnnnnnn")
+    world.store.put("PLAIN_TOKEN.pending", Secret("PLAIN-pending-value-pppppppp"))
+    world.store.put("PLAIN_TOKEN.previous", Secret("PLAIN-previous-value-qqqqqqqq"))
+    report = rotate_now(world, "PLAIN_TOKEN")
+    assert "leftover item PLAIN_TOKEN.pending" in report.text and "leftover item PLAIN_TOKEN.previous" in report.text
+    assert "PLAIN-pending-value-pppppppp" not in report.text
+
+
+def _v0214_record(world: World, phase: str) -> None:
+    """A state file as v0.2.14 wrote it: keyed by kind, with no secret names."""
+    world.state.set_provider("rotate:typesafe", phase=phase)
+    world.state.save()
+
+
+def test_a_v0214_typesafe_record_for_a_now_owner_secret_is_stale_and_never_resumed(world: World) -> None:
+    import dataclasses
+
+    from theseus_reviewer.infra.config import STORE, SecretSpec
+
+    specs = tuple(s for s in world.ctx.config.secrets if s.name != "TYPESAFE_API_KEY")
+    owner = SecretSpec("TYPESAFE_API_KEY", STORE, rotator="owner", max_age_days=90)
+    world.ctx.config = dataclasses.replace(world.ctx.config, secrets=(*specs, owner))
+    world.store.put("TYPESAFE_API_KEY.pending", Secret("PENDING-typesafe-key-rrrrrrrr"))
+    _v0214_record(world, rotate.PHASE_PROMOTING)
+    for resume in (False, True):
+        report = rotate_now(world, resume=resume)
+        assert report.code == EXIT_FAILED, report.text
+        assert "stale" in report.text and "unfinished typesafe rotation" in report.text
+        assert "leftover item TYPESAFE_API_KEY.pending" in report.text
+    assert world.state.provider("rotate:typesafe") == {"phase": rotate.PHASE_PROMOTING}
+    assert world.env["TYPESAFE_API_KEY"] == OLD["TYPESAFE_API_KEY"]
+    assert [c for c in world.http.calls if "typesafe" in c.url] == []
+
+
+def test_a_record_for_another_secret_is_not_taken_over_by_a_typesafe_rotator(world: World) -> None:
+    world.state.set_provider("rotate:typesafe", phase=rotate.PHASE_PROMOTING, names="SOME_OTHER_KEY")
+    world.state.save()
+    report = rotate_now(world, "TYPESAFE_API_KEY", resume=True)
+    assert report.code == EXIT_FAILED and "SOME_OTHER_KEY" in report.text and "stale" in report.text
+    assert world.state.provider("rotate:typesafe")["names"] == "SOME_OTHER_KEY"
+    assert world.env["TYPESAFE_API_KEY"] == OLD["TYPESAFE_API_KEY"]
+
+
+def test_a_v0214_typesafe_record_with_leftover_items_still_resumes_for_a_typesafe_secret(world: World) -> None:
+    world.store.put("TYPESAFE_API_KEY.pending", Secret(NEW_TYPESAFE))
+    _v0214_record(world, rotate.PHASE_PROMOTING)
+    report = rotate_now(world, "TYPESAFE_API_KEY", resume=True)
+    assert report.code == EXIT_OK, report.text
+    assert stored(world, "TYPESAFE_API_KEY") == NEW_TYPESAFE
+
+
+def test_the_loader_refuses_a_store_secret_without_a_rotator_and_builds_the_right_rotators(tmp_path: Path) -> None:
+    import copy
+
+    from theseus_reviewer.infra.config import ConfigError, parse_infra
+
+    from .example import EXAMPLE
+
+    data = copy.deepcopy(EXAMPLE)
+    data["secrets"]["GATEWAY_URL_COPY"] = {"source": "store", "rotator": "owner"}
+    config = parse_infra(data, tmp_path / ".github" / "review.yml")
+    from theseus_reviewer.infra.plan import Context
+    from theseus_reviewer.infra.rotators import OwnerSeededRotator, TypesafeRotator, build_rotators
+
+    ctx = Context(config, None, None, None, None, None)  # type: ignore[arg-type]
+    built = {name: type(r) for r in build_rotators(ctx, config) for name in r.names}
+    assert built["GATEWAY_URL_COPY"] is OwnerSeededRotator and built["TYPESAFE_API_KEY"] is TypesafeRotator
+    del data["secrets"]["GATEWAY_URL_COPY"]["rotator"]
+    with pytest.raises(ConfigError, match="needs rotator: typesafe"):
+        parse_infra(data, tmp_path / ".github" / "review.yml")

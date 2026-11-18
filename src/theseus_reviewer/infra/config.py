@@ -275,7 +275,13 @@ def _secret(name: str, data: Any) -> SecretSpec:
             account_name=_text(item["name"], f"{where}.name"),
         )
     if source == STORE:
-        rotator = _text(item.get("rotator", OWNER), f"{where}.rotator")
+        if "rotator" not in item:
+            raise ConfigError(
+                f"{where} needs rotator: {TYPESAFE_ROTATOR} (a Typesafe API key that rotate may adopt and check) or "
+                f"rotator: {OWNER} (a secret only the owner seeds, never rotated or sent to a provider); an earlier "
+                "version treated a missing rotator as a Typesafe key, so it is no longer guessed"
+            )
+        rotator = _text(item["rotator"], f"{where}.rotator")
         if rotator == "manual":
             raise ConfigError(
                 f"{where}.rotator: manual no longer names a rotator; use rotator: {TYPESAFE_ROTATOR} for a Typesafe "

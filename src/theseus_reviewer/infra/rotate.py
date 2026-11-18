@@ -34,6 +34,7 @@ ROLLED_BACK = "rolled-back"
 REVOKE_PENDING = "revoke-pending"
 RESUMED = "resumed"
 FAILED = "failed"
+STALE = "stale"
 REPORTED = "reported"
 
 
@@ -129,6 +130,26 @@ class Engine:
     def pending_record(self, rotator: Rotator) -> dict[str, str]:
         return self.state.provider(self._record_key(rotator))
 
+    def record_problem(self, rotator: Rotator, record: Mapping[str, str]) -> str | None:
+        """Why an unfinished record must not be acted on by ``rotator``; ``None`` when it is this rotator's own."""
+        names = record.get("names")
+        if names is not None:
+            if names == ",".join(rotator.names):
+                return None
+            return (
+                f"an unfinished {rotator.kind} rotation is recorded for {names.replace(',', ', ')}, not for "
+                f"{', '.join(rotator.names)}; it was left by an earlier configuration and is not acted on"
+            )
+        if record.get("phase") == PHASE_PROMOTED:
+            return None
+        for name in rotator.names:
+            if any(self.store.get(name + suffix) is not None for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX)):
+                return None
+        return (
+            f"an unfinished {rotator.kind} rotation is recorded without secret names and none of "
+            f"{', '.join(rotator.names)} has a leftover item; it is not acted on"
+        )
+
     def _environments_of(self, name: str) -> list[str]:
         return self.state.environments(name) or [self.default_environment]
 
@@ -144,6 +165,9 @@ class Engine:
     def rotate(self, rotator: Rotator, *, resume: bool) -> Outcome:
         record = self.pending_record(rotator)
         if record:
+            problem = self.record_problem(rotator, record)
+            if problem:
+                return self._outcome(rotator, STALE, f"{problem}; inspect {self.state.path} and remove the record")
             return self._leftover(rotator, record, resume)
         old = self._old_values(rotator.names)
         try:
@@ -166,7 +190,10 @@ class Engine:
             return self._outcome(rotator, FAILED, detail)
         log.warning("%s: the provider may have created a credential with id %s", rotator.kind, ids)
         self.state.set_provider(
-            self._record_key(rotator), phase=PHASE_CREATED, **{f"new.{key}": value for key, value in ids.items()}
+            self._record_key(rotator),
+            phase=PHASE_CREATED,
+            names=",".join(rotator.names),
+            **{f"new.{key}": value for key, value in ids.items()},
         )
         try:
             self._save()
@@ -182,7 +209,11 @@ class Engine:
         self, rotator: Rotator, created: Created, old: Mapping[str, Secret | None], old_ids: Mapping[str, str]
     ) -> Outcome:
         key = self._record_key(rotator)
-        record = {"phase": PHASE_CREATED, **{f"new.{k}": v for k, v in created.ids.items()}}
+        record = {
+            "phase": PHASE_CREATED,
+            "names": ",".join(rotator.names),
+            **{f"new.{k}": v for k, v in created.ids.items()},
+        }
         record.update({f"old.{k}": v for k, v in old_ids.items()})
         self.state.set_provider(key, **record)
         try:

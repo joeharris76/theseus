@@ -87,8 +87,10 @@ def test_a_policy_without_an_infra_section_is_reported(tmp_path: Path) -> None:
         (lambda d: d["secrets"]["TS_OAUTH_CI_SECRET"].update(field="id"), "more than once"),
         (lambda d: d["secrets"]["TYPESAFE_API_KEY"].update(rotator="auto"), "must be owner or typesafe"),
         (lambda d: d["secrets"]["TYPESAFE_API_KEY"].update(rotator="manual"), "no longer names a rotator"),
+        (lambda d: d["secrets"]["TYPESAFE_API_KEY"].pop("rotator"), "needs rotator: typesafe"),
+        (lambda d: d["secrets"].update(PLAIN={"source": "store"}), "or rotator: owner"),
         (
-            lambda d: d["secrets"].update(PLAIN={"source": "store", "mirror_keychain": "X"}),
+            lambda d: d["secrets"].update(PLAIN={"source": "store", "rotator": "owner", "mirror_keychain": "X"}),
             "applies only to rotator: typesafe",
         ),
         (lambda d: d["secrets"]["OPENAI_API_KEY"].pop("project"), "needs project"),

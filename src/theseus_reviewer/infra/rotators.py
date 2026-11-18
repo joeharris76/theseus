@@ -29,7 +29,7 @@ from .config import (
 )
 from .plan import Context
 from .rotate import PREVIOUS_SUFFIX, Created, RotationError, Rotator
-from .store import Secret, StoreError
+from .store import PENDING_SUFFIX, Secret, StoreError
 from .transport import HTTP_TIMEOUT_SECONDS, HttpResponse, HttpTransport, TransportError
 
 NEXT_SUFFIX = ".next"
@@ -431,11 +431,18 @@ class OwnerSeededRotator:
             age = _days(self.ctx.now(), self.ctx.store.modified_at(self.spec.name))
         except StoreError:
             age = None
-        return (
+        lines = [
             _age_line(self.spec.name, age, self.spec.max_age_days),
             f"{self.spec.name} is owner-seeded and is not rotated here; re-seed it with: "
             f"theseus infra seed {self.spec.name}",
-        )
+        ]
+        for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX):
+            if self.ctx.store.get(self.spec.name + suffix) is not None:
+                lines.append(
+                    f"leftover item {self.spec.name}{suffix} from an earlier rotation is still in the store; "
+                    "check that the credential in use is the right one, then delete it from the store by hand"
+                )
+        return tuple(lines)
 
     def describe(self) -> Sequence[str]:
         return self._lines()

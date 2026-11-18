@@ -54,7 +54,7 @@ Unknown keys are refused. Sources:
 | `gateway_token`, `gateway_url` | Runs `<host_script> gateway` (the consumer's script, unchanged), reads the token file it leaves and the `gateway: published at https://…` line it prints. |
 | `tailscale_oauth` | Creates one OAuth client with the configured scopes and tag, and keeps its id and secret. The client is created only after the policy has the tag. |
 | `openai_service_account` | Creates the service account in the project (or mints another key if one was recorded), checks the key with `GET /v1/models`, and keeps it. A key OpenAI rejects is revoked and not stored. |
-| `store` | The owner supplies the value with `seed`. `max_age_days` makes `status` report its age. `rotator` is `owner` (the default: `rotate` only reports its age and never sends it anywhere) or `typesafe` (the secret is a Typesafe API key, which `rotate` may adopt and check against Typesafe). The earlier `rotator: manual` is refused. |
+| `store` | The owner supplies the value with `seed`. `max_age_days` makes `status` report its age. `rotator` is required and is `owner` (`rotate` only reports its age and never sends it anywhere) or `typesafe` (the secret is a Typesafe API key, which `rotate` may adopt and check against Typesafe). A `store` secret with no `rotator`, or with the earlier `rotator: manual`, is refused: an earlier version treated both as a Typesafe key, so neither is guessed. `setup` checks a secret against Typesafe only when it is `rotator: typesafe`, whatever its name. |
 
 `mirror_keychain` applies only to `rotator: typesafe`; it names the legacy Keychain service the same key is also kept under; setup parses it and does not read that item.
 
