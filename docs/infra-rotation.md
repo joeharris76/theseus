@@ -60,7 +60,9 @@ Typesafe and GitHub offer no API to create or revoke these two, so they rotate b
   owner-seeded: `rotate` reports its age and that it is re-seeded with `theseus infra seed NAME`, and never adopts a
   `.next` value for it or sends it to a provider, and reports any leftover `NAME.pending` or `NAME.previous` item.
   Each unfinished-rotation record names its secrets; a record left for other secrets, or for a rotation kind no secret
-  uses any more, is reported as `stale` (exit 1) and never resumed. Seed the new key with `theseus infra seed TYPESAFE_API_KEY.next`, or put it in the Keychain item
+  uses any more, is reported as `stale` (exit 1) and never resumed. A record written by an earlier release has no
+  names: a Typesafe one resumes only when that secret has a leftover `.pending` or `.previous` item, and every other
+  kind resumes as before. Seed the new key with `theseus infra seed TYPESAFE_API_KEY.next`, or put it in the Keychain item
   named by `mirror_keychain`. `rotate` adopts a value that differs from the stored one, sets it, checks it, stores it
   and removes `.next`. A key found in the Keychain item is adopted only when that item is newer than the stored key, and after an adoption the item is updated through stdin. With nothing to adopt it reports the key's age against `max_age_days` and the manual steps.
 - **GitHub App key.** The age comes from the secret's `updated_at`. When the newest `<slug>.*.private-key.pem` in

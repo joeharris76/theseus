@@ -878,6 +878,23 @@ def test_an_orphan_that_cannot_be_deleted_is_recorded_for_resume(world: World) -
     assert "key_orphan" not in world.openai_keys
 
 
+def test_an_orphan_recorded_without_secret_names_is_still_deleted_on_resume(world: World) -> None:
+    def keyless(call):  # noqa: ANN001
+        world.openai_keys["key_orphan"] = "NEVER-SEEN-orphan-0003"
+        return json_response(200, {"id": "key_orphan"})
+
+    world.http.routes.insert(0, ("POST", re.compile(rf"{PROJECT}/service_accounts/sa_1/api_keys"), keyless))
+    world.fail_delete.add("key_orphan")
+    assert rotate_now(world, "OPENAI_API_KEY").code == EXIT_FAILED
+    record = world.state.provider("rotate:openai")
+    record.pop("names")
+    world.state.set_provider("rotate:openai", **record)
+    world.state.save()
+    world.fail_delete.clear()
+    assert rotate_now(world, "OPENAI_API_KEY", resume=True).code == EXIT_OK
+    assert "key_orphan" not in world.openai_keys
+
+
 # -- warnings, manual steps and checking before delivery ----------------------------------------------------------
 
 

@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from .config import TYPESAFE_ROTATOR
 from .state import State
 from .store import PENDING_SUFFIX, Secret, Store
 from .transport import Redactor
@@ -140,7 +141,7 @@ class Engine:
                 f"an unfinished {rotator.kind} rotation is recorded for {names.replace(',', ', ')}, not for "
                 f"{', '.join(rotator.names)}; it was left by an earlier configuration and is not acted on"
             )
-        if record.get("phase") == PHASE_PROMOTED:
+        if rotator.kind != TYPESAFE_ROTATOR or record.get("phase") == PHASE_PROMOTED:
             return None
         for name in rotator.names:
             if any(self.store.get(name + suffix) is not None for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX)):
