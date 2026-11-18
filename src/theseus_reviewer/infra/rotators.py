@@ -434,7 +434,7 @@ class OwnerSeededRotator:
         lines = [
             _age_line(self.spec.name, age, self.spec.max_age_days),
             f"{self.spec.name} is owner-seeded and is not rotated here; re-seed it with: "
-            f"theseus infra seed {self.spec.name}",
+            f"theseus infra seed {self.spec.name} --config PATH",
         ]
         for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX):
             if self.ctx.store.get(self.spec.name + suffix) is not None:
@@ -521,7 +521,7 @@ class TypesafeRotator:
 
     def _steps(self) -> tuple[str, ...]:
         return (
-            f"create a new key in the Typesafe console, then run: theseus infra seed {self._next_name}",
+            f"create a new key in the Typesafe console, then run: theseus infra seed {self._next_name} --config PATH",
             "run 'theseus infra rotate --only " + self.spec.name + " --apply' to adopt it",
         )
 

@@ -120,3 +120,12 @@ def test_the_policy_parser_ignores_the_infra_section_entirely(tmp_path: Path) ->
     with_infra = parse_policy({**raw, "infra": EXAMPLE})
     garbage = parse_policy({**raw, "infra": {"not": ["even", "valid"]}})
     assert with_infra == without == garbage
+
+
+@pytest.mark.parametrize("name", ["TAILSCALE_ROOT_CLIENT_ID", "TAILSCALE_ROOT_CLIENT_SECRET", "OPENAI_ADMIN_KEY"])
+@pytest.mark.parametrize("source", [{"source": "literal", "value": "x"}, {"source": "store", "rotator": "owner"}])
+def test_a_shared_root_credential_cannot_be_declared_as_a_secret(tmp_path: Path, name: str, source: dict) -> None:  # type: ignore[type-arg]
+    data = deepcopy(EXAMPLE)
+    data["secrets"][name] = source
+    with pytest.raises(ConfigError, match="shared root credential"):
+        parse_infra(data, tmp_path / "review.yml")

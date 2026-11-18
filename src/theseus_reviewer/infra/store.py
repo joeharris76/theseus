@@ -344,7 +344,7 @@ class ScopedStore:
                 raise StoreError(
                     f"the store holds an unprefixed item {name}, which could belong to any repository. Stores now "
                     f"keep per-repository secrets as {self._prefix}<name>. Seed this repository's value with "
-                    f"'theseus infra seed {stem}' (seed works while this item exists), then delete the old item ({_delete_hint(name)}) after checking "
+                    f"'theseus infra seed {stem} --config PATH' (seed works while this item exists), then delete the old item ({_delete_hint(name)}) after checking "
                     "no other repository still needs it"
                 )
 

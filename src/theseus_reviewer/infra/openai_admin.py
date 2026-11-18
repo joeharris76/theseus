@@ -39,7 +39,7 @@ class OpenAIAdmin:
         admin = ctx.secret(ADMIN_KEY_NAME)
         if admin is None:
             raise OpenAIError(
-                f"{ADMIN_KEY_NAME} is not in the store; seed it with 'theseus infra seed {ADMIN_KEY_NAME}'"
+                f"{ADMIN_KEY_NAME} is not in the store; seed it with 'theseus infra seed {ADMIN_KEY_NAME} --config PATH'"
             )
         self._ctx = ctx
         self._admin = admin

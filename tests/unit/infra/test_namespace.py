@@ -260,3 +260,40 @@ def test_a_full_run_stops_before_any_credential_when_the_policy_is_open(
     assert code == 3 and "remove the wildcard policy by hand" in out
     assert world.clients == {} and world.openai_keys == {} and world.secrets == {}
     assert [c for c in world.http.mutating() if "oauth/token" not in c.url] == []
+
+
+def test_rotating_one_repository_never_reads_or_writes_the_others_items(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from .rotation_world import NEW_TYPESAFE, build_world
+    from .test_rotate import rotate_now
+
+    world = build_world(tmp_path, monkeypatch)
+    base = world.store.base  # the one backend both repositories share
+    other = ScopedStore(base, "Other-Org/other", "review")
+    forms = ["", ".next", ".pending", ".previous"]
+    names = ["TYPESAFE_API_KEY", "OPENAI_API_KEY", "REVIEW_GATEWAY_TOKEN", "TS_OAUTH_CI_SECRET"]
+    for name in names:
+        for form in forms:
+            other.put(name + form, Secret(f"OTHER-{name}{form}-value-0001"))
+
+    def snapshot() -> dict[str, bytes]:
+        directory = Path(tmp_path / "store")
+        return {entry.name: entry.read_bytes() for entry in directory.iterdir() if "Other-Org" in entry.name}
+
+    before = snapshot()
+    assert len(before) == len(names) * len(forms)
+    touched: list[str] = []
+    for method in ("get", "put", "delete", "modified_at"):
+        real = getattr(base, method)
+
+        def spy(name, *args, _real=real, **kwargs):  # type: ignore[no-untyped-def]
+            touched.append(name)
+            return _real(name, *args, **kwargs)
+
+        monkeypatch.setattr(base, method, spy)
+    world.store.put("TYPESAFE_API_KEY.next", Secret(NEW_TYPESAFE))
+    assert rotate_now(world, "TYPESAFE_API_KEY", "OPENAI_API_KEY").code == 0
+    assert world.store.get("TYPESAFE_API_KEY") == Secret(NEW_TYPESAFE)
+    assert snapshot() == before
+    ours = "Example-Org/example:review:"
+    assert touched and [name for name in touched if not name.startswith(ours) and name not in ROOTS] == []
+    assert any(name.startswith("Example-Org/example:review:OPENAI_API_KEY") for name in touched)

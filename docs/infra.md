@@ -62,7 +62,7 @@ Unknown keys are refused. Sources:
 
 Several repositories can share one Keychain or one directory. Every per-repository secret is kept under `<repository>:<environment>:<name>` (for example account `BenchBox-dev/BenchBox:review:REVIEW_APP_ID`), including its `.next`, `.pending` and `.previous` forms and the numbered parts of a long value. In the file store the same name is the file name, percent-encoded (`BenchBox-dev%2FBenchBox%3Areview%3AREVIEW_APP_ID`). Two repositories that use the same secret names (the App id and key, the tailnet client, the gateway token) therefore never read or overwrite each other's values, and `rotate` only ever touches the configured repository's items.
 
-The three root credentials, `TAILSCALE_ROOT_CLIENT_ID`, `TAILSCALE_ROOT_CLIENT_SECRET` and `OPENAI_ADMIN_KEY`, are shared by every repository and stay unprefixed. `seed ROOT` writes the shared item; `seed NAME --config PATH` writes the item of that config's repository and environment.
+The three root credentials, `TAILSCALE_ROOT_CLIENT_ID`, `TAILSCALE_ROOT_CLIENT_SECRET` and `OPENAI_ADMIN_KEY`, are shared by every repository and stay unprefixed. `seed ROOT --config PATH` writes the shared item (the config only locates the store); `seed NAME --config PATH` writes the item of that config's repository and environment.
 
 `TYPESAFE_API_KEY` is per repository, like every other secret. If one owner key serves two repositories, seed it into each:
 
@@ -73,7 +73,7 @@ theseus infra seed TYPESAFE_API_KEY --config repo-two/.github/review.yml
 
 `rotate` of one repository never adopts or revokes the other's value; after rotating the key in the Typesafe console, seed `TYPESAFE_API_KEY.next` for each repository. Give each repository its own `mirror_keychain` item if you use that adoption path.
 
-**Migrating older items.** A store from before this layout may hold unprefixed items such as `REVIEW_APP_ID`. They cannot be attributed to a repository, so `setup`, `status` and `rotate` refuse to run while one named like a configured secret exists, and name the item. `seed` still works, so the migration is: seed the scoped value, then delete the old item. Seed that repository's value with `theseus infra seed NAME`, then delete the old item (`security delete-generic-password -s theseus.infra -a NAME`, or remove the file) once no other repository's setup still needs it. An unprefixed value is never read as a namespaced one.
+**Migrating older items.** A store from before this layout may hold unprefixed items such as `REVIEW_APP_ID`. They cannot be attributed to a repository, so `setup`, `status` and `rotate` refuse to run while one named like a configured secret exists, and name the item. `seed` still works, so the migration is: seed the scoped value, then delete the old item. Seed that repository's value with `theseus infra seed NAME --config PATH`, then delete the old item (`security delete-generic-password -s theseus.infra -a NAME`, or remove the file) once no other repository's setup still needs it. An unprefixed value is never read as a namespaced one.
 
 **Open environments.** An environment is restricted only if every branch-type deployment policy (all pages are read) has a fully literal first path segment, so `develop`, `main` and `release/*` restrict while `*`, `**`, `**/*`, `*/**`, `*/*`, `?*/**`, `[a-z]*` and `{a,b}*/x` leave a contributor free to choose the branch name; tag-type policies are ignored and a missing or unreadable list counts as open (fail closed). Against an open environment setup and rotate create no credential (no OAuth client, no OpenAI key) and deliver no secret, and `status` reports it. Setup never removes a policy: remove the wildcard policy by hand in the environment's settings, then run setup again. (An environment that does not use custom policies at all is still switched by a full run.)
 
@@ -122,7 +122,7 @@ With the Keychain store the root credentials can also be added without Theseus; 
 security add-generic-password -U -s theseus.infra -a TAILSCALE_ROOT_CLIENT_ID -w
 ```
 
-`seed NAME.next` stores a value that is held for pickup (a manual rotation) and does not make `NAME` due for delivery. Only names in `infra.secrets`, their `.next` forms and the three root credentials can be seeded.
+`seed NAME.next` stores a value that is held for pickup (a manual rotation) and does not make `NAME` due for delivery. Only names in `infra.secrets`, their `.next` forms and the three root credentials can be seeded; the root credentials may not be declared in `infra.secrets` (config validation refuses them).
 
 The Tailscale root is an OAuth client created in the admin console with the scopes `oauth_keys`, `policy_file`, `devices:core:read` and `devices:posture_attributes`; its access tokens last one hour. The OpenAI root is an organization Admin API key.
 
@@ -144,7 +144,7 @@ An App holds up to 25 keys, so a new key can be generated and picked up before t
 - **A secret was changed in GitHub by hand.** `setup` cannot see values. Reseed or re-run the source, which marks the secret due, then `setup --apply`.
 - **A created credential was not stored.** An OAuth client or OpenAI key is revoked when the store or state write after creating it fails; a stale OAuth client is deleted once its replacement is stored. If a process dies between creating and storing, delete the orphan in the provider's console (the Tailscale description and the OpenAI service account name identify it).
 - **The state file is lost.** Run `setup --apply`; every secret is set again with the stored value.
-- **A Keychain item is damaged.** `theseus infra seed NAME` writes it again.
+- **A Keychain item is damaged.** `theseus infra seed NAME --config PATH` writes it again.
 - **Policy edit refused.** The message is Tailscale's validation text, usually a failing policy test (for example an existing grant already lets the tag reach `deny_port`). Fix the policy by hand; setup never removes a rule.
 
 Rotation is a separate command.
