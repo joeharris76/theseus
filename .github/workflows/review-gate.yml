@@ -37,10 +37,10 @@ jobs:
       actions: write
       contents: read
       pull-requests: read
-    uses: joeharris76/theseus/.github/workflows/gate.yml@a9acebe7869ec2140d1baa3b5cd2c3ddd4a0c4ff
+    uses: joeharris76/theseus/.github/workflows/gate.yml@f209b8490e5673da191d374f3ff8bb8b860b9a61
     with:
       environment: theseus
-      theseus_ref: a9acebe7869ec2140d1baa3b5cd2c3ddd4a0c4ff
+      theseus_ref: f209b8490e5673da191d374f3ff8bb8b860b9a61
       gated_base: main
     secrets:
       REVIEW_APP_ID: ${{ secrets.REVIEW_APP_ID }}
