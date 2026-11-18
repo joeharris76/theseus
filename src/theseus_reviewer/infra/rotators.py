@@ -23,12 +23,13 @@ from .config import (
     OPENAI_SERVICE_ACCOUNT,
     STORE,
     TAILSCALE_OAUTH,
+    TYPESAFE_ROTATOR,
     InfraConfig,
     SecretSpec,
 )
 from .plan import Context
 from .rotate import PREVIOUS_SUFFIX, Created, RotationError, Rotator
-from .store import Secret, StoreError
+from .store import PENDING_SUFFIX, Secret, StoreError
 from .transport import HTTP_TIMEOUT_SECONDS, HttpResponse, HttpTransport, TransportError
 
 NEXT_SUFFIX = ".next"
@@ -412,6 +413,62 @@ class OpenAIRotator:
         return ()
 
 
+class OwnerSeededRotator:
+    """A ``store`` secret that only the owner supplies. It is reported, never rotated and never sent to a provider."""
+
+    kind = "owner-seeded"
+
+    def __init__(self, ctx: Context, spec: SecretSpec) -> None:
+        self.ctx = ctx
+        self.spec = spec
+        self.names = (spec.name,)
+
+    def old_ids(self) -> dict[str, str]:
+        return {}
+
+    def _lines(self) -> tuple[str, ...]:
+        try:
+            age = _days(self.ctx.now(), self.ctx.store.modified_at(self.spec.name))
+        except StoreError:
+            age = None
+        lines = [
+            _age_line(self.spec.name, age, self.spec.max_age_days),
+            f"{self.spec.name} is owner-seeded and is not rotated here; re-seed it with: "
+            f"theseus infra seed {self.spec.name}",
+        ]
+        for suffix in (PENDING_SUFFIX, PREVIOUS_SUFFIX):
+            if self.ctx.store.get(self.spec.name + suffix) is not None:
+                lines.append(
+                    f"leftover item {self.spec.name}{suffix} from an earlier rotation is still in the store; "
+                    "check that the credential in use is the right one, then delete it from the store by hand"
+                )
+        return tuple(lines)
+
+    def describe(self) -> Sequence[str]:
+        return self._lines()
+
+    def create(self) -> Created | None:
+        return None
+
+    def health(self, created: Created) -> None:
+        raise RotationError(f"{self.spec.name} is owner-seeded and has no health check")
+
+    def promote(self, created: Created) -> None:
+        """Never reached: nothing is created."""
+
+    def committed(self, created: Created) -> None:
+        """Never reached: nothing is created."""
+
+    def delete_new(self, ids: Mapping[str, str]) -> None:
+        """Nothing is created."""
+
+    def revoke_old(self, ids: Mapping[str, str]) -> None:
+        """Nothing is revoked."""
+
+    def after_revoke(self, created: Created | None) -> Sequence[str]:
+        return self._lines()
+
+
 class TypesafeRotator:
     """Pick up a key the owner made in the Typesafe console; Typesafe has no key-management API."""
 
@@ -632,7 +689,9 @@ def build_rotators(ctx: Context, config: InfraConfig) -> list[Rotator]:
         elif spec.source == OPENAI_SERVICE_ACCOUNT:
             found.append(OpenAIRotator(ctx, spec))
         elif spec.source == STORE:
-            found.append(TypesafeRotator(ctx, spec))
+            found.append(
+                TypesafeRotator(ctx, spec) if spec.rotator == TYPESAFE_ROTATOR else OwnerSeededRotator(ctx, spec)
+            )
         elif spec.source == APP_KEY:
             found.append(AppKeyRotator(ctx, spec))
     return found

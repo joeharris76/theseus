@@ -13,7 +13,7 @@ import pytest
 from theseus_reviewer.cli import main
 from theseus_reviewer.infra import cli as infra_cli
 from theseus_reviewer.infra.state import State
-from theseus_reviewer.infra.store import FileStore
+from theseus_reviewer.infra.store import FileStore, Secret
 from theseus_reviewer.infra.tailscale import standardize
 
 from .fakes import SENTINELS
@@ -711,3 +711,44 @@ def test_a_gated_action_with_no_prerequisites_never_runs() -> None:
     plan.add("plain", "y", lambda: ran.append("plain"))
     outcomes = {o.id: o for o in plan.execute(Redactor())}
     assert ran == ["plain"] and outcomes["gated"].status == SKIPPED
+
+
+def _declare(world: World, name: str, rotator: str) -> None:
+    from .example import write_policy
+
+    spec = world.infra["secrets"].pop("TYPESAFE_API_KEY")
+    world.infra["secrets"][name] = {**spec, "rotator": rotator}
+    if rotator == "owner":
+        world.infra["secrets"][name].pop("mirror_keychain", None)
+    write_policy(world.policy_path, world.infra)
+
+
+def test_an_owner_secret_is_never_checked_against_typesafe_whatever_its_name(world: World, monkeypatch, capsys) -> None:
+    _declare(world, "TYPESAFE_API_KEY", "owner")
+    world.typesafe_ok = False
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert "the provider rejects" not in out
+    assert world.secrets["TYPESAFE_API_KEY"][0] == SENTINELS["typesafe"]
+    assert not [c for c in world.http.calls if "typesafe" in c.url]
+
+
+def test_a_typesafe_secret_is_checked_whatever_its_name(world: World, monkeypatch, capsys) -> None:
+    _declare(world, "OTHER_TYPESAFE_KEY", "typesafe")
+    ctx = world.context()
+    ctx.store.put("OTHER_TYPESAFE_KEY", Secret(SENTINELS["typesafe"]))
+    world.typesafe_ok = False
+    code, out, _ = setup(world, monkeypatch, capsys, "--apply")
+    assert code == 1 and "the provider rejects the stored OTHER_TYPESAFE_KEY" in out
+    assert "OTHER_TYPESAFE_KEY" not in world.secrets
+    assert [c for c in world.http.calls if "typesafe" in c.url]
+
+
+def test_the_age_warning_for_an_owner_secret_says_to_reseed_it(world: World, monkeypatch, capsys) -> None:
+    import os
+
+    _declare(world, "TYPESAFE_API_KEY", "owner")
+    setup(world, monkeypatch, capsys, "--apply")
+    old = NOW.timestamp() - 91 * 86400
+    os.utime(Path(world.infra["store"]["dir"]) / "TYPESAFE_API_KEY", (old, old))
+    code, out, _ = cli(world, monkeypatch, capsys, "status", "--config", str(world.policy_path))
+    assert "re-seed it with: theseus infra seed TYPESAFE_API_KEY" in out and "console" not in out

@@ -18,6 +18,7 @@ from .config import (
     OPENAI_SERVICE_ACCOUNT,
     STORE,
     TAILSCALE_OAUTH,
+    TYPESAFE_ROTATOR,
     SecretSpec,
 )
 from .plan import Context, Plan
@@ -35,7 +36,6 @@ STATE_TAILSCALE = "tailscale"
 STATE_APP_KEY = "app_key"
 
 Verifier = Callable[[HttpTransport, Secret], bool]
-VERIFIERS: dict[str, Verifier] = {"TYPESAFE_API_KEY": typesafe.check_key}
 DAY_SECONDS = 86400.0
 
 
@@ -395,15 +395,22 @@ def _deliver(
     )
 
 
+def _verifier(spec: SecretSpec) -> Verifier | None:
+    """The provider check for a secret, chosen by what it is declared to be, never by its name."""
+    if spec.source == OPENAI_SERVICE_ACCOUNT:
+        return openai_admin.check_key
+    if spec.source == STORE and spec.rotator == TYPESAFE_ROTATOR:
+        return typesafe.check_key
+    return None
+
+
 def _set_in_environment(ctx: Context, spec: SecretSpec) -> None:
     value = ctx.secret(spec.name)
     if value is None:
         raise RuntimeError(f"{spec.name} is not in the store")
     if not github_env.is_restricted(github_env.get_environment(ctx)):
         raise RuntimeError(f"environment {ctx.config.github.environment} allows every branch; {spec.name} was not set")
-    verify: Verifier | None = (
-        openai_admin.check_key if spec.source == OPENAI_SERVICE_ACCOUNT else VERIFIERS.get(spec.name)
-    )
+    verify: Verifier | None = _verifier(spec)
     if verify is not None and not verify(ctx.http, value):
         raise RuntimeError(f"the provider rejects the stored {spec.name}; nothing was set")
     github_env.set_secret(ctx, spec.name, value)
@@ -421,11 +428,14 @@ def aged(ctx: Context) -> list[str]:
             continue
         days = (ctx.now() - modified).total_seconds() / DAY_SECONDS
         if days > spec.max_age_days:
-            how = (
-                "generate a new private key in the App's settings and save it in the key directory"
-                if spec.source == APP_KEY
-                else f"create a new key in the provider's console and run: {seed_command(spec.name)}"
-            )
+            if spec.source == APP_KEY:
+                how = "generate a new private key in the App's settings and save it in the key directory"
+            elif spec.source == STORE and spec.rotator == TYPESAFE_ROTATOR:
+                how = f"create a new key in the Typesafe console and run: {seed_command(spec.name)}"
+            elif spec.source == STORE:
+                how = f"re-seed it with: {seed_command(spec.name)}"
+            else:
+                how = f"create a new key in the provider's console and run: {seed_command(spec.name)}"
             lines.append(f"aged: {spec.name} is {int(days)} days old (limit {spec.max_age_days}); {how}")
     return lines
 
