@@ -105,7 +105,7 @@ def build_setup(ctx: Context, only: set[str] | None = None) -> Plan:
                     env_action,
                 )
 
-    unrestricted = environment is not None and only is not None and not github_env.is_restricted(environment)
+    unrestricted = environment is not None and only is not None and not github_env.is_restricted(ctx, environment)
     if unrestricted:
         plan.block(
             "github.environment",
@@ -408,7 +408,7 @@ def _set_in_environment(ctx: Context, spec: SecretSpec) -> None:
     value = ctx.secret(spec.name)
     if value is None:
         raise RuntimeError(f"{spec.name} is not in the store")
-    if not github_env.is_restricted(github_env.get_environment(ctx)):
+    if not github_env.is_restricted(ctx, github_env.get_environment(ctx)):
         raise RuntimeError(f"environment {ctx.config.github.environment} allows every branch; {spec.name} was not set")
     verify: Verifier | None = _verifier(spec)
     if verify is not None and not verify(ctx.http, value):

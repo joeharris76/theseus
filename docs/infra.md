@@ -58,9 +58,28 @@ Unknown keys are refused. Sources:
 
 `mirror_keychain` applies only to `rotator: typesafe`; it names the legacy Keychain service the same key is also kept under; setup parses it and does not read that item.
 
+### Store layout
+
+Several repositories can share one Keychain or one directory. Every per-repository secret is kept under `<repository>:<environment>:<name>` (for example account `BenchBox-dev/BenchBox:review:REVIEW_APP_ID`), including its `.next`, `.pending` and `.previous` forms and the numbered parts of a long value. In the file store the same name is the file name, percent-encoded (`BenchBox-dev%2FBenchBox%3Areview%3AREVIEW_APP_ID`). Two repositories that use the same secret names (the App id and key, the tailnet client, the gateway token) therefore never read or overwrite each other's values, and `rotate` only ever touches the configured repository's items.
+
+The three root credentials, `TAILSCALE_ROOT_CLIENT_ID`, `TAILSCALE_ROOT_CLIENT_SECRET` and `OPENAI_ADMIN_KEY`, are shared by every repository and stay unprefixed. `seed ROOT` writes the shared item; `seed NAME --config PATH` writes the item of that config's repository and environment.
+
+`TYPESAFE_API_KEY` is per repository, like every other secret. If one owner key serves two repositories, seed it into each:
+
+```sh
+theseus infra seed TYPESAFE_API_KEY --config repo-one/.github/review.yml
+theseus infra seed TYPESAFE_API_KEY --config repo-two/.github/review.yml
+```
+
+`rotate` of one repository never adopts or revokes the other's value; after rotating the key in the Typesafe console, seed `TYPESAFE_API_KEY.next` for each repository. Give each repository its own `mirror_keychain` item if you use that adoption path.
+
+**Migrating older items.** A store from before this layout may hold unprefixed items such as `REVIEW_APP_ID`. They cannot be attributed to a repository, so any command refuses to run while one named like a configured secret exists, and names the item. Seed that repository's value with `theseus infra seed NAME`, then delete the old item (`security delete-generic-password -s theseus.infra -a NAME`, or remove the file) once no other repository's setup still needs it. An unprefixed value is never read as a namespaced one.
+
+An environment whose branch policy list contains a pattern that matches every branch (`*` or `**`) is treated as open to every branch: setup and rotate deliver nothing to it and `status` reports it.
+
 ### Stores
 
-- `keychain`: service `theseus.infra`, one account per name, written by feeding `security -i` on stdin and read back. A value that is not plain printable text is stored base64-encoded behind `b64:`. `security -i` reads at most 4096 bytes of a line, so a value over 2000 characters is stored in numbered parts (`NAME#<id>#<n>`) written first and a short header under `NAME` written last: a failed write leaves the old value intact.
+- `keychain`: service `theseus.infra`, one account per name (see "Store layout"), written by feeding `security -i` on stdin and read back. A value that is not plain printable text is stored base64-encoded behind `b64:`. `security -i` reads at most 4096 bytes of a line, so a value over 2000 characters is stored in numbered parts (`NAME#<id>#<n>`) written first and a short header under `NAME` written last: a failed write leaves the old value intact.
 - `file`: a `0700` directory with one `0600` file per name, written atomically. A wider mode is refused, not repaired.
 
 The state file holds ids and versions only (which OAuth client and service account exist, which version of each secret each environment received), never a value. Losing it is safe: the next `setup --apply` sets every secret again.

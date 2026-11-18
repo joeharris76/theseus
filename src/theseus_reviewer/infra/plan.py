@@ -15,7 +15,7 @@ from typing import Any
 
 from .config import InfraConfig, load_infra
 from .state import State
-from .store import Secret, Store, make_store
+from .store import ScopedStore, Secret, Store, make_store
 from .transport import HttpTransport, Redactor, Runner, UrllibTransport, run_command
 
 OK = "ok"
@@ -66,7 +66,9 @@ def open_context(
     """Load a policy file's ``infra:`` section, its store and state, and register every stored value for redaction."""
     config = load_infra(config_path)
     runner = run or run_command
-    store = make_store(config.store.backend, config.store.directory, runner)
+    base = make_store(config.store.backend, config.store.directory, runner)
+    store = ScopedStore(base, config.github.repository, config.github.environment)
+    store.check_unscoped([spec.name for spec in config.secrets])
     ctx = Context(
         config=config,
         store=store,

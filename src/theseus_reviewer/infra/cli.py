@@ -95,7 +95,7 @@ def command_status(args: argparse.Namespace) -> int:
             rows = setup.report(ctx)
         except (ConfigError, StoreError, RuntimeError, OSError, ValueError) as exc:
             return _fail(str(exc), ctx.redactor if ctx else None)
-        restricted = github_env.is_restricted(github_env.get_environment(ctx))
+        restricted = github_env.is_restricted(ctx, github_env.get_environment(ctx))
         drift = bool(
             not restricted or plan.actions or plan.blocked or any(note.startswith("aged:") for note in plan.notes)
         )

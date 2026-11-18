@@ -54,10 +54,21 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
-def is_restricted(environment: dict[str, Any] | None) -> bool:
-    """Whether deployments to the environment are limited to chosen branches (custom policies or protected branches)."""
+def _matches_every_branch(pattern: str) -> bool:
+    return bool(pattern) and set(pattern) == {"*"}
+
+
+def is_restricted(ctx: Context, environment: dict[str, Any] | None, name: str | None = None) -> bool:
+    """Whether deployments to the environment are limited to chosen branches.
+
+    Protected branches count. Custom policies count unless one matches every branch (``*``, ``**``).
+    """
     policy = environment.get("deployment_branch_policy") if environment else None
-    return isinstance(policy, dict) and bool(policy.get("custom_branch_policies") or policy.get("protected_branches"))
+    if not isinstance(policy, dict):
+        return False
+    if policy.get("custom_branch_policies"):
+        return not any(_matches_every_branch(pattern) for pattern in branch_policies(ctx, name))
+    return bool(policy.get("protected_branches"))
 
 
 def kept_protections(environment: dict[str, Any]) -> dict[str, Any]:
@@ -110,8 +121,8 @@ def ensure_environment(ctx: Context, environment: dict[str, Any] | None, custom_
     _api(ctx, "PUT", _base(ctx), body)
 
 
-def branch_policies(ctx: Context) -> list[str]:
-    found = _api(ctx, "GET", f"{_base(ctx)}/deployment-branch-policies?per_page=100", missing_ok=True)
+def branch_policies(ctx: Context, environment: str | None = None) -> list[str]:
+    found = _api(ctx, "GET", f"{_base(ctx, environment)}/deployment-branch-policies?per_page=100", missing_ok=True)
     if not isinstance(found, dict):
         return []
     return [str(item["name"]) for item in found.get("branch_policies", []) if item.get("type", "branch") == "branch"]

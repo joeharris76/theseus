@@ -16,7 +16,7 @@ from typing import Any
 
 from theseus_reviewer.infra.config import InfraConfig
 from theseus_reviewer.infra.plan import Context, open_context
-from theseus_reviewer.infra.store import FileStore, Secret
+from theseus_reviewer.infra.store import FileStore, ScopedStore, Secret
 from theseus_reviewer.infra.tailscale import standardize
 
 from .example import EXAMPLE, write_policy
@@ -279,9 +279,14 @@ def _text_response(text: str, etag: str) -> Any:
     return HttpResponse(200, {"etag": etag}, text.encode())
 
 
+def scoped_store(world: World) -> ScopedStore:
+    """The example repository's view of the world's file store."""
+    return ScopedStore(FileStore(Path(world.infra["store"]["dir"])), "Example-Org/example", "review")
+
+
 def seed_store_directly(config: InfraConfig, **values: str) -> None:
     assert config.store.directory is not None
-    store = FileStore(config.store.directory)
+    store = ScopedStore(FileStore(config.store.directory), config.github.repository, config.github.environment)
     for name, value in values.items():
         store.put(name, Secret(value))
 

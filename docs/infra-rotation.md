@@ -15,7 +15,7 @@ together). Names that cannot rotate, such as a literal or the gateway URL, are r
 For each credential, in this order:
 
 1. Create the new credential at the provider and record its id in the state file.
-2. Store the value as `NAME.pending`.
+2. Store the value as `NAME.pending`. (Every store name here is kept under the repository and environment, as in "Store layout" in [infra.md](infra.md); the root credentials are the only shared items. A rotation never reads or changes another repository's items.)
 3. Set it in every environment recorded for `NAME` (the configured environment when none is recorded yet).
 4. Health-check it.
 5. Promote it: store it as `NAME` and drop `NAME.pending`.

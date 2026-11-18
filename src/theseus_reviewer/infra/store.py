@@ -12,6 +12,7 @@ import os
 import re
 import stat
 import tempfile
+import urllib.parse
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -86,8 +87,13 @@ class Store(Protocol):
     def names(self) -> list[str]: ...
 
 
+SHARED_NAMES = frozenset({"TAILSCALE_ROOT_CLIENT_ID", "TAILSCALE_ROOT_CLIENT_SECRET", "OPENAI_ADMIN_KEY"})
+_SCOPED = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+:[A-Za-z0-9][A-Za-z0-9._-]*:" + NAME_PATTERN.pattern)
+_LEFTOVER_SUFFIXES = (".next", ".pending", ".previous")
+
+
 def check_name(name: str) -> str:
-    if NAME_PATTERN.fullmatch(name) is None:
+    if NAME_PATTERN.fullmatch(name) is None and _SCOPED.fullmatch(name) is None:
         raise StoreError(f"{name!r} is not a valid credential name")
     return name
 
@@ -112,7 +118,7 @@ class FileStore:
         return directory
 
     def _path(self, name: str) -> Path:
-        return self.directory / check_name(name)
+        return self.directory / urllib.parse.quote(check_name(name), safe="")
 
     def get(self, name: str) -> Secret | None:
         if self._checked_dir(False) is None:
@@ -154,11 +160,8 @@ class FileStore:
     def names(self) -> list[str]:
         if self._checked_dir(False) is None:
             return []
-        return sorted(
-            entry.name
-            for entry in self.directory.iterdir()
-            if entry.is_file() and NAME_PATTERN.fullmatch(entry.name) is not None
-        )
+        found = (urllib.parse.unquote(entry.name) for entry in self.directory.iterdir() if entry.is_file())
+        return sorted(name for name in found if NAME_PATTERN.fullmatch(name) or _SCOPED.fullmatch(name))
 
 
 def encode(value: str) -> str:
@@ -291,9 +294,63 @@ class KeychainStore:
             service = re.search(r'"svce"<blob>="([^"]*)"', block)
             account = re.search(r'"acct"<blob>="([^"]*)"', block)
             if service and account and service.group(1) == KEYCHAIN_SERVICE:
-                if NAME_PATTERN.fullmatch(account.group(1)):  # part items ("NAME#gen#n") are not names
+                if NAME_PATTERN.fullmatch(account.group(1)) or _SCOPED.fullmatch(
+                    account.group(1)
+                ):  # part items ("NAME#gen#n") are not names
                     found.add(account.group(1))
         return sorted(found)
+
+
+class ScopedStore:
+    """One repository's view of a store.
+
+    Every name except the shared root credentials lives under ``<repository>:<environment>:<name>``, so two
+    repositories that use the same secret names and the same Keychain or directory never see each other's values.
+    An unprefixed item with a per-repository name is refused (``check_unscoped``), never read as this repository's.
+    """
+
+    def __init__(self, base: Store, repository: str, environment: str) -> None:
+        self.base = base
+        self._prefix = f"{repository}:{environment}:"
+
+    def full_name(self, name: str) -> str:
+        return name if name in SHARED_NAMES else self._prefix + check_name(name)
+
+    def get(self, name: str) -> Secret | None:
+        return self.base.get(self.full_name(name))
+
+    def put(self, name: str, value: Secret) -> None:
+        self.base.put(self.full_name(name), value)
+
+    def delete(self, name: str) -> None:
+        self.base.delete(self.full_name(name))
+
+    def modified_at(self, name: str) -> datetime | None:
+        return self.base.modified_at(self.full_name(name))
+
+    def names(self) -> list[str]:
+        found = self.base.names()
+        mine = [name.removeprefix(self._prefix) for name in found if name.startswith(self._prefix)]
+        return sorted([*mine, *(name for name in found if name in SHARED_NAMES)])
+
+    def check_unscoped(self, configured: Sequence[str]) -> None:
+        """Refuse when the base store holds an unprefixed item named like one of this configuration's secrets."""
+        wanted = set(configured)
+        for name in self.base.names():
+            stem = name
+            for suffix in _LEFTOVER_SUFFIXES:
+                stem = stem.removesuffix(suffix)
+            if name not in SHARED_NAMES and ":" not in name and stem in wanted:
+                raise StoreError(
+                    f"the store holds an unprefixed item {name}, which could belong to any repository. Stores now "
+                    f"keep per-repository secrets as {self._prefix}<name>. Seed this repository's value with "
+                    f"'theseus infra seed {stem}', then delete the old item ({_delete_hint(name)}) after checking "
+                    "no other repository still needs it"
+                )
+
+
+def _delete_hint(name: str) -> str:
+    return f"Keychain: security delete-generic-password -s {KEYCHAIN_SERVICE} -a {name}; file store: remove the file {name}"
 
 
 def make_store(backend: str, directory: Path | None, runner: Runner = run_command) -> Store:
@@ -312,6 +369,8 @@ __all__ = [
     "FileStore",
     "KeychainStore",
     "Secret",
+    "SHARED_NAMES",
+    "ScopedStore",
     "Store",
     "StoreError",
     "check_name",
