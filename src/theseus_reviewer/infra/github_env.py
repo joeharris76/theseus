@@ -6,8 +6,6 @@ A secret value reaches ``gh secret set`` on stdin, so Theseus needs no libsodium
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -56,60 +54,29 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
-def _pattern_regex(pattern: str) -> re.Pattern[str]:
-    """A deployment branch pattern as a regex: ``*`` stops at ``/``, ``**`` crosses it, ``**/`` may be empty."""
-    out: list[str] = []
-    i, n = 0, len(pattern)
-    while i < n:
-        if pattern.startswith("**/", i):
-            out.append("(?:.*/)?")
-            i += 3
-        elif pattern.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif pattern[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif pattern[i] == "?":
-            out.append("[^/]")
-            i += 1
-        elif pattern[i] == "[" and (close := pattern.find("]", i + 2)) != -1:
-            body = pattern[i + 1 : close]
-            out.append("[" + ("^" + body[1:] if body.startswith("!") else body.replace("\\", "\\\\")) + "]")
-            i = close + 1
-        else:
-            out.append(re.escape(pattern[i]))
-            i += 1
-    try:
-        return re.compile("".join(out))
-    except re.error:
-        return re.compile(re.escape(pattern))
+GLOB_CHARACTERS = frozenset("*?[{")
 
 
-# Names no configured literal branch is likely to equal: a plain one and nested ones.
-PROBE_BRANCHES = ("zz-probe-branch", "zz-probe/branch", "zz-probe/a/b/c", "zz.probe_1/2")
+def is_open_pattern(pattern: str) -> bool:
+    """Whether a branch pattern lets a contributor choose the branch name that deploys.
 
-
-def matches_every_branch(patterns: Sequence[str]) -> bool:
-    """Whether the union of the patterns matches every probe branch, so it is no restriction."""
-    if any(pattern and set(pattern) == {"*"} for pattern in patterns):
-        return True  # a bare wildcard lets any branch name without a slash deploy; that is no restriction either
-    regexes = [_pattern_regex(pattern) for pattern in patterns]
-    return all(any(regex.fullmatch(probe) for regex in regexes) for probe in PROBE_BRANCHES)
+    That is so when its first path segment (the text before the first ``/``) holds any glob character.
+    """
+    return any(char in GLOB_CHARACTERS for char in pattern.split("/", 1)[0]) or not pattern
 
 
 def is_restricted(ctx: Context, environment: dict[str, Any] | None, name: str | None = None) -> bool:
     """Whether deployments to the environment are limited to chosen branches.
 
     Protected branches count. Custom policies count only from a successful listing of all its pages whose
-    branch patterns do not together match every branch; a missing or unreadable listing is unrestricted.
+    branch patterns all have a literal first path segment; a missing or unreadable listing is unrestricted.
     """
     policy = environment.get("deployment_branch_policy") if environment else None
     if not isinstance(policy, dict):
         return False
     if policy.get("custom_branch_policies"):
         listed = list_branch_policies(ctx, name)
-        return listed is not None and not matches_every_branch([n for n, kind in listed if kind == "branch"])
+        return listed is not None and not any(is_open_pattern(n) for n, kind in listed if kind == "branch")
     return bool(policy.get("protected_branches"))
 
 

@@ -186,19 +186,18 @@ def test_status_and_delivery_treat_a_wildcard_policy_as_open(world_dir: World, m
     assert code == 3 and world.secrets == {}
 
 
-@pytest.mark.parametrize(
-    "policies",
-    [["**/*"], ["*", "*/**"], ["*", "**/*"], ["a*", "**"], ["develop", "*", "*/*", "*/*/*", "**/**"], ["**/"]],
-)
-def test_pattern_combinations_that_match_every_branch_are_unrestricted(world_dir: World, policies: list[str]) -> None:
-    ctx = world_dir.context()
-    # "**/" alone is not a wildcard; every other set above is.
-    assert github_env.is_restricted(ctx, _env(world_dir, policies)) is (policies == ["**/"])
+OPEN = ["*", "**", "**/*", "*/**", "*/*", "?*/**", "[a-z]*", "{a,b}*/x", "a*", "v?.?", "**/", ""]
+RESTRICTED = ["develop", "main", "release/*", "release/**", "hotfix/*/x", "v1.2", "a-b_c/d"]
 
 
-@pytest.mark.parametrize("policies", [["release/*"], ["develop", "release/**"], ["main", "hotfix/*/x"], ["v?.?"]])
-def test_real_restrictions_stay_restrictions(world_dir: World, policies: list[str]) -> None:
-    assert github_env.is_restricted(world_dir.context(), _env(world_dir, policies)) is True
+@pytest.mark.parametrize("pattern", OPEN)
+def test_a_pattern_with_a_glob_in_its_first_segment_is_open(world_dir: World, pattern: str) -> None:
+    assert github_env.is_restricted(world_dir.context(), _env(world_dir, ["develop", pattern])) is False
+
+
+@pytest.mark.parametrize("pattern", RESTRICTED)
+def test_a_literal_first_segment_is_a_restriction(world_dir: World, pattern: str) -> None:
+    assert github_env.is_restricted(world_dir.context(), _env(world_dir, ["main", pattern])) is True
 
 
 def test_a_wildcard_after_the_first_page_is_found(world_dir: World) -> None:
