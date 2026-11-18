@@ -41,7 +41,7 @@ EXAMPLE: dict[str, Any] = {
         "OPENAI_API_KEY": {"source": "openai_service_account", "project": "proj_abc", "name": "review-classifier"},
         "TYPESAFE_API_KEY": {
             "source": "store",
-            "rotator": "manual",
+            "rotator": "typesafe",
             "max_age_days": 90,
             "mirror_keychain": "TYPESAFE_API_KEY",
         },

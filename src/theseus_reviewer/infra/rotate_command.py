@@ -14,7 +14,7 @@ from typing import Any
 from . import github_env
 from .config import ConfigError
 from .plan import Context
-from .rotate import Engine, Outcome, Rotator, SetSecret
+from .rotate import STALE, STATE_KEY_PREFIX, Engine, Outcome, Rotator, SetSecret
 from .rotators import build_rotators
 from .state import State
 from .store import Secret, StoreError
@@ -146,6 +146,28 @@ def _targets(ctx: Context, rotators: Sequence[Rotator]) -> list[str]:
     return sorted(keys)
 
 
+def _stale_records(ctx: Context, selected: Sequence[Rotator]) -> list[Outcome]:
+    """Unfinished records whose kind no configured rotator owns any more (for example a Typesafe record left for a
+    secret that is now owner-seeded). They are reported, never resumed."""
+    kinds = {rotator.kind for rotator in build_rotators(ctx, ctx.config)}
+    stale: list[Outcome] = []
+    for key, record in sorted(ctx.state.providers.items()):
+        kind = key.removeprefix(STATE_KEY_PREFIX)
+        if key.startswith(STATE_KEY_PREFIX) and kind not in kinds:
+            names = tuple(record.get("names", "").split(",")) if record.get("names") else ()
+            stale.append(
+                Outcome(
+                    kind,
+                    names,
+                    STALE,
+                    f"an unfinished {kind} rotation (phase {record.get('phase', '?')}) is recorded but no secret "
+                    f"is configured to rotate that way now; inspect {ctx.state.path}, finish or discard it by hand "
+                    "and remove the record",
+                )
+            )
+    return stale
+
+
 def _apply(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool) -> Report:
     if not resume:
         for key in _targets(ctx, rotators):
@@ -154,9 +176,9 @@ def _apply(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: boo
                 body = json.dumps({"applied": False, "refused": problem}) if as_json else f"refused: {problem}"
                 return Report(EXIT_FAILED, ctx.redactor.scrub(body))
     engine = Engine(ctx.store, ctx.state, ctx.redactor, _setter(ctx), ctx.config.environment_key)
-    outcomes: list[Outcome] = []
+    outcomes: list[Outcome] = _stale_records(ctx, rotators)
     for rotator in rotators:
-        if resume and not engine.pending_record(rotator):
+        if resume and not engine.pending_record(rotator) and rotator.kind != "owner-seeded":
             outcomes.append(Outcome(rotator.kind, rotator.names, "unchanged", "nothing to resume"))
             continue
         outcomes.append(engine.rotate(rotator, resume=resume))
@@ -180,7 +202,11 @@ def _plan(ctx: Context, rotators: Sequence[Rotator], resume: bool, as_json: bool
     entries: list[tuple[Rotator, list[str]]] = []
     for rotator in rotators:
         record = engine.pending_record(rotator)
-        if record:
+        if record and engine.record_problem(rotator, record):
+            entries.append(
+                (rotator, [f"{engine.record_problem(rotator, record)}; a rotation would report it as stale"])
+            )
+        elif record:
             phase = record.get("phase", "?")
             step = {
                 "promoted": "revoke the old credential",
