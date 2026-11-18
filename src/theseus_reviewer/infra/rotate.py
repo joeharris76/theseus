@@ -135,7 +135,7 @@ class Engine:
         """Why an unfinished record must not be acted on by ``rotator``; ``None`` when it is this rotator's own."""
         names = record.get("names")
         if names is not None:
-            if names == ",".join(rotator.names):
+            if sorted(names.split(",")) == sorted(rotator.names):
                 return None
             return (
                 f"an unfinished {rotator.kind} rotation is recorded for {names.replace(',', ', ')}, not for "

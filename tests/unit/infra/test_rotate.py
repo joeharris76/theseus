@@ -458,6 +458,20 @@ def test_tailscale_failed_revoke_keeps_the_new_client_and_resume_finishes(world:
     assert_no_values(world, resumed)
 
 
+def test_a_record_whose_secrets_were_reordered_in_the_policy_still_resumes(world: World) -> None:
+    world.fail_delete.add(OLD["TS_OAUTH_CI_CLIENT_ID"])
+    assert rotate_now(world, *TS_NAMES).code == EXIT_FAILED
+    record = world.state.provider("rotate:tailscale")
+    record["names"] = ",".join(reversed(record["names"].split(",")))
+    world.state.set_provider("rotate:tailscale", **record)
+    world.state.save()
+    world.fail_delete.clear()
+    resumed = rotate_now(world, *TS_NAMES, resume=True)
+    assert resumed.code == EXIT_OK, resumed.text
+    assert OLD["TS_OAUTH_CI_CLIENT_ID"] not in world.ts_clients
+    assert world.state.provider("rotate:tailscale") == {}
+
+
 def test_openai_failed_revoke_keeps_the_new_key_and_resume_finishes(world: World) -> None:
     world.fail_delete.add("key_old")
     report = rotate_now(world, "OPENAI_API_KEY")
