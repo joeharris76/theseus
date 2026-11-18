@@ -300,6 +300,8 @@ def _routes(world: World, monkeypatch) -> None:  # noqa: ANN001
 
     def gh_api(call: RunCall):
         target = call.argv[-1]
+        if "/deployment-branch-policies" in target:
+            return completed(json.dumps({"total_count": 1, "branch_policies": [{"name": "develop", "type": "branch"}]}))
         if "/environments/" in target and "/secrets" not in target:
             world.environment_reads += 1
             if world.open_after_reads is not None and world.environment_reads > world.open_after_reads:

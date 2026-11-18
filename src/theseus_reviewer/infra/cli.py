@@ -46,8 +46,8 @@ class Dependencies:
 DEPENDENCIES = Dependencies()
 
 
-def _open(path: str) -> Context:
-    ctx = open_context(Path(path), DEPENDENCIES.http, DEPENDENCIES.run, DEPENDENCIES.now)
+def _open(path: str, check_unscoped: bool = True) -> Context:
+    ctx = open_context(Path(path), DEPENDENCIES.http, DEPENDENCIES.run, DEPENDENCIES.now, check_unscoped)
     DEPENDENCIES.seen.append(ctx)
     return ctx
 
@@ -140,7 +140,7 @@ def _read_value(args: argparse.Namespace) -> str:
 def command_seed(args: argparse.Namespace) -> int:
     ctx: Context | None = None
     try:
-        ctx = _open(args.config)
+        ctx = _open(args.config, check_unscoped=False)
         value = Secret(_read_value(args))
         setup.seed(ctx, args.name, value)
     except (ConfigError, StoreError, RuntimeError, OSError, ValueError) as exc:

@@ -6,6 +6,8 @@ A secret value reaches ``gh secret set`` on stdin, so Theseus needs no libsodium
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -54,20 +56,60 @@ def has_custom_policies(environment: dict[str, Any]) -> bool:
     return isinstance(policy, dict) and policy.get("custom_branch_policies") is True
 
 
-def _matches_every_branch(pattern: str) -> bool:
-    return bool(pattern) and set(pattern) == {"*"}
+def _pattern_regex(pattern: str) -> re.Pattern[str]:
+    """A deployment branch pattern as a regex: ``*`` stops at ``/``, ``**`` crosses it, ``**/`` may be empty."""
+    out: list[str] = []
+    i, n = 0, len(pattern)
+    while i < n:
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[" and (close := pattern.find("]", i + 2)) != -1:
+            body = pattern[i + 1 : close]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body.replace("\\", "\\\\")) + "]")
+            i = close + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    try:
+        return re.compile("".join(out))
+    except re.error:
+        return re.compile(re.escape(pattern))
+
+
+# Names no configured literal branch is likely to equal: a plain one and nested ones.
+PROBE_BRANCHES = ("zz-probe-branch", "zz-probe/branch", "zz-probe/a/b/c", "zz.probe_1/2")
+
+
+def matches_every_branch(patterns: Sequence[str]) -> bool:
+    """Whether the union of the patterns matches every probe branch, so it is no restriction."""
+    if any(pattern and set(pattern) == {"*"} for pattern in patterns):
+        return True  # a bare wildcard lets any branch name without a slash deploy; that is no restriction either
+    regexes = [_pattern_regex(pattern) for pattern in patterns]
+    return all(any(regex.fullmatch(probe) for regex in regexes) for probe in PROBE_BRANCHES)
 
 
 def is_restricted(ctx: Context, environment: dict[str, Any] | None, name: str | None = None) -> bool:
     """Whether deployments to the environment are limited to chosen branches.
 
-    Protected branches count. Custom policies count unless one matches every branch (``*``, ``**``).
+    Protected branches count. Custom policies count only from a successful listing of all its pages whose
+    branch patterns do not together match every branch; a missing or unreadable listing is unrestricted.
     """
     policy = environment.get("deployment_branch_policy") if environment else None
     if not isinstance(policy, dict):
         return False
     if policy.get("custom_branch_policies"):
-        return not any(_matches_every_branch(pattern) for pattern in branch_policies(ctx, name))
+        listed = list_branch_policies(ctx, name)
+        return listed is not None and not matches_every_branch([n for n, kind in listed if kind == "branch"])
     return bool(policy.get("protected_branches"))
 
 
@@ -121,11 +163,34 @@ def ensure_environment(ctx: Context, environment: dict[str, Any] | None, custom_
     _api(ctx, "PUT", _base(ctx), body)
 
 
+PAGE_SIZE = 100
+MAX_PAGES = 100
+
+
+def list_branch_policies(ctx: Context, environment: str | None = None) -> list[tuple[str, str]] | None:
+    """Every ``(name, type)`` of the environment's deployment branch policies, over all pages; ``None`` if unreadable."""
+    found: list[tuple[str, str]] = []
+    for page in range(1, MAX_PAGES + 1):
+        try:
+            data = _api(
+                ctx,
+                "GET",
+                f"{_base(ctx, environment)}/deployment-branch-policies?per_page={PAGE_SIZE}&page={page}",
+                missing_ok=True,
+            )
+        except GithubError:
+            return None
+        if not isinstance(data, dict) or not isinstance(data.get("branch_policies"), list):
+            return None
+        items = data["branch_policies"]
+        found.extend((str(item["name"]), str(item.get("type", "branch"))) for item in items)
+        if len(items) < PAGE_SIZE:
+            return found
+    return None
+
+
 def branch_policies(ctx: Context, environment: str | None = None) -> list[str]:
-    found = _api(ctx, "GET", f"{_base(ctx, environment)}/deployment-branch-policies?per_page=100", missing_ok=True)
-    if not isinstance(found, dict):
-        return []
-    return [str(item["name"]) for item in found.get("branch_policies", []) if item.get("type", "branch") == "branch"]
+    return [name for name, kind in list_branch_policies(ctx, environment) or [] if kind == "branch"]
 
 
 def add_branch_policy(ctx: Context, name: str) -> None:

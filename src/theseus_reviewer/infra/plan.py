@@ -62,13 +62,15 @@ def open_context(
     http: HttpTransport | None = None,
     run: Runner | None = None,
     now: Callable[[], datetime] | None = None,
+    check_unscoped: bool = True,
 ) -> Context:
     """Load a policy file's ``infra:`` section, its store and state, and register every stored value for redaction."""
     config = load_infra(config_path)
     runner = run or run_command
     base = make_store(config.store.backend, config.store.directory, runner)
     store = ScopedStore(base, config.github.repository, config.github.environment)
-    store.check_unscoped([spec.name for spec in config.secrets])
+    if check_unscoped:  # seed is how an owner migrates a leftover, so it opens the store without the check
+        store.check_unscoped([spec.name for spec in config.secrets])
     ctx = Context(
         config=config,
         store=store,

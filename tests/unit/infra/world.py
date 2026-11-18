@@ -62,6 +62,8 @@ class World:
     host_fail: bool = False
     jwt_signed_with: list[str] = field(default_factory=list)
     open_env_after_gets: int | None = None
+    policy_types: dict[str, str] = field(default_factory=dict)
+    policies_unreadable: bool = False
     env_gets: int = 0
 
     def __post_init__(self) -> None:
@@ -133,11 +135,16 @@ class World:
         if self.environment is None:
             return missing
         if rest.startswith("/deployment-branch-policies"):
+            if method == "GET" and self.policies_unreadable:
+                return completed(returncode=1, stderr="gh: Not Found (HTTP 404)")
             if method == "POST":
                 self.policies.append(body["name"])
                 return completed("{}")
-            items = [{"id": i, "name": name, "type": "branch"} for i, name in enumerate(self.policies)]
-            return completed(json.dumps({"total_count": len(items), "branch_policies": items}))
+            kinds = {**self.policy_types}
+            items = [{"id": i, "name": name, "type": kinds.get(name, "branch")} for i, name in enumerate(self.policies)]
+            page = int(re.search(r"[?&]page=(\d+)", path).group(1)) if re.search(r"[?&]page=(\d+)", path) else 1
+            window = items[(page - 1) * 100 : page * 100]
+            return completed(json.dumps({"total_count": len(items), "branch_policies": window}))
         if rest.startswith("/secrets"):
             items = [
                 {"name": name, "updated_at": at.isoformat().replace("+00:00", "Z")}

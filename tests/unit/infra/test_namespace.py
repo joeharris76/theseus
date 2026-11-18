@@ -184,3 +184,80 @@ def test_status_and_delivery_treat_a_wildcard_policy_as_open(world_dir: World, m
     assert code == 1 and data["environment_restricted"] is False
     code = main(["infra", "setup", "--apply", "--only", "TYPESAFE_API_KEY", "--config", str(world.policy_path)])
     assert code == 3 and world.secrets == {}
+
+
+@pytest.mark.parametrize(
+    "policies",
+    [["**/*"], ["*", "*/**"], ["*", "**/*"], ["a*", "**"], ["develop", "*", "*/*", "*/*/*", "**/**"], ["**/"]],
+)
+def test_pattern_combinations_that_match_every_branch_are_unrestricted(world_dir: World, policies: list[str]) -> None:
+    ctx = world_dir.context()
+    # "**/" alone is not a wildcard; every other set above is.
+    assert github_env.is_restricted(ctx, _env(world_dir, policies)) is (policies == ["**/"])
+
+
+@pytest.mark.parametrize("policies", [["release/*"], ["develop", "release/**"], ["main", "hotfix/*/x"], ["v?.?"]])
+def test_real_restrictions_stay_restrictions(world_dir: World, policies: list[str]) -> None:
+    assert github_env.is_restricted(world_dir.context(), _env(world_dir, policies)) is True
+
+
+def test_a_wildcard_after_the_first_page_is_found(world_dir: World) -> None:
+    ctx = world_dir.context()
+    environment = _env(world_dir, [f"branch-{i}" for i in range(230)] + ["*"])
+    assert github_env.is_restricted(ctx, environment) is False
+    environment = _env(world_dir, [f"branch-{i}" for i in range(230)])
+    assert github_env.is_restricted(ctx, environment) is True
+    assert len(github_env.branch_policies(ctx)) == 230
+
+
+def test_a_tag_policy_is_not_a_branch_wildcard(world_dir: World) -> None:
+    world_dir.policy_types = {"*": "tag"}
+    ctx = world_dir.context()
+    assert github_env.is_restricted(ctx, _env(world_dir, ["develop", "*"])) is True
+    assert github_env.branch_policies(ctx) == ["develop"]
+
+
+def test_an_unreadable_policy_list_is_unrestricted(world_dir: World) -> None:
+    ctx = world_dir.context()
+    environment = _env(world_dir, ["develop"])
+    world_dir.policies_unreadable = True
+    assert github_env.is_restricted(ctx, environment) is False
+
+
+def test_seed_runs_while_an_unprefixed_leftover_exists_but_setup_and_status_do_not(
+    world_dir, monkeypatch, capsys
+) -> None:  # type: ignore[no-untyped-def]
+    world = world_dir
+    world.context()
+    FileStore(Path(world.infra["store"]["dir"])).put("TYPESAFE_API_KEY", Secret("old-unprefixed"))
+    deps = infra_cli.Dependencies(
+        http=world.http, run=world.run, now=lambda: NOW, stdin=io.StringIO("SENTINEL-seed-0009")
+    )
+    monkeypatch.setattr(infra_cli, "DEPENDENCIES", deps)
+    assert main(["infra", "seed", "TYPESAFE_API_KEY", "--config", str(world.policy_path)]) == 0
+    capsys.readouterr()
+    assert scoped_store(world).get("TYPESAFE_API_KEY") == Secret("SENTINEL-seed-0009")
+    for command in ("setup", "status"):
+        assert main(["infra", command, "--config", str(world.policy_path)]) == 2
+        assert "unprefixed item TYPESAFE_API_KEY" in capsys.readouterr().err
+    assert main(["infra", "rotate", "--config", str(world.policy_path)]) == 2
+    assert "seed works while this item exists" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_a_full_run_stops_before_any_credential_when_the_policy_is_open(
+    world_dir, monkeypatch, capsys, unreadable
+) -> None:  # type: ignore[no-untyped-def]
+    world = world_dir
+    ctx = world.context()
+    world.seed_roots(ctx)
+    world.script(ctx.config)
+    _env(world, ["develop"] if unreadable else ["develop", "**/*"])
+    world.policies_unreadable = unreadable
+    deps = infra_cli.Dependencies(http=world.http, run=world.run, now=lambda: NOW, stdin=io.StringIO(""))
+    monkeypatch.setattr(infra_cli, "DEPENDENCIES", deps)
+    code = main(["infra", "setup", "--apply", "--config", str(world.policy_path)])
+    out = capsys.readouterr().out
+    assert code == 3 and "remove the wildcard policy by hand" in out
+    assert world.clients == {} and world.openai_keys == {} and world.secrets == {}
+    assert [c for c in world.http.mutating() if "oauth/token" not in c.url] == []
