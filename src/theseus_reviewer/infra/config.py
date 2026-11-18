@@ -285,7 +285,7 @@ def _secret(name: str, data: Any) -> SecretSpec:
         if rotator == "manual":
             raise ConfigError(
                 f"{where}.rotator: manual no longer names a rotator; use rotator: {TYPESAFE_ROTATOR} for a Typesafe "
-                f"key, or omit it (or write {OWNER}) for a secret only the owner seeds"
+                f"key, or rotator: {OWNER} for a secret only the owner seeds"
             )
         if rotator not in (OWNER, TYPESAFE_ROTATOR):
             raise ConfigError(f"{where}.rotator must be {OWNER} or {TYPESAFE_ROTATOR}")
