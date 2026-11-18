@@ -29,6 +29,8 @@ GATEWAY_URL = "gateway_url"
 TAILSCALE_OAUTH = "tailscale_oauth"
 OPENAI_SERVICE_ACCOUNT = "openai_service_account"
 STORE = "store"
+OWNER = "owner"
+TYPESAFE_ROTATOR = "typesafe"
 
 _SOURCE_KEYS: dict[str, frozenset[str]] = {
     LITERAL: frozenset({"source", "value"}),
@@ -273,9 +275,16 @@ def _secret(name: str, data: Any) -> SecretSpec:
             account_name=_text(item["name"], f"{where}.name"),
         )
     if source == STORE:
-        rotator = _text(item.get("rotator", "manual"), f"{where}.rotator")
-        if rotator != "manual":
-            raise ConfigError(f"{where}.rotator must be manual")
+        rotator = _text(item.get("rotator", OWNER), f"{where}.rotator")
+        if rotator == "manual":
+            raise ConfigError(
+                f"{where}.rotator: manual no longer names a rotator; use rotator: {TYPESAFE_ROTATOR} for a Typesafe "
+                f"key, or omit it (or write {OWNER}) for a secret only the owner seeds"
+            )
+        if rotator not in (OWNER, TYPESAFE_ROTATOR):
+            raise ConfigError(f"{where}.rotator must be {OWNER} or {TYPESAFE_ROTATOR}")
+        if rotator != TYPESAFE_ROTATOR and "mirror_keychain" in item:
+            raise ConfigError(f"{where}.mirror_keychain applies only to rotator: {TYPESAFE_ROTATOR}")
         return SecretSpec(
             name,
             source,

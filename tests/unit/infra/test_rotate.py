@@ -997,3 +997,41 @@ def test_the_setter_backstop_refuses_if_the_environment_opens_mid_run(world: Wor
     ] == []
     assert world.env["OPENAI_API_KEY"] == OLD["OPENAI_API_KEY"]
     assert openai_old_works(world)
+
+
+# -- a plain store secret is owner-seeded and never leaves the host ------------------------------------------------
+
+
+def with_plain_store_secret(world: World, name: str, value: str) -> None:
+    import dataclasses
+
+    from theseus_reviewer.infra.config import STORE, SecretSpec
+
+    spec = SecretSpec(name, STORE, rotator="owner", max_age_days=30)
+    world.ctx.config = dataclasses.replace(world.ctx.config, secrets=(*world.ctx.config.secrets, spec))
+    world.store.put(name, Secret(value))
+
+
+def test_a_plain_store_secret_is_never_adopted_checked_or_sent(world: World) -> None:
+    secret = "PLAIN-gateway-url-secret-nnnnnnnn"
+    with_plain_store_secret(world, "PLAIN_TOKEN", secret)
+    world.store.put("PLAIN_TOKEN.next", Secret("PLAIN-next-value-oooooooo"))
+    report = rotate_now(world, "PLAIN_TOKEN")
+    assert report.code == EXIT_OK, report.text
+    assert "unchanged" in report.text and "owner-seeded" in report.text
+    assert "theseus infra seed PLAIN_TOKEN" in report.text and "days old" in report.text
+    assert "Typesafe" not in report.text
+    assert world.http.calls == []
+    assert [c for c in world.runner.calls if c.argv[0] != "gh"] == []
+    assert stored(world, "PLAIN_TOKEN") == secret and stored(world, "PLAIN_TOKEN.next") == "PLAIN-next-value-oooooooo"
+    assert "PLAIN_TOKEN" not in world.env
+    planned = run(world.ctx, only=["PLAIN_TOKEN"], apply=False, resume=False, as_json=False)
+    assert "owner-seeded" in planned.text and "Typesafe" not in planned.text
+
+
+def test_without_only_a_plain_store_secret_sends_nothing_to_typesafe(world: World) -> None:
+    with_plain_store_secret(world, "PLAIN_TOKEN", "PLAIN-gateway-url-secret-nnnnnnnn")
+    rotate_now(world)
+    assert not [c for c in world.http.calls if "typesafe" in c.url and "PLAIN" in str(c.headers)]
+    assert not world.values_in_argv_or_urls(["PLAIN-gateway-url-secret-nnnnnnnn"])
+    assert not [c for c in world.http.calls if "PLAIN-gateway-url-secret-nnnnnnnn" in str(c.headers)]

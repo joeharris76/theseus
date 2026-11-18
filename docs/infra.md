@@ -42,7 +42,7 @@ infra:
     TS_OAUTH_CI_CLIENT_ID: {source: tailscale_oauth, field: id}
     TS_OAUTH_CI_SECRET: {source: tailscale_oauth, field: secret}
     OPENAI_API_KEY: {source: openai_service_account, project: proj_abc, name: review-classifier}
-    TYPESAFE_API_KEY: {source: store, rotator: manual, max_age_days: 90, mirror_keychain: TYPESAFE_API_KEY}
+    TYPESAFE_API_KEY: {source: store, rotator: typesafe, max_age_days: 90, mirror_keychain: TYPESAFE_API_KEY}
 ```
 
 Unknown keys are refused. Sources:
@@ -54,9 +54,9 @@ Unknown keys are refused. Sources:
 | `gateway_token`, `gateway_url` | Runs `<host_script> gateway` (the consumer's script, unchanged), reads the token file it leaves and the `gateway: published at https://…` line it prints. |
 | `tailscale_oauth` | Creates one OAuth client with the configured scopes and tag, and keeps its id and secret. The client is created only after the policy has the tag. |
 | `openai_service_account` | Creates the service account in the project (or mints another key if one was recorded), checks the key with `GET /v1/models`, and keeps it. A key OpenAI rejects is revoked and not stored. |
-| `store` | The owner supplies the value with `seed`. `max_age_days` makes `status` report its age. `rotator: manual` is the only rotator. |
+| `store` | The owner supplies the value with `seed`. `max_age_days` makes `status` report its age. `rotator` is `owner` (the default: `rotate` only reports its age and never sends it anywhere) or `typesafe` (the secret is a Typesafe API key, which `rotate` may adopt and check against Typesafe). The earlier `rotator: manual` is refused. |
 
-`mirror_keychain` names the legacy Keychain service the same key is also kept under; setup parses it and does not read that item.
+`mirror_keychain` applies only to `rotator: typesafe`; it names the legacy Keychain service the same key is also kept under; setup parses it and does not read that item.
 
 ### Stores
 
