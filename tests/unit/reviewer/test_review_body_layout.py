@@ -690,3 +690,20 @@ def test_an_indented_or_prefixed_fence_is_escaped_and_the_details_block_closes_o
     assert not real
     body = _wrapped(text)
     assert body.count("</details>") == 1 and body.index("</details>") < body.index("AFTER")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[label\n]: https://x.test/a",
+        "[a\nb\nc]: ./relative",
+        "> [label\n> ]: ./relative",
+        "- [label\n]: ./relative",
+    ],
+)
+def test_neutralize_defuses_a_reference_definition_whose_label_spans_lines(raw: str) -> None:
+    assert layout.neutralize(raw).startswith(raw[: len(raw) - len(raw.lstrip("> -"))] + "\\[")
+
+
+def test_neutralize_leaves_a_bracket_with_a_blank_line_before_the_colon_alone() -> None:
+    assert layout.neutralize("[label\n\n]: x") == "[label\n\n]: x"

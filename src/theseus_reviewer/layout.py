@@ -40,8 +40,12 @@ _PROSE_FENCE = re.compile(r"^((?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*)(`{3,}|~{3,})
 _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 # A heading may also sit behind list markers ("- # x", "1. ## x"), where GitHub renders it inside the item.
 _HEADING = re.compile(r"^((?:[ \t]{0,3}(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
-# A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link.
-_REFERENCE = re.compile(r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=[^\]\n]*\]:)", re.MULTILINE)
+# A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link. Its label may
+# span lines as long as none of them is blank.
+_REFERENCE = re.compile(
+    r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=(?:[^\]\n]|\n(?![ \t]*(?:\n|$)))*\]:)",
+    re.MULTILINE,
+)
 _LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]|$)")
 _LABEL = re.compile(r"^(Problem|Impact|Fix):(?=\s|$)")
 _INDENTED = re.compile(r"^(?: {4,}|\t)")

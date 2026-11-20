@@ -46,9 +46,15 @@ def _head_lines(workspace: Path | str | None, path: str) -> list[str] | None:
     if workspace is None:
         return None
     root = Path(workspace).resolve()
-    target = (root / path).resolve()
-    if root != target and root not in target.parents or not target.is_file() or target.is_symlink():
+    candidate = root / path
+    target = candidate.resolve()
+    if root != target and root not in target.parents or not target.is_file():
         return None
+    part = candidate
+    while part != root:
+        if part.is_symlink():
+            return None
+        part = part.parent
     try:
         text = target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

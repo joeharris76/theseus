@@ -1144,3 +1144,20 @@ def test_the_loader_refuses_a_store_secret_without_a_rotator_and_builds_the_righ
     del data["secrets"]["GATEWAY_URL_COPY"]["rotator"]
     with pytest.raises(ConfigError, match="needs rotator: typesafe"):
         parse_infra(data, tmp_path / ".github" / "review.yml")
+
+
+def test_rotate_reads_the_environment_through_the_shared_helper_and_refuses_when_unreadable(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from theseus_reviewer.infra import github_env
+
+    asked: list[str | None] = []
+
+    def unreadable(ctx: object, environment: str | None = None) -> None:
+        asked.append(environment)
+        raise github_env.GithubError("boom")
+
+    monkeypatch.setattr(github_env, "get_environment", unreadable)
+    report = rotate_now(world)
+    assert report.code == EXIT_FAILED and "cannot read environment" in report.text
+    assert asked and mutating_calls(world) == []

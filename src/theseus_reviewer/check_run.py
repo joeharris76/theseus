@@ -27,16 +27,20 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - len(TRUNCATED)].rstrip() + TRUNCATED
 
 
+def _plain(text: str, *, keep_lines: bool = False) -> str:
+    return text.strip() if keep_lines else " ".join(text.split())
+
+
 def annotation(finding: Finding, defect_id: str | None) -> dict[str, Any]:
     label = f"{defect_id} · " if defect_id else ""
-    title = f"{finding.severity} · {label}{layout.neutralize_inline(finding.title)}"
+    title = f"{finding.severity} · {label}{_plain(finding.title)}"
     return {
         "path": layout.plain_path(finding.file),
         "start_line": finding.line,
         "end_line": max(finding.end_line or finding.line, finding.line),
         "annotation_level": LEVELS.get(finding.severity, "warning"),
         "title": _cut(title, MAX_TITLE),
-        "message": _cut(f"{layout.neutralize(finding.detail).rstrip()}\n\n{MIRROR_NOTE}", MAX_MESSAGE),
+        "message": _cut(f"{_plain(finding.detail, keep_lines=True)}\n\n{MIRROR_NOTE}", MAX_MESSAGE),
     }
 
 
