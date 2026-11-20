@@ -40,8 +40,11 @@ _PROSE_FENCE = re.compile(r"^((?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*)(`{3,}|~{3,})
 _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 # A heading may also sit behind list markers ("- # x", "1. ## x"), where GitHub renders it inside the item.
 _HEADING = re.compile(r"^((?:[ \t]{0,3}(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
-# A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link.
-_REFERENCE = re.compile(r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=[^\]\n]*\]:)", re.MULTILINE)
+# A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link. Its label may
+# span lines, hold escapes and be long, and a renderer measures its length after stripping indentation and quote
+# markers, so no pattern over the raw text can say reliably which line-start "[" opens one. Every "[" that begins a
+# prose line after its container prefix is escaped instead; "\[" renders as "[", so escaping extra ones is harmless.
+_REFERENCE = re.compile(r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[", re.MULTILINE)
 _LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]|$)")
 _LABEL = re.compile(r"^(Problem|Impact|Fix):(?=\s|$)")
 _INDENTED = re.compile(r"^(?: {4,}|\t)")
@@ -76,13 +79,14 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
 def _indented_code_rows(rows: Sequence[str]) -> frozenset[int]:
     """Rows that GitHub renders as an indented code block: indented 4+ columns, after a blank line, outside any list.
 
-    Anything uncertain (a list item may be open, a paragraph may continue) is left out, so it is escaped.
+    Anything uncertain (a list item may be open, a paragraph may continue, the first row may continue a block of
+    the text this one is joined to) is left out, so it is escaped. Only spaces and tabs make a row blank.
     """
     code: set[int] = set()
     in_list = False
-    after_blank = True
+    after_blank = False
     for index, row in enumerate(rows):
-        if not row.strip():
+        if not row.strip(" \t"):
             after_blank = True
             continue
         if _INDENTED.match(row):
@@ -150,9 +154,11 @@ def neutralize(text: str) -> str:
     """Make model-written text inert inside the review body.
 
     It can no longer open or close a collapsible, start a comment or heading, or turn a list item into a task
-    list checkbox (ticking one would edit the review, and an edited review holds the pull request).
+    list checkbox (ticking one would edit the review, and an edited review holds the pull request). A renderer
+    treats a lone carriage return as a line break, so line endings are normalised to newlines before any line is
+    inspected.
     """
-    return _outside_code(_RAW_TAG.sub("&lt;", display_path(text)))
+    return _outside_code(_RAW_TAG.sub("&lt;", display_path(text.replace("\r\n", "\n").replace("\r", "\n"))))
 
 
 def neutralize_inline(text: str, *, leading: bool = True) -> str:

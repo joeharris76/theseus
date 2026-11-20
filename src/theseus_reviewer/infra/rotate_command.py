@@ -53,12 +53,11 @@ def _environment_problem(ctx: Context, key: str) -> str | None:
     repo, _, environment = key.partition(":")
     if repo != repository or not environment:
         return f"{key} is not an environment of {repository}"
-    result = ctx.run(["gh", "api", "-X", "GET", "-H", github_env.ACCEPT, f"repos/{repo}/environments/{environment}"])
     try:
-        found = json.loads(result.stdout) if result.returncode == 0 else None
-    except ValueError:
+        found = github_env.get_environment(ctx, environment)
+    except github_env.GithubError:
         found = None
-    if not isinstance(found, dict):
+    if not found:
         return f"cannot read environment {key}, so no credential is created or delivered"
     if not github_env.is_restricted(ctx, found, environment):
         return f"environment {key} allows deployments from every branch, so no credential is created or delivered"

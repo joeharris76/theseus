@@ -402,3 +402,31 @@ def test_the_plan_records_the_brief_flags_and_the_blocked_paths_only_when_a_flag
     both = cli._brief_plan(_flagged(structured_findings=True, suggestions=True), files, matchers)
     assert both["brief_rules"] == {"structured_findings": True, "suggestions": True}
     assert both["suggestion_blocked"] == ["core/sound/a.py"]
+
+
+def test_a_symlinked_file_inside_the_workspace_gets_no_suggestion(tmp_path: Path) -> None:
+    (tmp_path / "real.txt").write_text(HEAD_TEXT, encoding="utf-8")
+    linked = tmp_path / CHECKER
+    linked.parent.mkdir(parents=True, exist_ok=True)
+    linked.symlink_to(tmp_path / "real.txt")
+    plan: dict[str, Any] = {"head_sha": "a" * 40, "brief_rules": {"suggestions": True}, "suggestion_blocked": []}
+    body = report._review_comment(_suggesting(), COMMENTABLE, "D1", 1, plan, tmp_path)["body"]
+    assert "```suggestion" not in body
+
+
+def test_a_file_under_a_symlinked_directory_gets_no_suggestion(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "f.txt").write_text(HEAD_TEXT, encoding="utf-8")
+    (tmp_path / "linkdir").symlink_to(real, target_is_directory=True)
+    from theseus_reviewer import suggestions
+
+    assert suggestions._head_lines(tmp_path, "linkdir/f.txt") is None
+    assert suggestions._head_lines(tmp_path, "real/f.txt") is not None
+
+
+def test_an_absolute_path_gets_no_suggestion_even_when_it_resolves_inside_the_workspace(tmp_path: Path) -> None:
+    from theseus_reviewer import suggestions
+
+    _workspace(tmp_path)
+    assert suggestions._head_lines(tmp_path, str(tmp_path / CHECKER)) is None

@@ -290,3 +290,11 @@ def test_a_refused_write_raises_for_the_caller_to_swallow(api: FakeApi) -> None:
     api.fail = True
     with pytest.raises(github.GitHubError):
         _sink().update_dashboard(REPO, 7, HEAD, "benchbox-review", _rec(_defect(1)))
+
+
+def test_the_most_recent_of_several_threads_for_one_finding_is_linked() -> None:
+    threads = [
+        _thread("D1", "https://github.com/o/r/pull/7#old"),
+        _thread("D1", "https://github.com/o/r/pull/7#new"),
+    ]
+    assert dashboard.thread_urls(threads, BOT.removesuffix("[bot]"), 1) == {"D1": "https://github.com/o/r/pull/7#new"}

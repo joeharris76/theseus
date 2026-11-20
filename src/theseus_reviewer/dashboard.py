@@ -34,7 +34,11 @@ def _cell(text: str) -> str:
 
 
 def thread_urls(threads: Sequence[Mapping[str, Any]], bot_login: str, cycle: int) -> dict[str, str]:
-    """Finding id to the url of the bot's thread that carries that finding in ``cycle``."""
+    """Finding id to the url of the bot's thread that carries that finding in ``cycle``.
+
+    GitHub returns review threads in creation order. That order is observed, not documented, and no thread field
+    carries a timestamp, so when a finding has several the last one is taken as the most recent.
+    """
     found: dict[str, str] = {}
     for thread in threads:
         if thread.get("author_type") != "Bot" or (thread.get("author") or "").removesuffix("[bot]") != bot_login:
@@ -42,7 +46,7 @@ def thread_urls(threads: Sequence[Mapping[str, Any]], bot_login: str, cycle: int
         marker = protocol.thread_finding(thread.get("body") or "")
         url = thread.get("url")
         if marker is not None and marker[0] == cycle and isinstance(url, str) and url.startswith("https://"):
-            found.setdefault(marker[1], url)
+            found[marker[1]] = url
     return found
 
 

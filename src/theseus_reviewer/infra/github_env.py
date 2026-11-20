@@ -44,8 +44,8 @@ def _base(ctx: Context, environment: str | None = None) -> str:
     return f"repos/{github.repository}/environments/{environment or github.environment}"
 
 
-def get_environment(ctx: Context) -> dict[str, Any] | None:
-    found = _api(ctx, "GET", _base(ctx), missing_ok=True)
+def get_environment(ctx: Context, environment: str | None = None) -> dict[str, Any] | None:
+    found = _api(ctx, "GET", _base(ctx, environment), missing_ok=True)
     return found if isinstance(found, dict) else None
 
 

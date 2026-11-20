@@ -202,3 +202,13 @@ def test_the_real_sink_refuses_without_a_checks_token_and_the_run_is_unaffected(
 def test_the_checks_token_comes_from_its_own_variable(tmp_path: Path) -> None:
     assert _environment(tmp_path, CHECKS_TOKEN="checks").checks_token == "checks"
     assert _environment(tmp_path).checks_token == ""
+
+
+def test_annotation_text_is_plain_and_carries_no_html_entity(policy: Policy) -> None:
+    verdict = _v("x", [_defect("Use <tag> here", 40, "call <tag> & <details> now", severity="High")])
+    final = _finalize(policy, _protocol_plan(policy), verdict, kind=selection.FAIL)
+    mirror = check_run.payload({"head_sha": HEAD}, final.threadless)
+    assert mirror is not None
+    note = mirror["annotations"][0]
+    assert "&lt;" not in note["title"] and "&lt;" not in note["message"]
+    assert "<tag>" in note["title"] and "<details>" in note["message"]

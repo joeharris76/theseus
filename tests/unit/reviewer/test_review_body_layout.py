@@ -690,3 +690,94 @@ def test_an_indented_or_prefixed_fence_is_escaped_and_the_details_block_closes_o
     assert not real
     body = _wrapped(text)
     assert body.count("</details>") == 1 and body.index("</details>") < body.index("AFTER")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[label\n]: https://x.test/a",
+        "[a\nb\nc]: ./relative",
+        "> [label\n> ]: ./relative",
+        "- [label\n]: ./relative",
+        "[a\\]b]: ./relative",
+        "[a\\]\nb]: ./relative",
+        "[a\\\nb]: ./relative",
+    ],
+)
+def test_neutralize_defuses_a_reference_definition_whose_label_spans_lines(raw: str) -> None:
+    assert layout.neutralize(raw).startswith(raw[: len(raw) - len(raw.lstrip("> -"))] + "\\[")
+
+
+def test_neutralize_escapes_a_line_start_bracket_even_when_no_definition_can_form() -> None:
+    assert layout.neutralize("[label\n\n]: x") == "\\[label\n\n]: x"
+
+
+@pytest.mark.parametrize("prefix", ["", "> "])
+def test_neutralize_of_many_unclosed_brackets_escapes_every_line_start(prefix: str) -> None:
+    text = "\n".join(f"{prefix}[x" for _ in range(20_000))
+    expected = "\n".join(f"{prefix}\\[x" for _ in range(20_000))
+    assert layout.neutralize(text) == expected or pytest.fail("20k line-start brackets were not all escaped")
+
+
+def test_neutralize_defuses_a_label_of_a_thousand_characters() -> None:
+    raw = f"[{'a' * 1000}]: /u"
+    assert layout.neutralize(raw) == f"\\{raw}"
+
+
+def test_neutralize_defuses_a_quoted_label_spread_over_many_lines() -> None:
+    raw = "> [" + "\n> ".join("a" * 99 for _ in range(10)) + "]: /u"
+    assert layout.neutralize(raw) == f"> \\{raw[2:]}"
+
+
+def test_neutralize_defuses_a_label_continued_after_wide_padding() -> None:
+    raw = "[a\n" + " " * 4000 + "b]: /u"
+    assert layout.neutralize(raw).startswith("\\[a\n")
+
+
+def test_neutralize_defuses_a_deeply_quoted_label_longer_than_the_raw_scan_could_cover() -> None:
+    for depth in (4, 8):
+        prefix = "> " * depth
+        raw = prefix + "[" + ("\n" + prefix).join(["a"] * 480) + "]: /u"
+        assert layout.neutralize(raw).startswith(f"{prefix}\\[a\n")
+
+
+def test_neutralize_does_not_escape_an_already_escaped_bracket() -> None:
+    assert layout.neutralize("\\[a]: /u") == "\\[a]: /u"
+
+
+def test_an_escaped_closing_bracket_in_a_label_is_not_matched_by_the_single_line_pattern() -> None:
+    assert layout.neutralize("[a\\]b]: /u") == "\\[a\\]b]: /u"
+
+
+def test_neutralize_defuses_a_reference_definition_behind_bare_carriage_returns() -> None:
+    out = layout.neutralize("x\r\r[zz]: /u\r\rsee [zz]")
+    assert "\r" not in out and "\n\\[zz]: /u\n" in out
+
+
+def test_neutralize_escapes_a_heading_behind_a_bare_carriage_return() -> None:
+    out = layout.neutralize("x\r# Title\r\n## Two")
+    assert "\r" not in out and "\n\\# Title\n\\## Two" in out
+
+
+def test_neutralize_escapes_a_line_start_bracket_even_in_indented_code() -> None:
+    assert layout.neutralize("text\n\n    [1, 2],") == "text\n\n    \\[1, 2],"
+
+
+@pytest.mark.parametrize("blank", ["\u3000", "\xa0", "\u2028"])
+def test_a_non_blank_unicode_space_row_does_not_make_indented_text_code(blank: str) -> None:
+    raw = f"- item\n{blank}\nfoo\n\n    [zz]: /attacker/x\n\nsee [zz]"
+    assert "\\[zz]: /attacker/x" in layout.neutralize(raw)
+    fenced = f"- item\n{blank}\nfoo\n\n    ```\n    x"
+    assert "    \\```" in layout.neutralize(fenced)
+
+
+def test_the_first_row_of_a_call_is_never_taken_for_indented_code() -> None:
+    assert layout.neutralize("    [zz]: /attacker/x\n\nsee [zz]").startswith("    \\[zz]")
+    assert layout.neutralize("    ```\nx").startswith("    \\```")
+
+
+def test_a_long_title_then_detail_in_one_finding_cannot_open_a_definition() -> None:
+    lines = report._item(
+        "High", "D1", "A" * 95 + "\n- item", "a.py", 1, None, layout.neutralize("    [zz]: /attacker/x\n\nsee [zz]")
+    )
+    assert "\\[zz]: /attacker/x" in "\n".join(lines)
