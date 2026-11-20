@@ -114,7 +114,10 @@ def _prose(chunk: str) -> str:
     chunk = "\n".join(rows)
     chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
     chunk = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", chunk)
-    chunk = _REFERENCE.sub(lambda match: f"{match.group(1)}\\[", chunk)
+    chunk = "\n".join(
+        row if index in code else _REFERENCE.sub(lambda match: f"{match.group(1)}\\[", row)
+        for index, row in enumerate(chunk.split("\n"))
+    )
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 
 
@@ -153,9 +156,11 @@ def neutralize(text: str) -> str:
     """Make model-written text inert inside the review body.
 
     It can no longer open or close a collapsible, start a comment or heading, or turn a list item into a task
-    list checkbox (ticking one would edit the review, and an edited review holds the pull request).
+    list checkbox (ticking one would edit the review, and an edited review holds the pull request). A renderer
+    treats a lone carriage return as a line break, so line endings are normalised to newlines before any line is
+    inspected.
     """
-    return _outside_code(_RAW_TAG.sub("&lt;", display_path(text)))
+    return _outside_code(_RAW_TAG.sub("&lt;", display_path(text.replace("\r\n", "\n").replace("\r", "\n"))))
 
 
 def neutralize_inline(text: str, *, leading: bool = True) -> str:

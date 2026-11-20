@@ -747,3 +747,18 @@ def test_neutralize_does_not_escape_an_already_escaped_bracket() -> None:
 
 def test_an_escaped_closing_bracket_in_a_label_is_not_matched_by_the_single_line_pattern() -> None:
     assert layout.neutralize("[a\\]b]: /u") == "\\[a\\]b]: /u"
+
+
+def test_neutralize_defuses_a_reference_definition_behind_bare_carriage_returns() -> None:
+    out = layout.neutralize("x\r\r[zz]: /u\r\rsee [zz]")
+    assert "\r" not in out and "\n\\[zz]: /u\n" in out
+
+
+def test_neutralize_escapes_a_heading_behind_a_bare_carriage_return() -> None:
+    out = layout.neutralize("x\r# Title\r\n## Two")
+    assert "\r" not in out and "\n\\# Title\n\\## Two" in out
+
+
+def test_neutralize_leaves_a_line_start_bracket_in_an_indented_code_block_alone() -> None:
+    raw = "text\n\n        [1, 2],\n        [3, 4],\n\nmore"
+    assert layout.neutralize(raw) == raw
