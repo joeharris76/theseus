@@ -57,7 +57,7 @@ def _environment_problem(ctx: Context, key: str) -> str | None:
         found = github_env.get_environment(ctx, environment)
     except github_env.GithubError:
         found = None
-    if found is None:
+    if not found:
         return f"cannot read environment {key}, so no credential is created or delivered"
     if not github_env.is_restricted(ctx, found, environment):
         return f"environment {key} allows deployments from every branch, so no credential is created or delivered"

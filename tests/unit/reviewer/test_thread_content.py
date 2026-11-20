@@ -423,3 +423,10 @@ def test_a_file_under_a_symlinked_directory_gets_no_suggestion(tmp_path: Path) -
 
     assert suggestions._head_lines(tmp_path, "linkdir/f.txt") is None
     assert suggestions._head_lines(tmp_path, "real/f.txt") is not None
+
+
+def test_an_absolute_path_gets_no_suggestion_even_when_it_resolves_inside_the_workspace(tmp_path: Path) -> None:
+    from theseus_reviewer import suggestions
+
+    _workspace(tmp_path)
+    assert suggestions._head_lines(tmp_path, str(tmp_path / CHECKER)) is None

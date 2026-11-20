@@ -699,6 +699,9 @@ def test_an_indented_or_prefixed_fence_is_escaped_and_the_details_block_closes_o
         "[a\nb\nc]: ./relative",
         "> [label\n> ]: ./relative",
         "- [label\n]: ./relative",
+        "[a\\]b]: ./relative",
+        "[a\\]\nb]: ./relative",
+        "[a\\\nb]: ./relative",
     ],
 )
 def test_neutralize_defuses_a_reference_definition_whose_label_spans_lines(raw: str) -> None:
@@ -707,3 +710,11 @@ def test_neutralize_defuses_a_reference_definition_whose_label_spans_lines(raw: 
 
 def test_neutralize_leaves_a_bracket_with_a_blank_line_before_the_colon_alone() -> None:
     assert layout.neutralize("[label\n\n]: x") == "[label\n\n]: x"
+
+
+@pytest.mark.parametrize("prefix", ["", "> "])
+def test_neutralize_of_many_unclosed_brackets_is_complete_and_correct(prefix: str) -> None:
+    text = "\n".join(f"{prefix}[x" for _ in range(20_000))
+    assert layout.neutralize(text) == text
+    tail = f"{prefix}[label]: ./relative"
+    assert layout.neutralize(f"{text}\n{tail}").endswith(f"{prefix}\\[label]: ./relative")

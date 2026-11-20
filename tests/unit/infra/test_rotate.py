@@ -1161,3 +1161,10 @@ def test_rotate_reads_the_environment_through_the_shared_helper_and_refuses_when
     report = rotate_now(world)
     assert report.code == EXIT_FAILED and "cannot read environment" in report.text
     assert asked and mutating_calls(world) == []
+
+
+def test_an_empty_environment_body_is_unreadable_not_open(world: World) -> None:
+    world.environments["review"] = {}
+    report = rotate_now(world)
+    assert report.code == EXIT_FAILED and "cannot read environment" in report.text
+    assert "every branch" not in report.text and mutating_calls(world) == []

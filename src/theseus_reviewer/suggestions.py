@@ -45,13 +45,15 @@ def blocked_paths(paths: Iterable[str], policy: Policy, matchers: Matchers) -> l
 def _head_lines(workspace: Path | str | None, path: str) -> list[str] | None:
     if workspace is None:
         return None
+    if Path(path).is_absolute():
+        return None
     root = Path(workspace).resolve()
     candidate = root / path
     target = candidate.resolve()
     if root != target and root not in target.parents or not target.is_file():
         return None
     part = candidate
-    while part != root:
+    while part != root and part != part.parent:
         if part.is_symlink():
             return None
         part = part.parent

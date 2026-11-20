@@ -36,7 +36,8 @@ def _cell(text: str) -> str:
 def thread_urls(threads: Sequence[Mapping[str, Any]], bot_login: str, cycle: int) -> dict[str, str]:
     """Finding id to the url of the bot's thread that carries that finding in ``cycle``.
 
-    Threads arrive oldest first, so when a finding has several the last one is the most recent and wins.
+    GitHub returns review threads in creation order. That order is observed, not documented, and no thread field
+    carries a timestamp, so when a finding has several the last one is taken as the most recent.
     """
     found: dict[str, str] = {}
     for thread in threads:
