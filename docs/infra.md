@@ -102,6 +102,21 @@ An existing environment that already uses custom deployment branch policies is l
 
 Exit codes: `0` done or nothing to do; `1` an action failed, or `status` found drift (something due, blocked or aged); `2` unusable configuration, read or input; `3` owner action is still needed.
 
+### Make targets
+
+From a checkout of this repository, three targets run the commands above against `.github/review.yml`. They run the Theseus pinned in `.github/theseus-lock.json` at `HEAD`, not the working tree: the committed `src/theseus_reviewer/bootstrap.py` at `HEAD` (read with `git show`, so uncommitted edits never run) installs and hash-verifies that build, as the workflows do. They run from the repository root so relative paths in the `infra:` section resolve.
+
+```sh
+make review-infra-status
+make review-infra-setup              # dry run
+make review-infra-setup APPLY=1      # adds --apply
+make review-infra-rotate             # dry run
+make review-infra-rotate APPLY=1     # adds --apply
+make review-infra-setup ONLY=TYPESAFE_API_KEY   # adds --only
+```
+
+`status` reads only. `setup` and `rotate` change nothing unless `APPLY=1` is set. `APPLY` must be unset, empty or exactly `1`; any other value (`0`, `false`, `yes`) is refused before anything runs. `ONLY` is passed to the shell quoted, as one `--only` value. The locked build must already support `theseus infra`; the lock is the commit at `HEAD`, so commit a lock change before expecting a target to use it.
+
 ### Seeding
 
 `seed` reads the value from a hidden prompt, from stdin when stdin is not a terminal, or from `--from-file`. It never takes a value in argv. A value on one line loses its trailing newline; a multi-line value (a PEM) is kept exactly.
