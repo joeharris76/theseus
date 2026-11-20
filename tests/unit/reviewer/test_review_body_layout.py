@@ -708,16 +708,15 @@ def test_neutralize_defuses_a_reference_definition_whose_label_spans_lines(raw: 
     assert layout.neutralize(raw).startswith(raw[: len(raw) - len(raw.lstrip("> -"))] + "\\[")
 
 
-def test_neutralize_leaves_a_bracket_with_a_blank_line_before_the_colon_alone() -> None:
-    assert layout.neutralize("[label\n\n]: x") == "[label\n\n]: x"
+def test_neutralize_escapes_a_line_start_bracket_even_when_no_definition_can_form() -> None:
+    assert layout.neutralize("[label\n\n]: x") == "\\[label\n\n]: x"
 
 
 @pytest.mark.parametrize("prefix", ["", "> "])
-def test_neutralize_of_many_unclosed_brackets_is_complete_and_correct(prefix: str) -> None:
+def test_neutralize_of_many_unclosed_brackets_escapes_every_line_start(prefix: str) -> None:
     text = "\n".join(f"{prefix}[x" for _ in range(20_000))
-    assert layout.neutralize(text) == text
-    tail = f"{prefix}[label]: ./relative"
-    assert layout.neutralize(f"{text}\n{tail}").endswith(f"{prefix}\\[label]: ./relative")
+    expected = "\n".join(f"{prefix}\\[x" for _ in range(20_000))
+    assert layout.neutralize(text) == expected or pytest.fail("20k line-start brackets were not all escaped")
 
 
 def test_neutralize_defuses_a_label_of_a_thousand_characters() -> None:
@@ -728,6 +727,22 @@ def test_neutralize_defuses_a_label_of_a_thousand_characters() -> None:
 def test_neutralize_defuses_a_quoted_label_spread_over_many_lines() -> None:
     raw = "> [" + "\n> ".join("a" * 99 for _ in range(10)) + "]: /u"
     assert layout.neutralize(raw) == f"> \\{raw[2:]}"
+
+
+def test_neutralize_defuses_a_label_continued_after_wide_padding() -> None:
+    raw = "[a\n" + " " * 4000 + "b]: /u"
+    assert layout.neutralize(raw).startswith("\\[a\n")
+
+
+def test_neutralize_defuses_a_deeply_quoted_label_longer_than_the_raw_scan_could_cover() -> None:
+    for depth in (4, 8):
+        prefix = "> " * depth
+        raw = prefix + "[" + ("\n" + prefix).join(["a"] * 480) + "]: /u"
+        assert layout.neutralize(raw).startswith(f"{prefix}\\[a\n")
+
+
+def test_neutralize_does_not_escape_an_already_escaped_bracket() -> None:
+    assert layout.neutralize("\\[a]: /u") == "\\[a]: /u"
 
 
 def test_an_escaped_closing_bracket_in_a_label_is_not_matched_by_the_single_line_pattern() -> None:
