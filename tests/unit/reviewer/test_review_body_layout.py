@@ -718,3 +718,17 @@ def test_neutralize_of_many_unclosed_brackets_is_complete_and_correct(prefix: st
     assert layout.neutralize(text) == text
     tail = f"{prefix}[label]: ./relative"
     assert layout.neutralize(f"{text}\n{tail}").endswith(f"{prefix}\\[label]: ./relative")
+
+
+def test_neutralize_defuses_a_label_of_a_thousand_characters() -> None:
+    raw = f"[{'a' * 1000}]: /u"
+    assert layout.neutralize(raw) == f"\\{raw}"
+
+
+def test_neutralize_defuses_a_quoted_label_spread_over_many_lines() -> None:
+    raw = "> [" + "\n> ".join("a" * 99 for _ in range(10)) + "]: /u"
+    assert layout.neutralize(raw) == f"> \\{raw[2:]}"
+
+
+def test_an_escaped_closing_bracket_in_a_label_is_not_matched_by_the_single_line_pattern() -> None:
+    assert layout.neutralize("[a\\]b]: /u") == "\\[a\\]b]: /u"

@@ -41,10 +41,10 @@ _FENCE_RUN = re.compile(r"`{3,}|~{3,}")
 # A heading may also sit behind list markers ("- # x", "1. ## x"), where GitHub renders it inside the item.
 _HEADING = re.compile(r"^((?:[ \t]{0,3}(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]{0,3})(#{1,6})(?=[ \t]|$)", re.MULTILINE)
 # A reference definition ("[label]: destination") is invisible and turns a later "[label]" into a link. Its label may
-# span lines as long as none of them is blank, may hold backslash escapes, and is at most 999 characters, which also
-# bounds the work done at each start position.
+# span lines as long as none of them is blank, may hold backslash escapes, and is scanned for at most 4000 characters, which bounds
+# the work done at each start position. That is above any label length a renderer accepts, and escaping more is harmless.
 _REFERENCE = re.compile(
-    r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=(?:\\[^\n]|\\(?=\n)|[^\]\\\n]|\n(?![ \t]*(?:\n|$))){0,999}\]:)",
+    r"^((?:[ \t]*(?:>|(?:[-*+]|\d+[.)])(?=[ \t])))*[ \t]*)\[(?=(?:\\[^\n]|\\(?=\n)|[^\]\\\n]|\n(?![ \t]*(?:\n|$))){0,4000}\]:)",
     re.MULTILINE,
 )
 _LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])(?:[ \t]|$)")
