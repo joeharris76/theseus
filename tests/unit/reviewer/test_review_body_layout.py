@@ -759,6 +759,25 @@ def test_neutralize_escapes_a_heading_behind_a_bare_carriage_return() -> None:
     assert "\r" not in out and "\n\\# Title\n\\## Two" in out
 
 
-def test_neutralize_leaves_a_line_start_bracket_in_an_indented_code_block_alone() -> None:
-    raw = "text\n\n        [1, 2],\n        [3, 4],\n\nmore"
-    assert layout.neutralize(raw) == raw
+def test_neutralize_escapes_a_line_start_bracket_even_in_indented_code() -> None:
+    assert layout.neutralize("text\n\n    [1, 2],") == "text\n\n    \\[1, 2],"
+
+
+@pytest.mark.parametrize("blank", ["\u3000", "\xa0", "\u2028"])
+def test_a_non_blank_unicode_space_row_does_not_make_indented_text_code(blank: str) -> None:
+    raw = f"- item\n{blank}\nfoo\n\n    [zz]: /attacker/x\n\nsee [zz]"
+    assert "\\[zz]: /attacker/x" in layout.neutralize(raw)
+    fenced = f"- item\n{blank}\nfoo\n\n    ```\n    x"
+    assert "    \\```" in layout.neutralize(fenced)
+
+
+def test_the_first_row_of_a_call_is_never_taken_for_indented_code() -> None:
+    assert layout.neutralize("    [zz]: /attacker/x\n\nsee [zz]").startswith("    \\[zz]")
+    assert layout.neutralize("    ```\nx").startswith("    \\```")
+
+
+def test_a_long_title_then_detail_in_one_finding_cannot_open_a_definition() -> None:
+    lines = report._item(
+        "High", "D1", "A" * 95 + "\n- item", "a.py", 1, None, layout.neutralize("    [zz]: /attacker/x\n\nsee [zz]")
+    )
+    assert "\\[zz]: /attacker/x" in "\n".join(lines)

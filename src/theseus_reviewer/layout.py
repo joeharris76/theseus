@@ -79,13 +79,14 @@ def _scan(text: str) -> tuple[list[tuple[bool, str]], str | None]:
 def _indented_code_rows(rows: Sequence[str]) -> frozenset[int]:
     """Rows that GitHub renders as an indented code block: indented 4+ columns, after a blank line, outside any list.
 
-    Anything uncertain (a list item may be open, a paragraph may continue) is left out, so it is escaped.
+    Anything uncertain (a list item may be open, a paragraph may continue, the first row may continue a block of
+    the text this one is joined to) is left out, so it is escaped. Only spaces and tabs make a row blank.
     """
     code: set[int] = set()
     in_list = False
-    after_blank = True
+    after_blank = False
     for index, row in enumerate(rows):
-        if not row.strip():
+        if not row.strip(" \t"):
             after_blank = True
             continue
         if _INDENTED.match(row):
@@ -114,10 +115,7 @@ def _prose(chunk: str) -> str:
     chunk = "\n".join(rows)
     chunk = chunk.replace("<", "&lt;")  # no raw HTML in prose, at any position or prefix
     chunk = _TASK_MARK.sub(lambda match: f"`[{match.group(1)}]`", chunk)
-    chunk = "\n".join(
-        row if index in code else _REFERENCE.sub(lambda match: f"{match.group(1)}\\[", row)
-        for index, row in enumerate(chunk.split("\n"))
-    )
+    chunk = _REFERENCE.sub(lambda match: f"{match.group(1)}\\[", chunk)
     return _HEADING.sub(lambda match: f"{match.group(1)}\\{match.group(2)}", chunk)
 
 
