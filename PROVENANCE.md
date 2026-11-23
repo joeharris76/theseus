@@ -47,3 +47,4 @@ The sha256 over the sorted lines `<path>\t<sha256 of file bytes>\n` for every tr
 | v0.2.15 | `73fd4b5c7f5b94a928aefd1de0ce88429fe8508d7cd1a5f9d96445fd296dbf06` |
 | v0.2.16 | `8205f7b03a5034296cd9aff36181b1d832ec95a2159704b5ce82f8f7d149c172` |
 | v0.2.17 | `c3d1a31fef3ec4f8b16f6bb03b4571394bf4e111def71e5e8b7273551630627b` |
+| v0.2.18 | `0ac03446f183a6e84b98651c8ce550aef59c4d99a5ed69fadd6c11fd0a2797b7` |
