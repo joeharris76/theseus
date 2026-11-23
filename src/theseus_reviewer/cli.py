@@ -1614,7 +1614,15 @@ def _retry_hints(
         )
         return {path: "x" * max(bounds.get(path, 0), len(hints.get(path, "").encode("utf-8"))) for path in marked}
     named = coverage.unseen_hints([item for item in unseen if item[0] in set(marked)], texts)
-    return {**hints, **named}
+    opaque = binary_files(request_text)
+    return {**{path: hint for path, hint in hints.items() if path not in opaque}, **named}
+
+
+def _binary_required(diff_file: Path, evidence_files: Sequence[str]) -> list[str]:
+    if not diff_file.is_file():
+        return []
+    opaque = binary_files(diff_file.read_bytes().decode("utf-8", "replace"))
+    return [path for path in evidence_files if path in opaque]
 
 
 def compose_brief(
@@ -1642,9 +1650,10 @@ def compose_brief(
     evidence_files = plan.get("evidence_files", [])
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
+    binary = _binary_required(diff_file, evidence_files) if file_list else []
     hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen, worst_case_retry) if marked else {}
     files_block = (
-        f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints)}"
+        f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints, binary)}"
         if file_list
         else f"Changed files:\n{file_listing(reviewed)}\n"
     )
@@ -1711,7 +1720,7 @@ def compose_brief(
         prior_rule += " " + extra
     return render_review(
         template_name=classification.template,
-        retry_note=retry_note(len(marked)),
+        retry_note=retry_note(len(marked), len(set(marked) & set(binary))),
         reviewer_guidance=plan.get("reviewer_guidance"),
         classification=classification,
         repo=plan["repo"],

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
 from .brief import FILE_LIST_DIFF_LINE, with_full_diff
@@ -66,7 +66,9 @@ def _validate(name: str, values: Mapping[str, object]) -> None:
         raise ValueError(f"template {name} slot repo must be owner/name")
     if not _NUMBER.fullmatch(str(values.get("confidence"))):
         raise ValueError(f"template {name} slot confidence must be numeric")
-    if values.get("retry_note") != RETRY_NONE and not _RETRY_NOTE.fullmatch(str(values.get("retry_note"))):
+    if values.get("retry_note") != RETRY_NONE and not any(
+        pattern.fullmatch(str(values.get("retry_note"))) for pattern in (_RETRY_NOTE, _BINARY_RETRY_NOTE)
+    ):
         raise ValueError(f"template {name} slot retry_note must be none or the retry note")
     _validate_response_template(name, str(values.get("response_template")))
 
@@ -311,8 +313,17 @@ OTHER_FILES_HEADER = (
     " these, but they are part of the change; judge them from the staged diff or by reading them.\n"
 )
 NO_REQUIRED_READS = "Required reads: none.\n"
+BINARY_MARK = "[binary: read this exact path once]"
+BINARY_READS_NOTE = (
+    f"A file marked {BINARY_MARK} appears in the staged diff only as a binary notice, so it has no hunks to see."
+    " It is seen after one successful read of that exact path on its own, never combined with other paths in one"
+    " call. A result that shows only the file's metadata counts; a result that shows its text must show every"
+    " line. The diff's binary notice, a grep and a failed read count for nothing, so a shipping verdict that has"
+    " not read every marked binary is rejected as incomplete.\n"
+)
 RETRY_NONE = "none"
 UNREAD_MARK = "[hunks not fully seen in your previous attempt]"
+UNREAD_BINARY_MARK = "[binary not read in your previous attempt]"
 _RETRY_PREFIX = "your previous attempt at this review did not see every changed hunk in "
 _RETRY_SUFFIX = (
     f" of the required files, so it was rejected as incomplete and its decision was discarded. Those files carry"
@@ -321,6 +332,32 @@ _RETRY_SUFFIX = (
     " from the change; searches and lines a read did not return do not count."
 )
 _RETRY_NOTE = re.compile(re.escape(_RETRY_PREFIX) + r"[1-9][0-9]{0,5}" + re.escape(_RETRY_SUFFIX))
+_BINARY_RETRY_PREFIX = "your previous attempt at this review did not read "
+_BINARY_RETRY_COUNTED = " of the required binary files"
+_BINARY_RETRY_HUNKS = " nor every changed hunk of "
+_BINARY_RETRY_OTHERS = " other required files"
+_BINARY_RETRY_SUFFIX = (
+    f", so it was rejected as incomplete. Read each binary marked {UNREAD_BINARY_MARK} in the change data once,"
+    " by its exact path alone; a metadata-only result counts."
+)
+_BINARY_RETRY_HUNK_RULE = (
+    f" Read each changed hunk of files marked {UNREAD_MARK} in the staged diff or, for added lines, the file itself."
+)
+_BINARY_RETRY_END = " Searches and the binary notice do not count."
+_COUNT = r"[1-9][0-9]{0,5}"
+_BINARY_RETRY_NOTE = re.compile(
+    re.escape(_BINARY_RETRY_PREFIX)
+    + _COUNT
+    + re.escape(_BINARY_RETRY_COUNTED)
+    + "(?:"
+    + re.escape(_BINARY_RETRY_HUNKS)
+    + _COUNT
+    + re.escape(_BINARY_RETRY_OTHERS + _BINARY_RETRY_SUFFIX + _BINARY_RETRY_HUNK_RULE)
+    + "|"
+    + re.escape(_BINARY_RETRY_SUFFIX)
+    + ")"
+    + re.escape(_BINARY_RETRY_END)
+)
 
 
 def unread_required(unread: Sequence[str], required: Sequence[str]) -> list[str]:
@@ -333,26 +370,42 @@ def file_list_block(
     required: Sequence[str],
     unread: Sequence[str] = (),
     hints: Mapping[str, str] | None = None,
+    binary: Collection[str] = (),
 ) -> str:
     wanted = list(dict.fromkeys(required))
     marked = set(unread)
+    opaque = set(binary)
     by_path = {item.path: item for item in files}
     held = hints or {}
-    rows = [
-        (file_listing([by_path[path]]) if path in by_path else path)
-        + (f" {UNREAD_MARK}{f' {held[path]}' if path in held else ''}" if path in marked else "")
-        for path in wanted
-    ]
+
+    def _mark(path: str) -> str:
+        if path in marked:
+            mark = UNREAD_BINARY_MARK if path in opaque else UNREAD_MARK
+            return f" {mark}{f' {held[path]}' if path in held else ''}"
+        return f" {BINARY_MARK}" if path in opaque else ""
+
+    rows = [(file_listing([by_path[path]]) if path in by_path else path) + _mark(path) for path in wanted]
     required_set = set(wanted)
     others = [item for item in files if item.path not in required_set]
-    text = REQUIRED_READS_HEADER + "\n".join(rows) + "\n" if rows else NO_REQUIRED_READS
+    note = BINARY_READS_NOTE if opaque & required_set else ""
+    text = REQUIRED_READS_HEADER + note + "\n".join(rows) + "\n" if rows else NO_REQUIRED_READS
     if others:
         text += f"\n{OTHER_FILES_HEADER}{file_listing(others)}\n"
     return text
 
 
-def retry_note(count: int) -> str:
-    return f"{_RETRY_PREFIX}{count}{_RETRY_SUFFIX}" if count > 0 else RETRY_NONE
+def retry_note(count: int, binaries: int = 0) -> str:
+    if count <= 0:
+        return RETRY_NONE
+    if binaries <= 0:
+        return f"{_RETRY_PREFIX}{count}{_RETRY_SUFFIX}"
+    hunks = count - binaries
+    middle = (
+        f"{_BINARY_RETRY_HUNKS}{hunks}{_BINARY_RETRY_OTHERS}{_BINARY_RETRY_SUFFIX}{_BINARY_RETRY_HUNK_RULE}"
+        if hunks > 0
+        else _BINARY_RETRY_SUFFIX
+    )
+    return f"{_BINARY_RETRY_PREFIX}{binaries}{_BINARY_RETRY_COUNTED}{middle}{_BINARY_RETRY_END}"
 
 
 def prior_listing(prior: Sequence[Mapping[str, object]]) -> str:
