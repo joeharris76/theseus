@@ -75,26 +75,35 @@ def _rebuild(tmp_path: Path) -> tuple[Path, str]:
     return root, _git(root, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base, "HEAD")
 
 
-def _rows() -> list[dict[str, Any]]:
+def _rows(required: list[str]) -> list[dict[str, Any]]:
     return [
         {
             "path": path,
             "previous_path": None,
-            "additions": 0 if path in EXECUTABLES else 3,
-            "deletions": 0 if path in EXECUTABLES else 3,
+            "additions": 3 if path == CHECKSUMS else 0,
+            "deletions": 3 if path == CHECKSUMS else 0,
             "status": "modified",
         }
-        for path in REQUIRED
+        for path in required
     ]
 
 
-def _brief(policy: Policy, tmp_path: Path, workspace: Path, diff: str, gap: Gap | None = None) -> str:
+def _brief(
+    policy: Policy,
+    tmp_path: Path,
+    workspace: Path,
+    diff: str,
+    gap: Gap | None = None,
+    required: list[str] = REQUIRED,
+    **extra: Any,
+) -> str:
     plan = {
         **_plan(policy, ("large", "huge")),
         "brief_mode": "file-list",
         "diff_inline": None,
-        "evidence_files": list(REQUIRED),
-        "reviewed_files": _rows(),
+        "evidence_files": list(required),
+        "reviewed_files": _rows(required),
+        **extra,
     }
     plan_dir = tmp_path / "plan"
     plan_dir.mkdir(exist_ok=True)
@@ -143,7 +152,8 @@ def test_the_first_brief_states_the_one_read_each_changed_executable_needs(polic
     assert binary_files(diff) == frozenset(EXECUTABLES)
     brief = _brief(policy, tmp_path, workspace, diff)
     assert BINARY_READS_NOTE.strip() in brief
-    assert "one successful read of that exact path on its own" in brief and "metadata counts" in brief
+    assert "one successful read of that exact path on its own" in brief
+    assert "shows only the file's metadata, that one read is enough" in brief and "every line must be shown" in brief
     for path in EXECUTABLES:
         assert _row(brief, path).endswith(BINARY_MARK)
     assert "binary" not in _row(brief, CHECKSUMS)
@@ -201,3 +211,27 @@ def test_a_retry_that_missed_an_executable_and_a_hunk_counts_each_apart(policy: 
     feedback = retry.split(FEEDBACK, 1)[1].split("\n", 1)[0]
     assert feedback == retry_note(2, 1)
     assert "did not read 1 of the required binary files nor every changed hunk of 1 other required files" in feedback
+
+
+def test_only_binaries_the_check_requires_carry_the_binary_mark(policy: Policy, tmp_path: Path) -> None:
+    font, exempt, guarded = "web/icon.woff2", "assets/blob.bin", f"{PROTECTED}fonts/icon.woff2"
+    paths = sorted((font, exempt, guarded, EXECUTABLES[0]))
+    diff = "".join(
+        f"diff --git a/{p} b/{p}\nindex 1111111..2222222 100644\nBinary files a/{p} and b/{p} differ\n" for p in paths
+    )
+    workspace = tmp_path / "exempt-workspace"
+    workspace.mkdir()
+    _git(workspace, "init", "-q")
+    brief = _brief(
+        policy,
+        tmp_path,
+        workspace,
+        diff,
+        required=paths,
+        evidence_exempt_paths=["assets/*.bin"],
+        evidence_protected_files=[guarded, EXECUTABLES[0]],
+    )
+    for path in (font, exempt):
+        assert "binary" not in _row(brief, path)
+    for path in (guarded, EXECUTABLES[0]):
+        assert _row(brief, path).endswith(BINARY_MARK)

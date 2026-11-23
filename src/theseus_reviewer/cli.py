@@ -81,7 +81,7 @@ from .diff import (
     hunk_index,
     select_files,
 )
-from .evidence import is_binary_candidate
+from .evidence import glob_match, is_binary_candidate
 from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
 from .policy import (
@@ -1618,11 +1618,19 @@ def _retry_hints(
     return {**{path: hint for path, hint in hints.items() if path not in opaque}, **named}
 
 
-def _binary_required(diff_file: Path, evidence_files: Sequence[str]) -> list[str]:
+def _binary_required(plan: Mapping[str, Any], diff_file: Path, evidence_files: Sequence[str]) -> list[str]:
     if not diff_file.is_file():
         return []
     opaque = binary_files(diff_file.read_bytes().decode("utf-8", "replace"))
-    return [path for path in evidence_files if path in opaque]
+    protected = set(plan.get("evidence_protected_files", ()))
+    patterns = tuple(plan.get("evidence_exempt_paths", ()))
+
+    def _exempt(path: str) -> bool:
+        return path not in protected and (
+            is_binary_candidate(path) or any(glob_match(path, pattern) for pattern in patterns)
+        )
+
+    return [path for path in evidence_files if path in opaque and not _exempt(path)]
 
 
 def compose_brief(
@@ -1650,7 +1658,7 @@ def compose_brief(
     evidence_files = plan.get("evidence_files", [])
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
-    binary = _binary_required(diff_file, evidence_files) if file_list else []
+    binary = _binary_required(plan, diff_file, evidence_files) if file_list else []
     hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen, worst_case_retry) if marked else {}
     files_block = (
         f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints, binary)}"

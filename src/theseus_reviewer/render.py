@@ -317,9 +317,9 @@ BINARY_MARK = "[binary: read this exact path once]"
 BINARY_READS_NOTE = (
     f"A file marked {BINARY_MARK} appears in the staged diff only as a binary notice, so it has no hunks to see."
     " It is seen after one successful read of that exact path on its own, never combined with other paths in one"
-    " call. A result that shows only the file's metadata counts; a result that shows its text must show every"
-    " line. The diff's binary notice, a grep and a failed read count for nothing, so a shipping verdict that has"
-    " not read every marked binary is rejected as incomplete.\n"
+    " call. When the read shows only the file's metadata, that one read is enough; when it shows the file's text,"
+    " every line must be shown, so read it whole. The diff's binary notice, a grep and a failed read count for"
+    " nothing, so a shipping verdict that has not read every marked binary is rejected as incomplete.\n"
 )
 RETRY_NONE = "none"
 UNREAD_MARK = "[hunks not fully seen in your previous attempt]"
@@ -337,11 +337,11 @@ _BINARY_RETRY_COUNTED = " of the required binary files"
 _BINARY_RETRY_HUNKS = " nor every changed hunk of "
 _BINARY_RETRY_OTHERS = " other required files"
 _BINARY_RETRY_SUFFIX = (
-    f", so it was rejected as incomplete. Read each binary marked {UNREAD_BINARY_MARK} in the change data once,"
-    " by its exact path alone; a metadata-only result counts."
+    f", so it was rejected as incomplete. Read each binary marked {UNREAD_BINARY_MARK} by its exact path alone;"
+    " a metadata-only result counts, a text one must show every line."
 )
 _BINARY_RETRY_HUNK_RULE = (
-    f" Read each changed hunk of files marked {UNREAD_MARK} in the staged diff or, for added lines, the file itself."
+    f" Read each changed hunk of files marked {UNREAD_MARK} in the staged diff or, for added lines, the file."
 )
 _BINARY_RETRY_END = " Searches and the binary notice do not count."
 _COUNT = r"[1-9][0-9]{0,5}"
