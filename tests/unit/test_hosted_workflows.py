@@ -884,9 +884,11 @@ def test_a_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() ->
     for job in ("sweep", "health"):
         assert sweep in " ".join(review["jobs"][job]["if"].split())
     reviewed = " ".join(review["jobs"]["review"]["if"].split())
-    assert (
-        "(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) != 'true')" in reviewed
+    assert reviewed.startswith(
+        "needs.guard.outputs.gated == 'true' && ((github.event_name == 'workflow_dispatch' && "
+        "format('{0}', github.event.inputs.sweep) != 'true' && format('{0}', github.event.inputs.pr) != '') ||"
     )
+    assert reviewed.endswith(")))") and reviewed.count("(") == reviewed.count(")")
     caller = load(EXAMPLES / "review-verdict.yml")
     inputs = caller["on"]["workflow_dispatch"]["inputs"]
     assert inputs["sweep"] == {

@@ -309,7 +309,7 @@ jobs:
     needs: guard
     if: >-
       needs.guard.outputs.gated == 'true' &&
-      ((github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) != 'true') ||
+      ((github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) != 'true' && format('{0}', github.event.inputs.pr) != '') ||
       (github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base)) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, 'Review adjudication:')) && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ubuntu-latest
