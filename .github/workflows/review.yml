@@ -111,7 +111,7 @@ jobs:
               exit 2
               ;;
           esac
-          if [ "$SWEEP_INPUT" = true ] && { [ -n "$PR_INPUT" ] || [ -n "$HEAD_INPUT" ]; }; then
+          if [ "${SWEEP_INPUT:-}" = true ] && { [ -n "${PR_INPUT:-}" ] || [ -n "${HEAD_INPUT:-}" ]; }; then
             echo "theseus-review: error: a sweep dispatch must not name a pull request or head" >&2
             exit 2
           fi
