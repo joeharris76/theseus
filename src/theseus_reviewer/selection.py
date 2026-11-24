@@ -208,7 +208,8 @@ def _pool_wide(
     reviewer: Reviewer, selection: SelectionInput, unscoped_pools: frozenset[str], block: PoolBlock | None
 ) -> bool:
     return (
-        not selection.availability
+        not reviewer.model.startswith("@")
+        or not selection.availability
         or not selection.candidates.get(reviewer.name)
         or reviewer.pool in unscoped_pools
         or (block is not None and not block.models)

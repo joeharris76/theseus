@@ -756,3 +756,34 @@ def test_merged_resets_keep_models_only_when_both_blocks_name_them() -> None:
     selection = _pool_input(pool_blocked_until={"claude": PoolBlock(NOW + timedelta(minutes=30), "x", NOW)})
     attempts = [Attempt(1, "medium", ABSENT, "quota", provider="anthropic")]
     assert pool_resets(selection, attempts)["claude"].models == ()
+
+
+def test_a_reviewer_on_a_concrete_model_keeps_the_pool_skip_after_a_quota_in_its_pool() -> None:
+    chain = [_reviewer("first", pool="claude", model=OPUS[0]), _reviewer("second", pool="claude", model=OPUS[0])]
+    candidates = {"first": OPUS, "second": [OPUS[0], SONNET[0]]}
+    selection = _input(chain=chain, candidates=candidates, served=POOL_SERVED, capacities={})
+    step = next_step(selection, [Attempt(1, "first", ABSENT, "quota", provider="anthropic")])
+    assert step.kind == PENDING
+    assert step.reasons[1].startswith("second: skipped: claude pool blocked in this run")
+    block = PoolBlock(NOW + timedelta(minutes=30), "anthropic", NOW, False, (providers.strip_effort(OPUS[0]),))
+    blocked = next_step(replace(selection, pool_blocked_until={"claude": block}), [])
+    assert blocked.kind == PENDING
+    assert all("pool blocked until" in reason for reason in blocked.reasons)
+
+
+def test_models_blocked_in_one_pool_are_excluded_for_a_reviewer_of_another_pool() -> None:
+    block = PoolBlock(NOW + timedelta(minutes=30), "anthropic", NOW, False, (providers.strip_effort(FABLE[0]),))
+    chain = [_reviewer("large", pool="other", model="@review")]
+    step = next_step(
+        _input(
+            chain=chain,
+            candidates={"large": FABLE},
+            served=POOL_SERVED,
+            capacities={},
+            load_tokens=0,
+            pool_blocked_until={"claude": block},
+        ),
+        [],
+    )
+    assert step.reviewer is not None and step.resolution is not None
+    assert step.resolution.target == FABLE[1] and step.resolution.substituted
