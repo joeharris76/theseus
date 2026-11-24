@@ -87,6 +87,9 @@ jobs:
           TAILSCALE_TAG: ${{ inputs.tailscale_tag }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           REPOSITORY: ${{ github.repository }}
+          SWEEP_INPUT: ${{ github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) || '' }}
+          PR_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr || '' }}
+          HEAD_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.head || '' }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$THESEUS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -108,6 +111,10 @@ jobs:
               exit 2
               ;;
           esac
+          if [ "$SWEEP_INPUT" = true ] && { [ -n "$PR_INPUT" ] || [ -n "$HEAD_INPUT" ]; }; then
+            echo "theseus-review: error: a sweep dispatch must not name a pull request or head" >&2
+            exit 2
+          fi
 
       - name: Check out the pinned Theseus base matcher
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

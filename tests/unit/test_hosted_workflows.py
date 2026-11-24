@@ -575,7 +575,7 @@ def test_the_callee_caller_workflow_defaults_match_the_example_file_names() -> N
 GUARD_STEP = "Refuse a malformed pin or a foreign caller"
 
 
-def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
+def _guard_with_tag(tag: str, **inputs: str) -> subprocess.CompletedProcess[str]:
     run = step_named(load(WORKFLOWS / "review.yml"), "guard", GUARD_STEP)["run"]
     return subprocess.run(
         ["bash", "-c", run],
@@ -589,11 +589,34 @@ def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
             "REPOSITORY": "o/r",
             "EVENT_NAME": "push",
             "CURRENT_REF": "refs/heads/main",
+            **inputs,
         },
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("inputs", "code"),
+    [
+        ({"SWEEP_INPUT": "true"}, 0),
+        ({"SWEEP_INPUT": "false", "PR_INPUT": "7", "HEAD_INPUT": "a" * 40}, 0),
+        ({"SWEEP_INPUT": "true", "PR_INPUT": "7"}, 2),
+        ({"SWEEP_INPUT": "true", "HEAD_INPUT": "a" * 40}, 2),
+    ],
+)
+def test_the_guard_refuses_a_sweep_dispatch_that_names_a_pull_request(inputs: dict[str, str], code: int) -> None:
+    result = _guard_with_tag("tag:review-ci", **inputs)
+    assert result.returncode == code, result.stderr
+    if code:
+        assert "a sweep dispatch must not name a pull request or head" in result.stderr
+
+
+def test_a_sweep_dispatch_run_title_never_names_a_pull_request() -> None:
+    title = load(EXAMPLES / "review-verdict.yml")["run-name"]
+    assert "pr=${{ (inputs.sweep && 'sweep') ||" in title
+    assert "${{ !inputs.sweep && (github.event.pull_request.head.sha || inputs.head)" in title
 
 
 def test_the_review_callee_requires_a_tailscale_tag_and_has_no_default_identity() -> None:
