@@ -16,7 +16,16 @@ from theseus_reviewer.absence import AUTH, ERROR, Absence, classify
 from theseus_reviewer.classify import SIZE_BUCKETS, fallback_classification
 from theseus_reviewer.jev import JevError
 from theseus_reviewer.policy import PolicyError, RetryRules, parse_policy
-from theseus_reviewer.selection import ABSENT, PENDING, REVIEW, Attempt, SelectionInput, next_step
+from theseus_reviewer.selection import (
+    ABSENT,
+    PENDING,
+    REVIEW,
+    Attempt,
+    PoolBlock,
+    SelectionInput,
+    next_step,
+    pool_resets,
+)
 
 from .conftest import POLICY_PATH
 from .test_selection import NOW, _reviewer
@@ -627,3 +636,123 @@ def test_a_partial_outage_with_a_too_small_slot_and_an_unavailable_higher_tier_i
     served = _served("openai-codex/gpt-6-luna", "google-antigravity/gemini-3.8-flash")
     step = next_step(_small_then_medium(served=served), [])
     assert step.kind == PENDING and step.unavailable and not step.oversize
+
+
+FABLE = ["anthropic/claude-fable-5-5:high", "openai-codex/gpt-6.1-astra:high"]
+ASTRA = ["openai-codex/gpt-6.1-astra:medium"]
+POOL_CHAIN = [
+    _reviewer("medium", pool="claude", model="@medium"),
+    _reviewer("large", pool="claude", model="@review"),
+    _reviewer("huge", pool="claude", model="@plan"),
+    _reviewer("max", pool="claude", model="@max"),
+]
+POOL_CANDIDATES = {"medium": SONNET, "large": FABLE, "huge": OPUS, "max": ASTRA}
+POOL_SERVED = _served(*(providers.strip_effort(item) for item in (*OPUS, *SONNET, *FABLE, *ASTRA)))
+
+
+def _pool_input(**overrides: Any) -> SelectionInput:
+    base: dict[str, Any] = {
+        "chain": POOL_CHAIN,
+        "candidates": POOL_CANDIDATES,
+        "served": POOL_SERVED,
+        "capacities": {"medium": 872_000, "large": 872_000, "huge": 872_000, "max": 872_000},
+    }
+    return _input(**{**base, **overrides})
+
+
+def test_a_quota_on_one_reviewer_leaves_untried_models_of_its_pool_selectable() -> None:
+    step = next_step(_pool_input(), [Attempt(1, "medium", ABSENT, "quota", provider="anthropic")])
+    assert step.kind == REVIEW and step.reviewer is not None and step.reviewer.name == "large"
+    assert step.resolution is not None and step.resolution.target == FABLE[0]
+
+
+def test_models_spent_on_a_quota_are_not_retried_by_another_reviewer() -> None:
+    attempts = [Attempt(1, "huge", ABSENT, "quota", provider="google-antigravity", target=OPUS[2])]
+    step = next_step(_pool_input(), attempts)
+    assert step.reviewer is not None and step.reviewer.name == "medium"
+    assert step.resolution is not None and step.resolution.target == SONNET[0]
+    sonnet_spent = [Attempt(1, "huge", ABSENT, "quota", provider="anthropic"), Attempt(2, "medium", ABSENT, "quota")]
+    later = next_step(_pool_input(), sonnet_spent)
+    assert later.reviewer is not None and later.reviewer.name == "large"
+
+
+def test_a_shared_model_spent_in_the_run_is_dropped_from_the_next_reviewers_chain() -> None:
+    attempts = [Attempt(1, "huge", ABSENT, "quota", provider="openai-codex")]
+    step = next_step(_pool_input(candidates={**POOL_CANDIDATES, "large": [SONNET[0], *ASTRA]}), attempts)
+    assert step.reviewer is not None and step.reviewer.name == "medium"
+    assert step.resolution is not None and step.resolution.target == SONNET[0]
+
+
+def test_a_reviewer_whose_every_candidate_is_spent_is_skipped_naming_the_quota() -> None:
+    chain = [POOL_CHAIN[2], _reviewer("again", pool="claude", model="@plan")]
+    step = next_step(
+        _pool_input(chain=chain, candidates={"huge": OPUS, "again": OPUS}),
+        [Attempt(1, "huge", ABSENT, "quota", provider="google-antigravity")],
+    )
+    assert step.kind == PENDING
+    assert (
+        step.reasons[1] == "again: skipped: claude pool blocked in this run, google-antigravity returned a quota error"
+    )
+    assert not step.unavailable
+
+
+def test_a_quota_without_candidate_data_still_blocks_the_whole_pool() -> None:
+    step = next_step(
+        _pool_input(candidates={}, served=None),
+        [Attempt(1, "medium", ABSENT, "quota", provider="anthropic")],
+    )
+    assert step.kind == PENDING
+    assert all("pool blocked in this run" in reason for reason in step.reasons[1:])
+
+
+def test_a_quota_on_a_reviewer_without_candidates_blocks_its_whole_pool() -> None:
+    candidates = {"large": FABLE, "huge": OPUS, "max": ASTRA}
+    step = next_step(
+        _pool_input(candidates=candidates),
+        [Attempt(1, "medium", ABSENT, "quota", provider="anthropic")],
+    )
+    assert step.kind == PENDING
+    assert all("pool blocked in this run" in reason for reason in step.reasons[1:])
+
+
+def test_a_new_pool_block_records_the_spent_models_and_a_later_run_skips_only_those() -> None:
+    attempts = [Attempt(1, "medium", ABSENT, "quota", provider="anthropic", target=SONNET[0])]
+    selection = _pool_input()
+    block = pool_resets(selection, attempts)["claude"]
+    assert block.models == tuple(sorted(providers.strip_effort(item) for item in SONNET))
+    assert PoolBlock.from_json(block.to_json()) == block
+    later = _pool_input(pool_blocked_until={"claude": block})
+    step = next_step(later, [])
+    assert step.reviewer is not None and step.reviewer.name == "large"
+    assert step.resolution is not None and step.resolution.target == FABLE[0]
+    medium_only = next_step(replace(later, chain=POOL_CHAIN[:1]), [])
+    assert medium_only.kind == PENDING
+    assert medium_only.reasons[0].startswith("medium: skipped: claude pool blocked until")
+
+
+def test_a_block_does_not_let_a_reviewer_retry_a_blocked_model_through_its_own_chain() -> None:
+    block = PoolBlock(NOW + timedelta(minutes=30), "openai-codex", NOW, False, ("openai-codex/gpt-6.1-sol",))
+    step = next_step(_pool_input(pool_blocked_until={"claude": block}), [])
+    assert step.reviewer is not None and step.reviewer.name == "medium"
+    assert step.resolution is not None and step.resolution.target == SONNET[0]
+    assert step.resolution.followers == ()
+
+
+def test_a_block_written_before_models_were_recorded_still_blocks_the_whole_pool() -> None:
+    legacy = PoolBlock.from_json(
+        {
+            "until": (NOW + timedelta(minutes=30)).isoformat(),
+            "provider": "anthropic",
+            "recorded_at": NOW.isoformat(),
+        }
+    )
+    assert legacy.models == ()
+    step = next_step(_pool_input(pool_blocked_until={"claude": legacy}), [])
+    assert step.kind == PENDING
+    assert all("pool blocked until" in reason for reason in step.reasons)
+
+
+def test_merged_resets_keep_models_only_when_both_blocks_name_them() -> None:
+    selection = _pool_input(pool_blocked_until={"claude": PoolBlock(NOW + timedelta(minutes=30), "x", NOW)})
+    attempts = [Attempt(1, "medium", ABSENT, "quota", provider="anthropic")]
+    assert pool_resets(selection, attempts)["claude"].models == ()

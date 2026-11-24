@@ -313,6 +313,24 @@ def test_a_legacy_pool_block_loads_with_an_unknown_provider() -> None:
     assert effective_until(block) == NOW + QUOTA_BACKOFF
 
 
+def test_a_pool_block_without_models_loads_as_a_pool_wide_block_and_models_round_trip() -> None:
+    until = NOW + timedelta(minutes=40)
+    stored = {"until": until.isoformat(), "provider": "anthropic", "recorded_at": NOW.isoformat(), "primary": True}
+    data = {
+        "pr": 7,
+        "head_sha": HEAD,
+        "outcome": "pending",
+        "updated_at": NOW.isoformat(),
+        "pool_blocked_until": {"claude": stored},
+    }
+    block = State.from_json(data).pool_blocked_until["claude"]
+    assert block == PoolBlock(until, "anthropic", NOW, True)
+    assert block.models == ()
+    assert block.to_json() == stored
+    scoped = PoolBlock(until, "anthropic", NOW, True, ("anthropic/claude-opus-5-5",))
+    assert PoolBlock.from_json(scoped.to_json()) == scoped
+
+
 def test_a_failed_install_is_not_re_dispatched_by_the_sweep_but_a_manual_rerun_may_retry_it(policy: Policy) -> None:
     previous = _state("pending", cause=OMP_INSTALL)
     assert not due_for_retry(previous, HEAD, NOW, policy.retry)
