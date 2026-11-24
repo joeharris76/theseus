@@ -11,6 +11,7 @@ from typing import Any
 
 PROBE_TIMEOUT_SECONDS = 15
 UNAVAILABLE_PREFIX = "unavailable:"
+QUOTA_SPENT = "returned a quota error"
 DEGRADED_CAPACITY_PREFIX = "capacity-degraded:"
 OWNER_REASON = "excluded by owner"
 NO_LOGIN_REASON = "no logged-in broker account"
@@ -195,7 +196,7 @@ def is_available(target: str, served: Served, excluded: Collection[str]) -> bool
 def _why(target: str, served: Served, excluded: Collection[str], spent: Collection[str] = ()) -> str:
     provider = provider_of(target)
     if strip_effort(target) in spent:
-        return f"{strip_effort(target)} returned a quota error"
+        return f"{strip_effort(target)} {QUOTA_SPENT}"
     if provider in excluded:
         return f"{strip_effort(target)} was excluded after {provider} failed"
     return f"{strip_effort(target)} is not served"

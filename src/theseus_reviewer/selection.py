@@ -262,7 +262,9 @@ def _skip_reason(
             return capacity.skip_text(selection.load_tokens, limit), None
     rewritable = reviewer.model.startswith("@")
     if not rewritable and options and providers.strip_effort(options[0]) in spent:
-        return f"skipped: {providers.strip_effort(options[0])} returned a quota error", None
+        return f"skipped: {providers.strip_effort(options[0])} {providers.QUOTA_SPENT}", None
+    if rewritable and _all_spent(options, spent):
+        return f"skipped: every candidate model {providers.QUOTA_SPENT}", None
     resolution: providers.Resolution | None = None
     if selection.availability:
         resolution = providers.resolve(

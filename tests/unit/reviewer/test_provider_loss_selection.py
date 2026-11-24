@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from theseus_reviewer import attempts as attempt_files
-from theseus_reviewer import cli, providers, report, retry, status_text
+from theseus_reviewer import cli, providers, report, retry, status_text, unavailable
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.absence import AUTH, ERROR, Absence, classify
 from theseus_reviewer.classify import SIZE_BUCKETS, fallback_classification
@@ -802,5 +802,19 @@ def test_a_reviewer_on_a_concrete_model_spent_in_another_pool_is_skipped_not_sub
     step = next_step(selection, [])
     assert step.kind == PENDING
     assert step.reasons == (f"concrete: skipped: {providers.strip_effort(FABLE[0])} returned a quota error",)
+    assert unavailable.causes(step, [], {}) == (unavailable.QUOTA,)
+    role = next_step(replace(selection, chain=[_reviewer("concrete", pool="other", model="@review")]), [])
+    assert role.resolution is not None and role.resolution.target == FABLE[1]
+    spent = PoolBlock(NOW + timedelta(minutes=30), "anthropic", NOW, False, tuple(map(providers.strip_effort, FABLE)))
+    exhausted = next_step(
+        replace(
+            selection,
+            chain=[_reviewer("concrete", pool="other", model="@review")],
+            pool_blocked_until={"claude": spent},
+        ),
+        [],
+    )
+    assert exhausted.reasons == ("concrete: skipped: every candidate model returned a quota error",)
+    assert unavailable.causes(exhausted, [], {}) == (unavailable.QUOTA,)
     held = next_step(replace(selection, pool_blocked_until={}), [])
     assert held.reviewer is not None and held.resolution is not None and held.resolution.target == FABLE[0]
