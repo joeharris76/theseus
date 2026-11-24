@@ -305,11 +305,11 @@ def test_the_fallback_never_goes_below_the_gate_floor_and_uses_the_gate_template
     assert held["size_bucket"] == expected and held["template"] == "gate" and held["gate_flags"] == ["gate/x.py"]
 
 
-def test_a_missing_classifier_key_is_configuration_and_still_refuses(
+def test_a_missing_classifier_key_falls_back_to_the_policy_bucket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    held = _select(monkeypatch, tmp_path, _minimal_plan("max"), JevError(None, "no key", missing_key=True))
-    assert held == {}
+    held = _select(monkeypatch, tmp_path, _minimal_plan("max"), JevError(None, "no key", reason="unkeyed"))
+    assert (held["backend"], held["size_bucket"], held["degraded_from"]) == ("unavailable", "max", "TypeSafe unkeyed")
 
 
 def test_a_policy_without_the_key_keeps_the_pending_behaviour(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -382,15 +382,8 @@ def test_the_run_suffix_never_cuts_the_degraded_suffix_of_a_success_status() -> 
     assert degraded in payload["description"] and payload["description"].endswith(f"[run {'r' * 36}]")
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
-def test_a_client_error_from_the_classifier_still_blocks(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int
-) -> None:
-    assert _select(monkeypatch, tmp_path, _minimal_plan("max"), JevError(status, "rejected")) == {}
-
-
-@pytest.mark.parametrize("status", [None, 429, 500, 503])
-def test_an_outage_status_from_the_classifier_falls_back(
+@pytest.mark.parametrize("status", [None, 400, 401, 402, 403, 404, 422, 429, 500, 503])
+def test_every_classifier_error_falls_back_to_the_policy_bucket(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int | None
 ) -> None:
     held = _select(monkeypatch, tmp_path, _minimal_plan("large"), JevError(status, "down"))

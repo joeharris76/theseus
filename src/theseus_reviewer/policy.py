@@ -38,6 +38,7 @@ POLICY_KEYS = frozenset(
         "findings_delivery",
         "minimize_superseded",
         "check_run_mirror",
+        "classifier_issue",
         "dashboard_comment",
         "bot_login",
         "max_attempts",
@@ -216,6 +217,7 @@ class Policy:
     brief: BriefRules = BriefRules()
     minimize_superseded: bool = False
     check_run_mirror: bool = False
+    classifier_issue: bool = False
     dashboard_comment: bool = False
 
     def binding(self) -> Binding:
@@ -515,12 +517,14 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         brief=_brief_rules(data.get("brief")),
         minimize_superseded=data.get("minimize_superseded", False),
         check_run_mirror=data.get("check_run_mirror", False),
+        classifier_issue=data.get("classifier_issue", False),
         dashboard_comment=data.get("dashboard_comment", False),
     )
     _require(policy.mode in ("shadow", "enforce"), "mode must be shadow or enforce")
     _require(bool(policy.status_context), "status_context is required")
     _require(isinstance(policy.minimize_superseded, bool), "minimize_superseded must be a boolean")
     _require(isinstance(policy.check_run_mirror, bool), "check_run_mirror must be a boolean")
+    _require(isinstance(policy.classifier_issue, bool), "classifier_issue must be a boolean")
     _require(isinstance(policy.dashboard_comment, bool), "dashboard_comment must be a boolean")
     _require(policy.findings_delivery in DELIVERIES, f"findings_delivery must be one of {DELIVERIES}")
     _require(re.fullmatch(r"[a-z0-9][a-z0-9-]*", policy.bot_login) is not None, "bot_login must be an App slug")

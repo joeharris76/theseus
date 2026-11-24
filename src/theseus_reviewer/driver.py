@@ -91,6 +91,7 @@ class Sink(Protocol):
 
     def check_run(self, repo: str, payload: Path) -> None: ...
     def update_dashboard(self, repo: str, pr: int, head: str, bot_login: str, record: Mapping[str, Any]) -> None: ...
+    def classifier_issue(self, repo: str, bot_login: str, note: str, where: str) -> None: ...
 
 
 class CredentialError(Exception):
@@ -104,6 +105,7 @@ class GitHubSink:
     consumer: Consumer
     policy: Path
     checks_token: str = ""
+    issues_token: str = ""
 
     def status(self, repo: str, head: str, payload: Path) -> None:
         github.post_status_file(repo, head, payload, self.app_token)
@@ -151,6 +153,13 @@ class GitHubSink:
         elif found.get("body") != body:
             github.edit_issue_comment(repo, int(found["id"]), body, self.app_token)
 
+    def classifier_issue(self, repo: str, bot_login: str, note: str, where: str) -> None:
+        if not self.issues_token:
+            if note:
+                raise github.GitHubError("no issues token: the App installation was not issued issues: write")
+            return
+        github.sync_classifier_issue(repo, bot_login, note, where, self.issues_token)
+
 
 class Environment(Protocol):
     layout: Layout
@@ -182,6 +191,7 @@ class CiEnvironment:
     app_token: str
     job_token: str
     checks_token: str = ""
+    issues_token: str = ""
     scan_secrets: tuple[str, ...] = SCAN_SECRETS
     redacted_secrets: tuple[str, ...] = REDACTED_SECRETS
     scan_excludes: tuple[Path, ...] = ()
@@ -211,6 +221,7 @@ class CiEnvironment:
             app_token=environ.get("GH_TOKEN", ""),
             job_token=environ.get("JOB_TOKEN", ""),
             checks_token=environ.get("CHECKS_TOKEN", ""),
+            issues_token=environ.get("ISSUES_TOKEN", ""),
         )
 
     def plan(self) -> int:
@@ -224,7 +235,7 @@ class CiEnvironment:
             consumer = load_policy(self.policy).consumer
         except (OSError, PolicyError) as exc:
             raise CredentialError(f"the review policy cannot be read: {exc}") from exc
-        return GitHubSink(self.app_token, self.job_token, consumer, self.policy, self.checks_token)
+        return GitHubSink(self.app_token, self.job_token, consumer, self.policy, self.checks_token, self.issues_token)
 
     def session(self) -> AbstractContextManager[None]:
         return nullcontext()
@@ -580,7 +591,22 @@ def publish(env: Environment, args: argparse.Namespace) -> int:
     _minimize_superseded(env, sink, plan)
     _mirror_check_run(env, sink)
     _update_dashboard(env, sink, plan)
+    _classifier_issue(env, sink, plan)
     return 0
+
+
+def _classifier_issue(env: Environment, sink: Sink, plan: Mapping[str, Any]) -> None:
+    if not plan.get("classifier_issue"):
+        return
+    classification = cli._read_classification(env.layout.classification)
+    if classification is None:
+        return
+    note = cli.classification_note(classification) if classification.degraded else ""
+    where = f"#{plan['pr']} at {plan['head_sha'][:12]}"
+    try:
+        _bounded(lambda: sink.classifier_issue(env.repo, plan["bot_login"], note, where))
+    except Exception as exc:  # noqa: BLE001 - notice only: nothing here may change the review outcome
+        print(f"::warning::the classifier issue was not updated: {exc}", file=sys.stderr)
 
 
 def dispatch(env: Environment, args: argparse.Namespace) -> int:

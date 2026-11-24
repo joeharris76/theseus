@@ -246,17 +246,56 @@ def test_a_refused_key_is_an_error_annotation_and_the_unavailable_bucket(
     assert "::error::" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404])
-def test_a_jev_client_error_or_missing_key_never_calls_decisions(
-    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, status: int
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [
+        *(
+            (JevError(status, f"TypeSafe answered {status}"), f"TypeSafe answered {status}")
+            for status in (400, 401, 402, 403, 404)
+        ),
+        (JevError(None, "TYPESAFE_API_KEY is not set", reason="unkeyed"), "TypeSafe unkeyed"),
+    ],
+)
+def test_every_jev_error_including_a_missing_key_takes_decisions(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, error: JevError, cause: str
 ) -> None:
-    _jev(monkeypatch, JevError(status, "rejected"))
-    with pytest.raises(JevError):
-        cli._classify_plan(_plan())
-    _jev(monkeypatch, JevError(None, "no key", missing_key=True))
-    with pytest.raises(JevError):
-        cli._classify_plan(_plan())
-    assert fake.requests == []
+    _jev(monkeypatch, error)
+    held = cli._classify_plan(_plan())
+    assert (held.backend, held.degraded_from) == ("decisions", cause)
+    assert len(fake.requests) == 2
+
+
+@pytest.mark.parametrize("status", [402, 403])
+def test_a_jev_error_with_decisions_failing_too_ends_at_the_unavailable_bucket_without_provider_text(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, tmp_path: Path, status: int
+) -> None:
+    _jev(monkeypatch, JevError(status, f"TypeSafe answered {status}"))
+    fake.script = ["status:402"]
+    held, summary = _select(tmp_path, _plan(), monkeypatch)
+    assert (held["backend"], held["size_bucket"]) == ("unavailable", "max")
+    assert held["degraded_from"] == f"TypeSafe answered {status}; Decisions answered 402"
+    assert "classification degraded: Classification unavailable" in summary
+    assert "fake failure" not in summary + json.dumps(held)
+
+
+def test_a_degraded_classification_is_a_workflow_warning(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _jev(monkeypatch, JevError(402, "TypeSafe answered 402"))
+    held, summary = _select(tmp_path, _plan(), monkeypatch)
+    assert held["backend"] == "decisions"
+    assert "::warning::Classification: TypeSafe answered 402; classified by OpenAI Decisions" in capsys.readouterr().out
+    assert "classification degraded: Classification: TypeSafe answered 402" in summary
+
+
+def test_a_malformed_plan_still_leaves_no_classification(
+    monkeypatch: pytest.MonkeyPatch, fake: FakeDecisions, tmp_path: Path
+) -> None:
+    _jev(monkeypatch, _pr_answers(), _file_answers())
+    plan = _plan()
+    del plan["repo"]
+    held, summary = _select(tmp_path, plan, monkeypatch)
+    assert held == {} and "classification unavailable: 'repo'" in summary
 
 
 def test_without_the_fallback_policy_a_jev_outage_still_raises(
