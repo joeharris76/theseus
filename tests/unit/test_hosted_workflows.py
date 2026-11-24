@@ -575,7 +575,7 @@ def test_the_callee_caller_workflow_defaults_match_the_example_file_names() -> N
 GUARD_STEP = "Refuse a malformed pin or a foreign caller"
 
 
-def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
+def _guard_with_tag(tag: str, **inputs: str) -> subprocess.CompletedProcess[str]:
     run = step_named(load(WORKFLOWS / "review.yml"), "guard", GUARD_STEP)["run"]
     return subprocess.run(
         ["bash", "-c", run],
@@ -589,11 +589,42 @@ def _guard_with_tag(tag: str) -> subprocess.CompletedProcess[str]:
             "REPOSITORY": "o/r",
             "EVENT_NAME": "push",
             "CURRENT_REF": "refs/heads/main",
+            **inputs,
         },
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("inputs", "code"),
+    [
+        ({"SWEEP_INPUT": "true"}, 0),
+        ({"SWEEP_INPUT": "false", "PR_INPUT": "7", "HEAD_INPUT": "a" * 40}, 0),
+        ({"SWEEP_INPUT": "true", "PR_INPUT": "7"}, 2),
+        ({"SWEEP_INPUT": "true", "HEAD_INPUT": "a" * 40}, 2),
+    ],
+)
+def test_the_guard_refuses_a_sweep_dispatch_that_names_a_pull_request(inputs: dict[str, str], code: int) -> None:
+    result = _guard_with_tag("tag:review-ci", **inputs)
+    assert result.returncode == code, result.stderr
+    if code:
+        assert "a sweep dispatch must not name a pull request or head" in result.stderr
+
+
+def test_a_sweep_dispatch_run_title_never_names_a_pull_request() -> None:
+    title = load(EXAMPLES / "review-verdict.yml")["run-name"]
+    assert "pr=${{ (inputs.sweep && 'sweep') ||" in title
+    assert "${{ !inputs.sweep && (github.event.pull_request.head.sha || inputs.head)" in title
+
+
+def test_the_guard_reads_the_sweep_pr_and_head_inputs_only_from_a_workflow_dispatch() -> None:
+    env = step_named(load(WORKFLOWS / "review.yml"), "guard", GUARD_STEP)["env"]
+    dispatch = "github.event_name == 'workflow_dispatch' && "
+    assert env["SWEEP_INPUT"] == "${{ " + dispatch + "format('{0}', github.event.inputs.sweep) || '' }}"
+    assert env["PR_INPUT"] == "${{ " + dispatch + "github.event.inputs.pr || '' }}"
+    assert env["HEAD_INPUT"] == "${{ " + dispatch + "github.event.inputs.head || '' }}"
 
 
 def test_the_review_callee_requires_a_tailscale_tag_and_has_no_default_identity() -> None:
@@ -878,12 +909,24 @@ def test_the_gate_workflow_has_exactly_one_gate_invocation_outside_the_sweep() -
     assert invoking == [("gate", "Post the gate for the head")]
 
 
-def test_a_review_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() -> None:
+def test_a_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() -> None:
     review = load(WORKFLOWS / "review.yml")
-    dispatch = "(github.event_name == 'repository_dispatch' && github.event.action == 'review-sweep')"
+    sweep = "(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) == 'true')"
     for job in ("sweep", "health"):
-        assert dispatch in " ".join(review["jobs"][job]["if"].split())
-    assert "repository_dispatch" not in review["jobs"]["review"]["if"]
+        assert sweep in " ".join(review["jobs"][job]["if"].split())
+    reviewed = " ".join(review["jobs"]["review"]["if"].split())
+    assert reviewed.startswith(
+        "needs.guard.outputs.gated == 'true' && ((github.event_name == 'workflow_dispatch' && "
+        "format('{0}', github.event.inputs.sweep) != 'true' && format('{0}', github.event.inputs.pr) != '') ||"
+    )
+    assert reviewed.endswith(")))") and reviewed.count("(") == reviewed.count(")")
     caller = load(EXAMPLES / "review-verdict.yml")
-    assert caller["on"]["repository_dispatch"] == {"types": ["review-sweep"]}
-    assert "github.event_name == 'repository_dispatch') && 'sweep'" in caller["concurrency"]["group"]
+    inputs = caller["on"]["workflow_dispatch"]["inputs"]
+    assert inputs["sweep"] == {
+        "description": inputs["sweep"]["description"],
+        "required": False,
+        "type": "boolean",
+        "default": False,
+    }
+    assert inputs["pr"]["required"] is False and "repository_dispatch" not in caller["on"]
+    assert "(github.event_name == 'workflow_dispatch' && inputs.sweep)) && 'sweep'" in caller["concurrency"]["group"]

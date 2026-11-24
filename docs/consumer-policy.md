@@ -112,7 +112,7 @@ When no reviewer can run because of availability alone (the served set is empty 
 
 Every review-verdict status and body reports degradation: the status description ends with `· degraded: <providers>` (the routed providers that are not served or were excluded), and the body names unserved and excluded providers and each substitution (`large: anthropic/claude-opus-5-5:medium → openai-codex/gpt-6.1-sol:high`) in the collapsed `What happened` block of a pending (not-reviewed) body and in the collapsed `Run details` block of a verdict body. The one pending body that carries a verdict, the marker-limit `NOT REVIEWED` body (the review ran but its record did not fit the marker), shows the `Run details` block like a verdict body, not `What happened`. The reviewer identity stays the tier; the body shows the model that ran.
 
-The reusable `review.yml` has a `health` job that runs only on the caller's `schedule` event or a `review-sweep` repository dispatch, with `contents: read`. It joins the tailnet and runs `theseus drive health`, which exits 1 when the gateway is unreachable, rejects the client token, or does not serve every provider the trusted config names, so the run goes red and its summary names the providers.
+The reusable `review.yml` has a `health` job that runs only on the caller's `schedule` event or a sweep dispatch (`workflow_dispatch` with `sweep` true), with `contents: read`. It joins the tailnet and runs `theseus drive health`, which exits 1 when the gateway is unreachable, rejects the client token, or does not serve every provider the trusted config names, so the run goes red and its summary names the providers.
 
 ## Brief mode
 
