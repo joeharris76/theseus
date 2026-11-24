@@ -787,3 +787,20 @@ def test_models_blocked_in_one_pool_are_excluded_for_a_reviewer_of_another_pool(
     )
     assert step.reviewer is not None and step.resolution is not None
     assert step.resolution.target == FABLE[1] and step.resolution.substituted
+
+
+def test_a_reviewer_on_a_concrete_model_spent_in_another_pool_is_skipped_not_substituted() -> None:
+    block = PoolBlock(NOW + timedelta(minutes=30), "anthropic", NOW, False, (providers.strip_effort(FABLE[0]),))
+    selection = _input(
+        chain=[_reviewer("concrete", pool="other", model=FABLE[0])],
+        candidates={"concrete": FABLE},
+        served=POOL_SERVED,
+        capacities={},
+        load_tokens=0,
+        pool_blocked_until={"claude": block},
+    )
+    step = next_step(selection, [])
+    assert step.kind == PENDING
+    assert step.reasons == (f"concrete: skipped: {providers.strip_effort(FABLE[0])} returned a quota error",)
+    held = next_step(replace(selection, pool_blocked_until={}), [])
+    assert held.reviewer is not None and held.resolution is not None and held.resolution.target == FABLE[0]
