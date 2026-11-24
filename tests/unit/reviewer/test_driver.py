@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import cli, driver, github, isolation, omp_pin, protocol
+from theseus_reviewer import classify, cli, driver, github, isolation, omp_pin, protocol
 from theseus_reviewer.driver import CiEnvironment, GitHubSink
 from theseus_reviewer.policy import load_policy
 
@@ -113,6 +113,9 @@ class RecordingSink:
         self._record("dashboard", repo, (pr, head, bot_login, record["decision"]))
         if self.dashboard_error is not None:
             raise self.dashboard_error
+
+    def classifier_issue(self, repo: str, bot_login: str, note: str, where: str) -> None:
+        self._record("classifier_issue", repo, (bot_login, note, where))
 
 
 @pytest.fixture
@@ -706,3 +709,78 @@ def test_a_stalled_dashboard_update_is_abandoned(
         release.set()
 
     assert code == 0 and "the dashboard comment was not updated" in capsys.readouterr().err
+
+
+DEGRADED = classify.fallback_classification("max", [], degraded_from="TypeSafe answered 402; Decisions answered 402")
+HEALTHY = classify.Classification(
+    size_bucket="small", capability="routine", template="standard", confidence=1.0, gate_flags=(), files=()
+)
+
+
+def _publish_with_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    classification: classify.Classification | None,
+    *,
+    flag: bool = True,
+) -> int:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    environment = _environment(tmp_path)
+    _plan(environment.layout, bot_login="acme-review", **({"classifier_issue": True} if flag else {}))
+    _final(environment.layout.final)
+    if classification is not None:
+        _write(environment.layout.classification, classification.to_json())
+    monkeypatch.setattr(cli, "guard_decision", lambda plan: (0, False))
+    return driver.publish(environment, argparse.Namespace())
+
+
+def test_publish_reports_a_degraded_classification_to_the_classifier_issue_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    assert _publish_with_classification(tmp_path, monkeypatch, DEGRADED) == 0
+
+    kind, repo, (login, note, where) = sink.calls[-1]
+    assert (kind, repo, login, where) == ("classifier_issue", REPO, "acme-review", f"#7 at {HEAD[:12]}")
+    assert (
+        note
+        == "Classification unavailable (TypeSafe answered 402; Decisions answered 402): reviewed from the max bucket with the deep template."
+    )
+
+
+def test_publish_reports_a_normal_classification_so_an_open_issue_can_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, sink: RecordingSink
+) -> None:
+    assert _publish_with_classification(tmp_path, monkeypatch, HEALTHY) == 0
+
+    assert sink.calls[-1] == ("classifier_issue", REPO, ("acme-review", "", f"#7 at {HEAD[:12]}"))
+
+
+@pytest.mark.parametrize(("classification", "flag"), [(DEGRADED, False), (None, True)], ids=["flag-off", "no-file"])
+def test_publish_leaves_the_classifier_issue_alone_without_the_flag_or_a_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outputs: Path,
+    sink: RecordingSink,
+    classification: classify.Classification | None,
+    flag: bool,
+) -> None:
+    assert _publish_with_classification(tmp_path, monkeypatch, classification, flag=flag) == 0
+    assert "classifier_issue" not in [item[0] for item in sink.calls]
+
+
+def test_a_missing_issues_token_warns_on_a_degraded_review_and_changes_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outputs: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    posted: list[str] = []
+    monkeypatch.setattr(github, "post_issue_comment", lambda *args: posted.append("comment"))
+    monkeypatch.setattr(github, "post_file", lambda path, payload, token: posted.append(path))
+    monkeypatch.setattr(github, "post_status_file", lambda repo, head, payload, token: posted.append("status"))
+    monkeypatch.setattr(github, "post_gate", lambda *args: posted.append("gate"))
+    monkeypatch.setattr(github, "sync_classifier_issue", lambda *args: posted.append("issue"))
+
+    assert _publish_with_classification(tmp_path, monkeypatch, DEGRADED) == 0
+    assert "issue" not in posted and "status" in posted
+    assert "::warning::the classifier issue was not updated: no issues token" in capsys.readouterr().err
+
+    assert _publish_with_classification(tmp_path / "healthy", monkeypatch, HEALTHY) == 0
+    assert "the classifier issue was not updated" not in capsys.readouterr().err

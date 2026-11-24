@@ -128,7 +128,7 @@ def _skip_cause(text: str, plan: Mapping[str, Any]) -> Cause:
         return CAPACITY_UNKNOWN
     if text.startswith("skipped: no attempt slot left"):
         return ATTEMPT_LIMIT
-    if text.startswith("skipped:") and "pool blocked" in text:
+    if text.startswith("skipped:") and ("pool blocked" in text or text.endswith(providers.QUOTA_SPENT)):
         return QUOTA
     if text.startswith(providers.UNAVAILABLE_PREFIX):
         return gateway_cause(str(plan["served_error"])) if plan.get("served_error") else NOT_SERVED

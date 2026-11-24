@@ -182,7 +182,7 @@ def test_a_head_that_edits_the_omp_config_never_changes_what_the_review_selects(
     assert run.plan["candidates"]["large"] == _options("large")
     assert run.plan["routed"] == list(PROVIDERS)
     assert _ran(harness) == [next(item for item in _options("large") if not item.startswith("anthropic"))]
-    assert _status(harness, head)["state"] in {"success", "pending", "failure"}
+    assert _status(harness, head)["state"] == "success"
 
 
 def _health(harness: Harness, tmp_path: Path) -> Any:
@@ -233,20 +233,22 @@ def test_the_health_phase_fails_when_the_gateway_is_unreachable(harness: Harness
     assert step.code == 1 and "gateway unreachable" in step.stdout
 
 
+@pytest.mark.parametrize("lost", PROVIDERS)
 def test_a_local_review_on_a_degraded_gateway_reports_the_degradation_and_the_model_that_ran(
-    harness: Harness,
+    harness: Harness, lost: str
 ) -> None:
     harness.branch("feat/local", {CHECKER: FIXED_CHECKER}, "guard None operands")
-    harness.gateway.serve_all_but("anthropic")
+    harness.gateway.serve_all_but(lost)
     harness.jev.classification = ("medium", "standard")
     harness.script_omp([SHIP])
+    expected = next(item for item in _options("medium") if not item.startswith(f"{lost}/")).split(":")[0]
 
     review = harness.local_review("feat/local")
 
     assert review.code == 0, review.stdout + review.stderr
-    assert "degraded: anthropic" in review.stdout
-    assert [model.split(":")[0] for model in _ran(harness)] == ["openai-codex/gpt-6.1-sol"]
-    assert "reviewed by openai-codex/gpt-6.1-sol" in review.stdout
+    assert f"degraded: {lost}" in review.stdout
+    assert [model.split(":")[0] for model in _ran(harness)] == [expected]
+    assert f"reviewed by {expected}" in review.stdout
 
 
 @pytest.mark.parametrize("mode", ["down", "rejected"])

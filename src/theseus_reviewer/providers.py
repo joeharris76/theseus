@@ -11,6 +11,7 @@ from typing import Any
 
 PROBE_TIMEOUT_SECONDS = 15
 UNAVAILABLE_PREFIX = "unavailable:"
+QUOTA_SPENT = "returned a quota error"
 DEGRADED_CAPACITY_PREFIX = "capacity-degraded:"
 OWNER_REASON = "excluded by owner"
 NO_LOGIN_REASON = "no logged-in broker account"
@@ -192,8 +193,10 @@ def is_available(target: str, served: Served, excluded: Collection[str]) -> bool
     return provider_of(target) not in excluded and strip_effort(target) in served.models
 
 
-def _why(target: str, served: Served, excluded: Collection[str]) -> str:
+def _why(target: str, served: Served, excluded: Collection[str], spent: Collection[str] = ()) -> str:
     provider = provider_of(target)
+    if strip_effort(target) in spent:
+        return f"{strip_effort(target)} {QUOTA_SPENT}"
     if provider in excluded:
         return f"{strip_effort(target)} was excluded after {provider} failed"
     return f"{strip_effort(target)} is not served"
@@ -210,13 +213,14 @@ def resolve(
     excluded: Collection[str],
     windows: Mapping[str, int],
     load: int,
+    spent: Collection[str] = (),
 ) -> Resolution:
     nominal = options[0] if options else ""
     if not options:
         return Resolution(None, nominal, f"{UNAVAILABLE_PREFIX} no candidate model is configured")
     if served is None:
         return Resolution(None, nominal, f"{UNAVAILABLE_PREFIX} {served_error or 'the served models are unknown'}")
-    live = [item for item in options if is_available(item, served, excluded)]
+    live = [item for item in options if is_available(item, served, excluded) and strip_effort(item) not in spent]
     if live and live[0] == options[0]:
         return Resolution(options[0], nominal, followers=tuple(live[1:]), rewrite=len(live) != len(options))
     fitting = [item for item in live if not load or ((window := _window(item, windows)) is not None and window >= load)]
@@ -231,7 +235,7 @@ def resolve(
             f"({', '.join(strip_effort(item) for item in live)}) can hold it",
             degraded_capacity=True,
         )
-    why = "; ".join(_why(item, served, excluded) for item in options)
+    why = "; ".join(_why(item, served, excluded, spent) for item in options)
     return Resolution(None, nominal, f"{UNAVAILABLE_PREFIX} {why}")
 
 

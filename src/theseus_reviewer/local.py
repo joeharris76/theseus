@@ -74,6 +74,7 @@ SUMMARY_LIMIT = 1200
 DETAIL_LIMIT = 600
 FINDING_LIMIT = 20
 ERROR_LIMIT = 600
+RELAYED_PREFIXES = ("slot ", "review-verdict:", "review-local:", cli.DEGRADED_PREFIX, "classification unavailable:")
 EXIT_PROCEED = 0
 EXIT_REFUSED = 1
 EXIT_UNAVAILABLE = 2
@@ -942,7 +943,7 @@ class Run:
 
     def _relay(self, phase: str, result: subprocess.CompletedProcess[str]) -> None:
         for line in result.stdout.splitlines():
-            if line.startswith(("slot ", "review-verdict:", "review-local:")) and line not in self.relayed:
+            if line.startswith(RELAYED_PREFIXES) and line not in self.relayed:
                 self.relayed.add(line)
                 self.reporter.say(line)
         if result.returncode != 0:

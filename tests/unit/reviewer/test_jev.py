@@ -59,13 +59,13 @@ def test_ask_posts_the_judgment_and_returns_answers(server: tuple[_Server, str])
     assert body == {"model": "jev-1.14.0", "state": {"text": "x"}, "questions": {"size": {"type": "choice"}}}
 
 
-def test_non_200_raises_with_status_and_message(server: tuple[_Server, str]) -> None:
+def test_non_200_raises_with_the_status_and_no_provider_text(server: tuple[_Server, str]) -> None:
     state, url = server
-    state.responses.append((429, json.dumps({"error": {"message": "slow down"}}).encode()))
+    state.responses.append((402, json.dumps({"error": {"message": "slow down"}}).encode()))
     with JevSession(base_url=url, api_key="k") as session, pytest.raises(JevError) as excinfo:
         session.ask({}, {})
-    assert excinfo.value.status == 429
-    assert excinfo.value.message == "slow down"
+    assert (excinfo.value.status, excinfo.value.cause) == (402, "TypeSafe answered 402")
+    assert "slow down" not in f"{excinfo.value} {excinfo.value.message}"
 
 
 @pytest.mark.parametrize("body", [b"not json", b'{"model": "jev"}'])
@@ -112,7 +112,7 @@ def dropping_server() -> Iterator[str]:
 
 def test_a_dropped_connection_raises_jev_error_and_classifies_as_unavailable(dropping_server: str) -> None:
     session = JevSession(base_url=dropping_server, api_key="k", timeout_seconds=5)
-    with session, pytest.raises(JevError, match="unreachable.*IncompleteRead"):
+    with session, pytest.raises(JevError, match="unreachable"):
         session.ask({}, {})
     held = recovery.classify(session, {}, 1, 2)
     assert (held.source, held.reason) == (recovery.FALLBACK, recovery.UNAVAILABLE)

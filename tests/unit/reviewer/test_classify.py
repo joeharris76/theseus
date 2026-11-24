@@ -233,30 +233,29 @@ def test_the_size_floor_applies_to_a_jev_answer() -> None:
     assert result.size_bucket == "large" and result.floors["raised_by"] == ["size"]
 
 
-def test_a_malformed_jev_answer_is_an_outage_so_it_takes_the_ladder() -> None:
+def test_a_malformed_jev_answer_is_a_jev_error_without_a_partial_answer() -> None:
     for bad in (
         {"size": _answer("colossal", 0.9), "capability": _answer("deep", 0.9), "template": _answer("deep", 0.9)},
         {"size": _answer("large", 0.9)},
     ):
         with pytest.raises(JevError) as caught:
             _diff(_Scripted([bad]))
-        assert caught.value.is_outage and caught.value.partial is None
+        assert caught.value.partial is None
 
 
 def test_a_malformed_file_answer_keeps_the_change_level_answer_as_partial() -> None:
     session = _Scripted([_pr_answers("large", "deep"), {"impact": _answer("weird", 0.9), "importance": {"score": 1}}])
     with pytest.raises(JevError) as caught:
         _diff(session)
-    assert caught.value.is_outage
     assert caught.value.partial is not None and caught.value.partial.size_bucket == "large"
 
 
-def test_the_total_deadline_is_an_outage_with_the_partial_answer() -> None:
+def test_the_total_deadline_is_a_jev_error_with_the_partial_answer() -> None:
     ticks = iter([0.0, 10.0, 400.0, 400.0, 400.0])
     session = _Scripted([_pr_answers("medium", "deep"), _file_answers(), _file_answers()])
     with pytest.raises(JevError, match="deadline") as caught:
         _diff(session, clock=lambda: next(ticks), deadline_seconds=300)
-    assert caught.value.is_outage and caught.value.partial is not None
+    assert caught.value.partial is not None
     assert len(session.asked) == 2
 
 

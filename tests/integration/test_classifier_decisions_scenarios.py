@@ -4,13 +4,14 @@ from typing import Any
 
 import pytest
 
-from .harness import CHECKER, OPENAI_KEY, Harness, ReviewRun
+from .harness import CHECKER, OPENAI_KEY, POLICY, Harness, ReviewRun
 
 pytestmark = [pytest.mark.integration, pytest.mark.medium]
 
 FIXED_CHECKER = "def checker(a, b):\n    if a is None or b is None:\n        return False\n    return a == b\n"
 SHIP = {"decision": "SHIP", "summary": "The change keeps checker semantics; no defects.", "files_examined": [CHECKER]}
 GATE_FILE = ".github/soundness-paths.txt"
+JEV_FAILURE_TEXT = "the judgment service is down"
 CLASSIFIER_LINES = {
     "fallback": "  unavailable_bucket: max\n  fallback: decisions\n",
     "floor": "  size_floor:\n    min_lines: 1500\n",
@@ -103,13 +104,34 @@ def test_a_missing_openai_key_warns_and_uses_the_unavailable_bucket(harness: Har
     assert harness.decisions.requests == []
 
 
-def test_a_jev_client_error_never_reaches_decisions(harness: Harness) -> None:
+@pytest.mark.parametrize("status", [401, 402])
+def test_a_jev_client_error_or_payment_refusal_is_classified_by_decisions_without_the_provider_text(
+    harness: Harness, status: int
+) -> None:
     _configure(harness, "fallback")
-    harness.jev.pr_status = 401
+    harness.jev.pr_status = status
     run = _review(harness, 406)
 
-    assert run.classification == {}
-    assert harness.decisions.requests == []
+    held = run.classification
+    assert (held["backend"], held["degraded_from"]) == ("decisions", f"TypeSafe answered {status}")
+    assert f"Classification: TypeSafe answered {status}; classified by OpenAI Decisions" in _body(harness, 406)
+    assert JEV_FAILURE_TEXT not in _body(harness, 406) + run.step_summary() + str(held)
+
+
+def test_a_local_review_with_typesafe_refusing_payment_names_the_cause_and_reaches_a_reviewer(harness: Harness) -> None:
+    _configure(harness, "fallback")
+    harness.jev.pr_status = 402
+    harness.write({POLICY: harness.policy_file.read_text(encoding="utf-8")}, "enable the classifier fallback")
+    harness.branch("feat/cls-local", {CHECKER: FIXED_CHECKER}, "change")
+    harness.script_omp([SHIP])
+
+    review = harness.local_review("feat/cls-local", env={"OPENAI_API_KEY": OPENAI_KEY})
+
+    shown = review.stdout + review.stderr
+    assert review.code == 0, shown
+    assert "classification degraded: Classification: TypeSafe answered 402; classified by OpenAI Decisions" in shown
+    assert "classification unreadable" not in shown and JEV_FAILURE_TEXT not in shown
+    assert harness.omp_calls() == 1
 
 
 def test_a_gate_path_is_large_with_the_gate_template_even_when_decisions_says_trivial(harness: Harness) -> None:

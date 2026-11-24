@@ -18,21 +18,16 @@ TOTAL_TIMEOUT_SECONDS = 300
 
 
 class JevError(Exception):
-    def __init__(self, status: int | None, message: str, *, reason: str = "", missing_key: bool = False) -> None:
+    def __init__(self, status: int | None, message: str, *, reason: str = "") -> None:
         super().__init__(message)
         self.status = status
         self.message = message
         self.reason = reason or "unreachable"
-        self.missing_key = missing_key
         self.partial: Classification | None = None
 
     @property
     def cause(self) -> str:
         return f"TypeSafe answered {self.status}" if self.status is not None else f"TypeSafe {self.reason}"
-
-    @property
-    def is_outage(self) -> bool:
-        return not self.missing_key and (self.status is None or self.status == 429 or self.status >= 500)
 
 
 class JevSession:
@@ -50,7 +45,7 @@ class JevSession:
 
     def __enter__(self) -> JevSession:
         if not self.api_key:
-            raise JevError(None, "TYPESAFE_API_KEY is not set", missing_key=True)
+            raise JevError(None, "TYPESAFE_API_KEY is not set", reason="unkeyed")
         return self
 
     def __exit__(self, *ignored: object) -> None:
@@ -73,9 +68,9 @@ class JevSession:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            raise JevError(exc.code, _error_message(exc.read())) from exc
+            raise JevError(exc.code, f"TypeSafe answered {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
-            raise JevError(None, f"the judgment service is unreachable: {exc}") from exc
+            raise JevError(None, "the judgment service is unreachable") from exc
         try:
             content = json.loads(raw)
         except ValueError as exc:
@@ -85,13 +80,3 @@ class JevSession:
         if not isinstance(content, dict) or not isinstance(content.get("answers"), dict):
             raise JevError(None, "the judgment service answered without answers", reason="answered without answers")
         return content["answers"]
-
-
-def _error_message(raw: bytes) -> str:
-    try:
-        content = json.loads(raw)
-    except ValueError:
-        return ""
-    error = content.get("error") if isinstance(content, dict) else None
-    message = error.get("message", "") if isinstance(error, dict) else error
-    return str(message or "")[:500]

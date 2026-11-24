@@ -33,8 +33,9 @@ structured way.
 - **Two layers of fallback.**
   - When a model hits a usage limit, OMP moves to the next model in that model's
     fallback chain (`retry.fallbackChains` in the OMP config).
-  - If a whole pool of reviewers still reports a quota error, Theseus pauses that pool
-    for up to an hour and retries later.
+  - When a reviewer still reports a quota error, Theseus skips the models in that
+    reviewer's chain for up to an hour and lets the other reviewers of the pool run
+    their untried models.
   - A review that could not run never counts as a pass.
 
 ## Development

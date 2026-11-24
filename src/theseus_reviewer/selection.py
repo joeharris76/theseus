@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -44,6 +44,7 @@ class PoolBlock:
     provider: str
     recorded_at: datetime
     primary: bool = False
+    models: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -53,6 +54,8 @@ class PoolBlock:
         }
         if self.primary:
             data["primary"] = True
+        if self.models:
+            data["models"] = list(self.models)
         return data
 
     @classmethod
@@ -62,6 +65,7 @@ class PoolBlock:
             str(data.get("provider") or ""),
             datetime.fromisoformat(data["recorded_at"]),
             bool(data.get("primary")),
+            tuple(str(item) for item in data.get("models") or ()),
         )
 
 
@@ -185,12 +189,45 @@ def retry_unseen(attempts: Sequence[Attempt], reviewer: str, slot: int) -> tuple
     return history[-1].unseen if history[-1].absence == INCOMPLETE else ()
 
 
+def _quota_models(selection: SelectionInput, attempt: Attempt) -> frozenset[str]:
+    options = selection.candidates.get(attempt.reviewer, ())
+    if not selection.availability or not options:
+        return frozenset()
+    return frozenset(providers.strip_effort(item) for item in (*options, attempt.target) if item)
+
+
+def _spent_models(selection: SelectionInput, quota_attempts: Sequence[Attempt]) -> frozenset[str]:
+    spent = {model for attempt in quota_attempts for model in _quota_models(selection, attempt)}
+    for block in selection.pool_blocked_until.values():
+        if effective_until(block) > selection.now:
+            spent.update(block.models)
+    return frozenset(spent)
+
+
+def _pool_wide(
+    reviewer: Reviewer, selection: SelectionInput, unscoped_pools: frozenset[str], block: PoolBlock | None
+) -> bool:
+    return (
+        not reviewer.model.startswith("@")
+        or not selection.availability
+        or not selection.candidates.get(reviewer.name)
+        or reviewer.pool in unscoped_pools
+        or (block is not None and not block.models)
+    )
+
+
+def _all_spent(options: Sequence[str], spent: frozenset[str]) -> bool:
+    return bool(options) and all(providers.strip_effort(item) in spent for item in options)
+
+
 def _skip_reason(
     reviewer: Reviewer,
     selection: SelectionInput,
     attempted: Mapping[str, Sequence[Attempt]],
     quota_pools: Mapping[str, str],
     excluded: frozenset[str],
+    spent: frozenset[str],
+    unscoped_pools: frozenset[str],
 ) -> tuple[str | None, providers.Resolution | None]:
     history = attempted.get(reviewer.name, ())
     if history and not _may_retry(history):
@@ -198,13 +235,20 @@ def _skip_reason(
         return f"absent ({attempt.absence}{': ' + attempt.detail if attempt.detail else ''})", None
     if not reviewer.enabled:
         return f"disabled ({reviewer.disabled_reason})", None
-    if reviewer.pool in quota_pools:
+    options = selection.candidates.get(reviewer.name, ())
+    if reviewer.pool in quota_pools and (
+        _pool_wide(reviewer, selection, unscoped_pools, None) or _all_spent(options, spent)
+    ):
         return (
             f"skipped: {reviewer.pool} pool blocked in this run, {_source(quota_pools[reviewer.pool])} returned a quota error",
             None,
         )
     block = selection.pool_blocked_until.get(reviewer.pool)
-    if block is not None and effective_until(block) > selection.now:
+    if (
+        block is not None
+        and effective_until(block) > selection.now
+        and (_pool_wide(reviewer, selection, unscoped_pools, block) or _all_spent(options, spent))
+    ):
         return (
             f"skipped: {reviewer.pool} pool blocked until {effective_until(block).isoformat()}, "
             f"{_source(block.provider)} returned a quota error at {block.recorded_at.isoformat()}",
@@ -216,15 +260,21 @@ def _skip_reason(
             return capacity.unknown_text(selection.capacity_error), None
         if selection.load_tokens > limit:
             return capacity.skip_text(selection.load_tokens, limit), None
+    rewritable = reviewer.model.startswith("@")
+    if not rewritable and options and providers.strip_effort(options[0]) in spent:
+        return f"skipped: {providers.strip_effort(options[0])} {providers.QUOTA_SPENT}", None
+    if rewritable and _all_spent(options, spent):
+        return f"skipped: every candidate model {providers.QUOTA_SPENT}", None
     resolution: providers.Resolution | None = None
     if selection.availability:
         resolution = providers.resolve(
-            selection.candidates.get(reviewer.name, ()),
+            options,
             selection.served,
             selection.served_error,
             excluded,
             selection.windows,
             selection.load_tokens,
+            spent if rewritable else (),
         )
         if resolution.target is None:
             return resolution.reason, resolution
@@ -255,18 +305,19 @@ def next_step(selection: SelectionInput, attempts: Sequence[Attempt]) -> Step:
     attempted: dict[str, list[Attempt]] = {}
     for attempt in ordered:
         attempted.setdefault(attempt.reviewer, []).append(attempt)
-    quota_pools = {
-        by_name[attempt.reviewer].pool: attempt.provider
-        for attempt in ordered
-        if attempt.absence == "quota" and attempt.reviewer in by_name
-    }
+    quota_attempts = [attempt for attempt in ordered if attempt.absence == "quota" and attempt.reviewer in by_name]
+    quota_pools = {by_name[attempt.reviewer].pool: attempt.provider for attempt in quota_attempts}
+    unscoped_pools = frozenset(
+        by_name[attempt.reviewer].pool for attempt in quota_attempts if not _quota_models(selection, attempt)
+    )
+    spent = _spent_models(selection, quota_attempts)
     excluded = excluded_providers(ordered)
     reasons: list[str] = []
     too_large = False
     blocked_otherwise = False
     only_availability = True
     for reviewer in selection.chain:
-        reason, resolution = _skip_reason(reviewer, selection, attempted, quota_pools, excluded)
+        reason, resolution = _skip_reason(reviewer, selection, attempted, quota_pools, excluded, spent, unscoped_pools)
         if reason is None and len(ordered) >= selection.max_attempts:
             reason = "skipped: no attempt slot left in this run"
         if reason is not None:
@@ -292,8 +343,15 @@ def pool_resets(selection: SelectionInput, attempts: Sequence[Attempt]) -> dict[
             pool = by_name[attempt.reviewer].pool
             primary = bool(attempt.provider) and selection.pool_providers.get(pool) == attempt.provider
             requested = attempt.reset_at if primary and attempt.reset_at else selection.now + QUOTA_BACKOFF
-            block = PoolBlock(min(requested, selection.now + QUOTA_BACKOFF), attempt.provider, selection.now, primary)
+            models = tuple(sorted(_quota_models(selection, attempt)))
+            block = PoolBlock(
+                min(requested, selection.now + QUOTA_BACKOFF), attempt.provider, selection.now, primary, models
+            )
             kept = resets.get(pool)
-            if kept is None or block.until >= kept.until:
+            if kept is None:
                 resets[pool] = block
+                continue
+            merged = tuple(sorted({*kept.models, *models})) if kept.models and models else ()
+            winner = block if block.until >= kept.until else kept
+            resets[pool] = replace(winner, models=merged)
     return resets

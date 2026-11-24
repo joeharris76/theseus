@@ -119,6 +119,7 @@ from .verdict import DO_NOT_SHIP
 
 PLAN_FILE = "plan.json"
 CLASSIFICATION_FILE = "classification.json"
+DEGRADED_PREFIX = "classification degraded:"
 DIFF_FILE = "diff.patch"
 DIFF_NOT_STAGED_DETAIL = "the full pull request diff could not be staged in the workspace"
 CAPTURE_DIR = "captures"
@@ -215,6 +216,7 @@ def _base_plan(policy: Policy, repo: str, pr: int | None, run_id: str) -> dict[s
         "omp_config": policy.consumer.omp_config,
         "findings_delivery": policy.findings_delivery,
         **({"check_run_mirror": True} if policy.check_run_mirror else {}),
+        **({"classifier_issue": True} if policy.classifier_issue else {}),
         "repo": repo,
         "pr": pr,
         "run_id": run_id,
@@ -1484,7 +1486,7 @@ def _classify_plan(plan: dict[str, Any]) -> Classification:
         with JevSession() as session:
             return classify_diff(session, **facts)
     except JevError as exc:
-        if not exc.is_outage or plan.get("classifier_fallback") != "decisions":
+        if plan.get("classifier_fallback") != "decisions":
             raise
         return _decisions_fallback(plan, facts, exc)
 
@@ -1508,7 +1510,7 @@ def _decisions_fallback(plan: Mapping[str, Any], facts: dict[str, Any], jev_erro
     except DecisionsError as exc:
         if exc.is_auth:
             print(f"::error::the classifier fallback was refused ({exc.status}); check OPENAI_API_KEY")
-        _summary(f"classifier fallback failed: {exc}")
+        _summary(f"classifier fallback failed: {exc.message}")
         if partial is not None and not exc.missing_key:
             return replace(partial, degraded_from=f"{cause}; {exc.message}")
         answered = partial if partial is not None else exc.partial
@@ -1521,6 +1523,13 @@ def _decisions_fallback(plan: Mapping[str, Any], facts: dict[str, Any], jev_erro
             rules=facts["rules"],
             degraded_from=f"{cause}; {exc.message}",
         )
+
+
+def _classification_unavailable(reason: str, args: argparse.Namespace, classify_only: bool) -> int:
+    if classify_only:
+        _summary(reason)
+        return 0
+    return _empty_selection(reason, args.slot)
 
 
 def _empty_selection(reason: str, slot: int) -> int:
@@ -1555,13 +1564,12 @@ def command_select(args: argparse.Namespace) -> int:
             _summary("warning: the classifier fallback is configured but OPENAI_API_KEY is empty")
         try:
             classification = _classify_plan(plan)
-        except (JevError, KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError) as exc:
+            return _classification_unavailable(f"classification unavailable: {exc}", args, classify_only)
+        except JevError as exc:
             bucket = plan.get("classifier_unavailable_bucket")
-            if not isinstance(exc, JevError) or not exc.is_outage or not bucket:
-                if classify_only:
-                    _summary(f"classification unavailable: {exc}")
-                    return 0
-                return _empty_selection(f"classification unavailable: {exc}", args.slot)
+            if not bucket:
+                return _classification_unavailable(f"classification unavailable: {exc.cause}", args, classify_only)
             classification = fallback_classification(
                 bucket,
                 plan_gate_flags(plan),
@@ -1570,7 +1578,10 @@ def command_select(args: argparse.Namespace) -> int:
                 rules=_floor_rules(plan),
                 degraded_from=exc.cause,
             )
-            _summary(f"classification unavailable (TypeSafe): {exc}; {classification_note(classification)}")
+        if classification.degraded:
+            note = classification_note(classification)
+            print(f"::warning::{note}")
+            _summary(f"{DEGRADED_PREFIX} {note}")
         _write_json(classification_path, classification.to_json())
         if classify_only:
             return 0
@@ -2037,6 +2048,7 @@ def command_finalize(args: argparse.Namespace) -> int:
             "review": "true" if final.review is not None else "false",
             "has_state": "true" if (out_dir / "state" / github.STATE_FILE).is_file() else "false",
             **({"check_run": "true"} if mirror is not None else {}),
+            **({"classifier_issue": "true"} if plan.get("classifier_issue") else {}),
         }
     )
     _defer_summary(out_dir, f"review-verdict #{plan['pr']} {plan['head_sha']}: {final.state}: {final.description}")

@@ -679,9 +679,67 @@ def edit_issue_comment(repo: str, comment_id: int, body: str, token: str) -> Non
 
 
 def _issue_comment_call(target: list[str], body: str, token: str) -> None:
-    result = run_gh(["gh", "api", *target, "-f", f"body={body}"], token=token, timeout=MINIMIZE_CALL_SECONDS)
+    _issue_call(target, {"body": body}, token)
+
+
+def _issue_call(target: list[str], fields: Mapping[str, str], token: str) -> None:
+    pairs = [arg for name, value in fields.items() for arg in ("-f", f"{name}={value}")]
+    result = run_gh(["gh", "api", *target, *pairs], token=token, timeout=MINIMIZE_CALL_SECONDS)
     if result.returncode != 0:
         raise GitHubError(f"could not write {target[-1]}: {result.stderr.strip()[:500]}")
+
+
+CLASSIFIER_ISSUE_TITLE = "Review classifier degraded"
+
+
+def open_classifier_issues(repo: str, bot_login: str, token: str) -> list[int]:
+    result = run_gh(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/issues?state=open&per_page=100",
+            "--jq",
+            ".[] | {number, title, login: .user.login, pull: (.pull_request != null)}",
+        ],
+        token=token,
+        timeout=MINIMIZE_CALL_SECONDS,
+    )
+    if result.returncode != 0:
+        raise GitHubError(f"could not list the open issues of {repo}: {result.stderr.strip()[:500]}")
+    issues = (json.loads(line) for line in result.stdout.splitlines())
+    return sorted(
+        int(issue["number"])
+        for issue in issues
+        if not issue["pull"] and issue["title"] == CLASSIFIER_ISSUE_TITLE and issue["login"] == f"{bot_login}[bot]"
+    )
+
+
+def _close_issue(repo: str, number: int, token: str) -> None:
+    _issue_call(["--method", "PATCH", f"repos/{repo}/issues/{number}"], {"state": "closed"}, token)
+
+
+def sync_classifier_issue(repo: str, bot_login: str, note: str, where: str, token: str) -> None:
+    numbers = open_classifier_issues(repo, bot_login, token)
+    if note:
+        body = (
+            f"The review classifier fell back for {where}.\n\n{note}\n\n"
+            "The review still ran from the fallback classification. "
+            "This issue closes itself after the next review that is classified normally."
+        )
+        if numbers:
+            _issue_call(["--method", "PATCH", f"repos/{repo}/issues/{numbers[0]}"], {"body": body}, token)
+        else:
+            _issue_call(
+                ["--method", "POST", f"repos/{repo}/issues"], {"title": CLASSIFIER_ISSUE_TITLE, "body": body}, token
+            )
+            numbers = open_classifier_issues(repo, bot_login, token)
+        for duplicate in numbers[1:]:
+            _close_issue(repo, duplicate, token)
+    elif numbers:
+        post_issue_comment(repo, numbers[0], f"The review classifier answered normally again for {where}.", token)
+        for number in numbers:
+            _close_issue(repo, number, token)
 
 
 def post_status_file(repo: str, head_sha: str, payload: Path, token: str) -> None:
