@@ -22,6 +22,7 @@ class FakeIssues:
     def __init__(self, issues: list[dict[str, Any]] | None = None) -> None:
         self.issues = issues or []
         self.writes: list[tuple[str, str, dict[str, str]]] = []
+        self.racing: list[dict[str, Any]] = []
 
     def run(self, argv: list[str], *, token: str, timeout: float) -> subprocess.CompletedProcess[str]:
         assert token == "issues-token"
@@ -31,6 +32,10 @@ class FakeIssues:
         method, target = argv[argv.index("--method") + 1], argv[argv.index("--method") + 2]
         fields = dict(argv[index + 1].split("=", 1) for index, item in enumerate(argv) if item == "-f")
         self.writes.append((method, target, fields))
+        if method == "POST" and target == f"repos/{REPO}/issues":
+            self.issues += [*self.racing, _issue(100 + len(self.issues))]
+        if fields.get("state") == "closed":
+            self.issues = [issue for issue in self.issues if f"/issues/{issue['number']}" not in target]
         return subprocess.CompletedProcess(argv, 0, "{}", "")
 
 
@@ -84,6 +89,31 @@ def test_a_normal_review_with_no_open_issue_writes_nothing(api: FakeIssues) -> N
     github.sync_classifier_issue(REPO, LOGIN, "", WHERE, "issues-token")
 
     assert api.writes == []
+
+
+def test_a_concurrent_create_keeps_only_the_oldest_issue_open(api: FakeIssues) -> None:
+    api.racing = [_issue(50)]
+
+    github.sync_classifier_issue(REPO, LOGIN, NOTE, WHERE, "issues-token")
+
+    assert [(method, target) for method, target, _ in api.writes] == [
+        ("POST", f"repos/{REPO}/issues"),
+        ("PATCH", f"repos/{REPO}/issues/100"),
+    ]
+    assert [issue["number"] for issue in api.issues] == [50]
+
+
+def test_a_normal_review_closes_every_duplicate_and_comments_once(api: FakeIssues) -> None:
+    api.issues = [_issue(9), _issue(12)]
+
+    github.sync_classifier_issue(REPO, LOGIN, "", WHERE, "issues-token")
+
+    assert [(method, target) for method, target, _ in api.writes] == [
+        ("POST", f"repos/{REPO}/issues/9/comments"),
+        ("PATCH", f"repos/{REPO}/issues/9"),
+        ("PATCH", f"repos/{REPO}/issues/12"),
+    ]
+    assert api.issues == []
 
 
 def test_classifier_issue_defaults_to_off_and_accepts_only_a_boolean(tmp_path: Any) -> None:
