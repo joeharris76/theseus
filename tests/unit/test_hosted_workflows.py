@@ -878,12 +878,22 @@ def test_the_gate_workflow_has_exactly_one_gate_invocation_outside_the_sweep() -
     assert invoking == [("gate", "Post the gate for the head")]
 
 
-def test_a_review_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() -> None:
+def test_a_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() -> None:
     review = load(WORKFLOWS / "review.yml")
-    dispatch = "(github.event_name == 'repository_dispatch' && github.event.action == 'review-sweep')"
+    sweep = "(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) == 'true')"
     for job in ("sweep", "health"):
-        assert dispatch in " ".join(review["jobs"][job]["if"].split())
-    assert "repository_dispatch" not in review["jobs"]["review"]["if"]
+        assert sweep in " ".join(review["jobs"][job]["if"].split())
+    reviewed = " ".join(review["jobs"]["review"]["if"].split())
+    assert (
+        "(github.event_name == 'workflow_dispatch' && format('{0}', github.event.inputs.sweep) != 'true')" in reviewed
+    )
     caller = load(EXAMPLES / "review-verdict.yml")
-    assert caller["on"]["repository_dispatch"] == {"types": ["review-sweep"]}
-    assert "github.event_name == 'repository_dispatch') && 'sweep'" in caller["concurrency"]["group"]
+    inputs = caller["on"]["workflow_dispatch"]["inputs"]
+    assert inputs["sweep"] == {
+        "description": inputs["sweep"]["description"],
+        "required": False,
+        "type": "boolean",
+        "default": False,
+    }
+    assert inputs["pr"]["required"] is False and "repository_dispatch" not in caller["on"]
+    assert "(github.event_name == 'workflow_dispatch' && inputs.sweep)) && 'sweep'" in caller["concurrency"]["group"]
