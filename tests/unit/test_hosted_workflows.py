@@ -876,3 +876,14 @@ def test_the_gate_workflow_has_exactly_one_gate_invocation_outside_the_sweep() -
         if "theseus gate" in step.get("run", "") and job != "sweep"
     ]
     assert invoking == [("gate", "Post the gate for the head")]
+
+
+def test_a_review_sweep_dispatch_runs_the_sweep_and_health_jobs_and_never_a_review() -> None:
+    review = load(WORKFLOWS / "review.yml")
+    dispatch = "(github.event_name == 'repository_dispatch' && github.event.action == 'review-sweep')"
+    for job in ("sweep", "health"):
+        assert dispatch in " ".join(review["jobs"][job]["if"].split())
+    assert "repository_dispatch" not in review["jobs"]["review"]["if"]
+    caller = load(EXAMPLES / "review-verdict.yml")
+    assert caller["on"]["repository_dispatch"] == {"types": ["review-sweep"]}
+    assert "github.event_name == 'repository_dispatch') && 'sweep'" in caller["concurrency"]["group"]
