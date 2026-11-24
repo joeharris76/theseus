@@ -619,6 +619,14 @@ def test_a_sweep_dispatch_run_title_never_names_a_pull_request() -> None:
     assert "${{ !inputs.sweep && (github.event.pull_request.head.sha || inputs.head)" in title
 
 
+def test_the_guard_reads_the_sweep_pr_and_head_inputs_only_from_a_workflow_dispatch() -> None:
+    env = step_named(load(WORKFLOWS / "review.yml"), "guard", GUARD_STEP)["env"]
+    dispatch = "github.event_name == 'workflow_dispatch' && "
+    assert env["SWEEP_INPUT"] == "${{ " + dispatch + "format('{0}', github.event.inputs.sweep) || '' }}"
+    assert env["PR_INPUT"] == "${{ " + dispatch + "github.event.inputs.pr || '' }}"
+    assert env["HEAD_INPUT"] == "${{ " + dispatch + "github.event.inputs.head || '' }}"
+
+
 def test_the_review_callee_requires_a_tailscale_tag_and_has_no_default_identity() -> None:
     document = load(WORKFLOWS / "review.yml")
     spec = document["on"]["workflow_call"]["inputs"]["tailscale_tag"]
