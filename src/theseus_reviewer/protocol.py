@@ -886,6 +886,9 @@ def judge(
 def _on_summary(item: Finding, summary: str, own: Collection[str]) -> Finding:
     if item.file == summary or item.file in own:
         return item
+    folded = sorted(path for path in own if path.casefold() == item.file.casefold())
+    if folded:
+        return replace(item, file=folded[0])
     location = f"{item.file}:{item.line}"
     if len(location) > MAX_TITLE // 2:
         location = "…" + location[-(MAX_TITLE // 2) :]

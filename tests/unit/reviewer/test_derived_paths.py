@@ -935,3 +935,14 @@ def test_the_trigger_sequence_for_a_data_finding_ends_in_a_full_review(
     }
     plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(record))
     assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_case_variant_of_a_data_path_maps_to_the_data_file(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    cited = f"{DATA_DIR}/Shard-00.json"
+    finding = {"severity": "High", "file": cited, "line": 3, "title": "Bad value", "detail": "Wrong."}
+    final = _final(policy, tmp_path, plan, _v("bad", [finding]))
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SHARD and defect.title == "Bad value" and defect.line == 3
+    assert _record(final)["open_defects"][0]["file"] == SHARD
