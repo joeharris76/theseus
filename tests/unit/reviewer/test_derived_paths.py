@@ -903,6 +903,6 @@ def test_every_segment_is_kept_before_the_name_is_dropped_for_the_bare_note() ->
     )
     assert text == "SHIP · degraded: openai · summary only · data attested, not read"
     carried = status_text.with_derived("SHIP · carried from 0123456789ab (same patch)", NAME, status_text.SUCCESS_LIMIT)
-    assert carried == "SHIP · summary only · data attested, not read"
+    assert carried == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"
     kept = status_text.with_derived("SHIP · degraded: openai", NAME, status_text.SUCCESS_LIMIT)
     assert kept == "SHIP · degraded: openai · summary only · data attested, not read"

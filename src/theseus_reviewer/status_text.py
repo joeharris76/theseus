@@ -263,11 +263,6 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
             base = SEP.join(kept)
             if limit - len(base) - overhead >= len(attested_by):
                 return f"{base}{SEP}{derived_note(attested_by)}"
-    if attested_by is not None:
-        base = SEP.join(trimmed)
-        room = limit - len(base) - overhead
-        if room >= min(len(attested_by), DERIVED_FLOOR):
-            return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
     droppable = []
     for count in range(len(trimmed), 0, -1):
         droppable.append(count)
@@ -276,6 +271,9 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
     tail = f"{SEP}{derived_note(None)}"
     for count in droppable:
         base = SEP.join(trimmed[:count])
+        room = limit - len(base) - overhead
+        if attested_by is not None and room >= min(len(attested_by), DERIVED_FLOOR):
+            return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
         if len(base) + len(tail) <= limit:
             return f"{base}{tail}"
     kept = trimmed[: droppable[-1]]
