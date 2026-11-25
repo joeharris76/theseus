@@ -30,6 +30,7 @@ from . import (
     coverage,
     credentials,
     dedup,
+    derived,
     disk_scan,
     edits,
     findings,
@@ -78,10 +79,12 @@ from .diff import (
     changed_lines,
     commentable_lines,
     deleting_files,
+    drop_files,
     hunk_index,
     select_files,
 )
-from .evidence import glob_match, is_binary_candidate
+from .evidence import is_binary_candidate
+from .globs import glob_match
 from .jev import JevError, JevSession
 from .matchers import Matchers, load_matchers
 from .policy import (
@@ -104,6 +107,7 @@ from .render import (
     TEMPLATES,
     UNOPENED_PR,
     OversizeError,
+    derived_block,
     dispute_listing,
     file_list_block,
     file_listing,
@@ -334,6 +338,7 @@ def _dispute_step(
     base_change_unreadable: bool = False,
     local: Sequence[Mapping[str, Any]] | None = None,
     is_promotion: bool = False,
+    derived_digest: str | None = None,
 ) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]] | None, protocol.Round]:
     if step.kind not in (protocol.SKIP, protocol.CARRY, protocol.REPOST):
         return None, None, step
@@ -349,6 +354,7 @@ def _dispute_step(
         base_changed_at=base_changed_at,
         base_change_unreadable=base_change_unreadable,
         is_promotion=is_promotion,
+        derived_digest=derived_digest,
     )
     if local is not None:
         return None, None, forced() if protocol.live_disputes(local, found.latest) else step
@@ -525,6 +531,9 @@ def adjudicate_round(
 ) -> int:
     latest = found.latest or {}
     plan["adjudication"] = {"action": ruling.action, "id": ruling.defect_id, "reason": ruling.reason}
+    held = derived.recorded_plan(policy.evidence.derived_paths, latest.get("derived"))
+    if held is not None:
+        plan["derived"] = held
     plan["previous_state"] = previous.to_json() if previous else None
     plan["protocol"] = {
         "kind": protocol.CARRY,
@@ -945,6 +954,34 @@ def _resolve_promotion_bundle(
         return None, f"theseus promotion hold: {exc}"
 
 
+def _derived_eligibility(policy: Policy, inputs: RoundInputs, matchers: Matchers) -> derived.Eligible | None:
+    if not policy.evidence.derived_paths:
+        return None
+    gate_paths = policy.classifier.gate_paths
+
+    def _held(path: str) -> bool:
+        return matchers.is_protected(path) or matchers.is_soundness_path(path) or bool(matching([path], gate_paths))
+
+    return derived.assess(policy.evidence.derived_paths, inputs.files, inputs.states, inputs.full_diff, _held)
+
+
+def _derived_inputs(inputs: RoundInputs, eligible: derived.Eligible) -> RoundInputs:
+    since = inputs.since_diff
+    return replace(
+        inputs,
+        in_scope={*inputs.in_scope, eligible.entry.summary},
+        full_diff=eligible.diff,
+        since_diff=None if since is None else lambda previous: _without_files(since(previous), eligible.paths),
+    )
+
+
+def _without_files(text: str | None, paths: Sequence[str]) -> str | None:
+    if text is None:
+        return None
+    kept = drop_files(text, frozenset(paths))
+    return None if set(hunk_index(kept)) & set(paths) else kept
+
+
 def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: RoundInputs, matchers: Matchers) -> int:
     active_promotion, hold_reason = _resolve_promotion_bundle(plan, policy, inputs)
     if hold_reason is not None:
@@ -953,12 +990,25 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     is_promotion = active_promotion is not None
     upstream_files = list(active_promotion.changed_files) if active_promotion is not None else []
     upstream_in_scope = set(active_promotion.required_paths) if active_promotion is not None else set()
+    eligible = None if is_promotion else _derived_eligibility(policy, inputs, matchers)
+    if eligible is not None:
+        inputs = _derived_inputs(inputs, eligible)
+        plan["derived"] = eligible.to_plan()
     all_files = [*inputs.files, *upstream_files]
     in_scope = set(inputs.in_scope) | upstream_in_scope
-    scoped = [
-        *_scoped_files(inputs.files, inputs.in_scope, policy, matchers),
-        *[item for item in upstream_files if item.path in upstream_in_scope or not item.path.endswith(PROSE_SUFFIXES)],
-    ]
+    scoped = (
+        list(inputs.files)
+        if eligible is not None
+        else [
+            *_scoped_files(inputs.files, inputs.in_scope, policy, matchers),
+            *[
+                item
+                for item in upstream_files
+                if item.path in upstream_in_scope or not item.path.endswith(PROSE_SUFFIXES)
+            ],
+        ]
+    )
+    derived_digest = eligible.entry.digest() if eligible is not None else None
     found = inputs.found
     strike_count = max(protocol.strikes(found.records), inputs.previous_strikes)
     step = _protocol_round(
@@ -972,6 +1022,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         base_change_unreadable=inputs.base_change_unreadable,
         manual=inputs.manual,
         is_promotion=is_promotion,
+        derived_digest=derived_digest,
     )
     threads, comments, step = _dispute_step(
         plan,
@@ -987,6 +1038,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         inputs.base_change_unreadable,
         inputs.disputes,
         is_promotion=is_promotion,
+        derived_digest=derived_digest,
     )
     settled = _settled_round(out_dir, plan, policy, step, found, inputs.deferred, inputs.marked)
     if settled is not None:
@@ -1039,6 +1091,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         promotion_record=active_promotion.record.to_json() if active_promotion is not None else None,
         upstream_protected=upstream_in_scope,
         whole_files=set(active_promotion.whole_paths) if active_promotion is not None else set(),
+        eligible=eligible,
     )
     plan["added_lines"] = _added_ranges(inputs.full_diff)
     plan["new_files"] = sorted(item.path for item in all_files if item.status in ("added", "renamed", "copied"))
@@ -1146,6 +1199,7 @@ def _protocol_round(
     base_change_unreadable: bool = False,
     manual: bool = False,
     is_promotion: bool = False,
+    derived_digest: str | None = None,
 ) -> protocol.Round:
     paths = sorted(item.path for item in scoped)
     prints = protocol.fingerprints(states or ())
@@ -1167,6 +1221,7 @@ def _protocol_round(
         manual=manual,
         is_promotion=is_promotion,
         max_finding_rounds=policy.protocol.max_finding_rounds,
+        derived_digest=derived_digest,
     )
     latest = step.previous or {}
     follow_up = step.kind == protocol.FOLLOW_UP
@@ -1296,11 +1351,12 @@ def _plan_review(
     promotion_record: Mapping[str, Any] | None = None,
     upstream_protected: frozenset[str] | set[str] = frozenset(),
     whole_files: frozenset[str] | set[str] = frozenset(),
+    eligible: derived.Eligible | None = None,
 ) -> None:
     latest = step.previous or {}
     follow_up = step.kind == protocol.FOLLOW_UP
     changed = [item for item in scoped if follow_up and step.changed is not None and item.path in step.changed]
-    partial = follow_up and 0 < len(changed) < len(scoped)
+    partial = follow_up and 0 < len(changed) < len(scoped) and eligible is None
     diff_text = full_diff
     if partial and full_diff is not None:
         diff_text = select_files(full_diff, frozenset(path for item in changed for path in item.paths))
@@ -1322,20 +1378,24 @@ def _plan_review(
     follow_up_reviewer = latest.get("reviewer") if follow_up and latest.get("reviewer") in names else None
     old_staged_prefix = f"{promotion.STAGED_PROMOTION_DIR}/old/"
     delta_paths = {path for item in files for path in item.paths}
-    evidence_files = sorted(
-        {
-            *(
-                item.path
-                for item in reviewed_now
-                if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
-            ),
-            *(
-                item.previous_path
-                for item in reviewed_now
-                if item.previous_path in whole_files and item.previous_path in in_scope
-            ),
-            *(path for path in sorted(whole_files) if path in in_scope and path not in delta_paths and not partial),
-        }
+    evidence_files = (
+        [eligible.entry.summary]
+        if eligible is not None
+        else sorted(
+            {
+                *(
+                    item.path
+                    for item in reviewed_now
+                    if item.path in in_scope and (not item.removed or item.path.startswith(old_staged_prefix))
+                ),
+                *(
+                    item.previous_path
+                    for item in reviewed_now
+                    if item.previous_path in whole_files and item.previous_path in in_scope
+                ),
+                *(path for path in sorted(whole_files) if path in in_scope and path not in delta_paths and not partial),
+            }
+        )
     )
     held = (*policy.classifier.gate_paths, *policy.classifier.logic_paths, *policy.classifier.data_paths)
 
@@ -1356,6 +1416,7 @@ def _plan_review(
                         if item.path in evidence_set and any(_protected(path) for path in item.paths)
                     ),
                     *(path for path in whole_files if path in evidence_set),
+                    *([eligible.entry.summary] if eligible is not None else []),
                 }
             ),
             "evidence_exempt_paths": list(policy.evidence.exempt_paths),
@@ -1457,6 +1518,7 @@ def _floor_rules(plan: Mapping[str, Any]) -> FloorRules:
 
 
 def _plan_stats(plan: Mapping[str, Any]) -> list[tuple[str, int, int, str, str | None]]:
+    unread = set((plan.get("derived") or {}).get("paths", ()))
     return [
         (
             item["path"],
@@ -1466,6 +1528,7 @@ def _plan_stats(plan: Mapping[str, Any]) -> list[tuple[str, int, int, str, str |
             item.get("previous_path"),
         )
         for item in plan.get("reviewed_files", [])
+        if item["path"] not in unread
     ]
 
 
@@ -1670,9 +1733,10 @@ def compose_brief(
     marked = unread_required(unread, evidence_files) if file_list else []
     diff_file = plan_dir / DIFF_FILE
     binary = _binary_required(plan, diff_file, evidence_files) if file_list else []
+    attested = plan.get("derived") or {}
     hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen, worst_case_retry) if marked else {}
     files_block = (
-        f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints, binary)}"
+        f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints, binary, attested.get('paths', ()))}"
         if file_list
         else f"Changed files:\n{file_listing(reviewed)}\n"
     )
@@ -1686,6 +1750,8 @@ def compose_brief(
             f" ({promotion.STAGED_PROMOTION_DIR}/new/ for added/modified files, {promotion.STAGED_PROMOTION_DIR}/old/"
             f" for removed files, which are also seen by reading them whole).\n\n{files_block}"
         )
+    if attested:
+        files_block += derived_block(attested["attested_by"], attested["summary"])
     if plan.get("scope") == "changed":
         unchanged = "\n".join(plan.get("unchanged_files", []))
         files_block += (

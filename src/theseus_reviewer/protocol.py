@@ -28,6 +28,7 @@ from .verdict import (
     FIXED,
     MAX_CLAIM,
     MAX_LINE,
+    MAX_PATH,
     NOT_FIXED,
     SHIP,
     SHIP_WITH_FIXES,
@@ -103,6 +104,7 @@ OPTIONAL_RECORD_KEYS = frozenset(
         "coverage",
         "step_back",
         "advisory",
+        "derived",
     }
 )
 CLAIMED_TITLE_PREFIX = "(claimed "
@@ -283,6 +285,25 @@ def _valid_defect(item: Any) -> bool:
     )
 
 
+DERIVED_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+DERIVED_PATHS_MAX = 200
+
+
+def _valid_derived(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"entry", "digest", "paths"}
+        and isinstance(value["entry"], str)
+        and DERIVED_NAME.fullmatch(value["entry"]) is not None
+        and isinstance(value["digest"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", value["digest"]) is not None
+        and isinstance(value["paths"], list)
+        and 0 < len(value["paths"]) <= DERIVED_PATHS_MAX
+        and all(isinstance(path, str) and 0 < len(path) <= MAX_PATH for path in value["paths"])
+        and len(set(value["paths"])) == len(value["paths"])
+    )
+
+
 def _valid_patches(patches: Any) -> bool:
     return isinstance(patches, dict) and all(isinstance(v, str) for v in patches.values())
 
@@ -327,6 +348,7 @@ def _valid_record(record: Any) -> bool:
         and all(_valid_defect(item) for item in record["open_defects"])
         and (record.get("patch_map") is None or _valid_patches(record["patch_map"]))
         and ("promotion" not in record or promotion.valid_promotion_record(record["promotion"]))
+        and ("derived" not in record or _valid_derived(record["derived"]))
         and ("coverage" not in record or (type(record["coverage"]) is int and record["coverage"] >= 1))
         and ("step_back" not in record or (type(record["step_back"]) is int and record["step_back"] == 1))
         and (
@@ -509,7 +531,9 @@ def _forced_round(
     )
 
 
-def _decided_again(latest: Mapping[str, Any], head_sha: str, manual: bool, *, allow_carry: bool = True) -> Round:
+def _decided_again(
+    latest: Mapping[str, Any], head_sha: str, manual: bool, *, allow_carry: bool = True, bound: str = "promotion"
+) -> Round:
     label = LABELS[latest["decision"]]
     if not manual or latest["decision"] == REFUSED:
         return Round(SKIP, f"head {head_sha} already has a {label} decision")
@@ -524,7 +548,7 @@ def _decided_again(latest: Mapping[str, Any], head_sha: str, manual: bool, *, al
     if not allow_carry:
         return Round(
             FIRST,
-            f"the {label} decision on head {head_sha} has no run binding; promotion requires a fresh review",
+            f"the {label} decision on head {head_sha} has no run binding; {bound} requires a fresh review",
             latest["cycle"] + 1,
             1,
             latest,
@@ -568,8 +592,11 @@ def plan_round(
     manual: bool = False,
     is_promotion: bool = False,
     max_finding_rounds: int | None = None,
+    derived_digest: str | None = None,
 ) -> Round:
     latest = found.latest
+    recorded = latest.get("derived") if latest is not None else None
+    derived_bound = recorded is not None and recorded["digest"] != derived_digest
     if strike_count >= max_do_not_ship:
         if latest is not None and latest["kind"] == REFUSAL and latest["head_sha"] == head_sha:
             return Round(SKIP, f"this head already has the refusal after {strike_count} DO NOT SHIP decisions")
@@ -595,11 +622,18 @@ def plan_round(
         )
         promotion_bound = is_promotion or latest.get("promotion") is not None
         if not stale:
-            return _decided_again(latest, head_sha, manual, allow_carry=not promotion_bound)
+            return _decided_again(
+                latest,
+                head_sha,
+                manual,
+                allow_carry=not (promotion_bound or derived_bound),
+                bound="promotion" if promotion_bound else "derived data",
+            )
         if (
             latest["patch_digest"] == digest
             and not digest.startswith(UNREAD_DIGEST)
             and not promotion_bound
+            and not derived_bound
             and not _legacy_clearance(latest)
         ):
             return Round(
@@ -617,12 +651,29 @@ def plan_round(
                 1,
                 latest,
             )
+        if derived_bound:
+            return Round(
+                FIRST,
+                f"the base changed after the {LABELS[latest['decision']]} decision on head {head_sha}, which relied on"
+                " derived data that this review does not attest",
+                latest["cycle"] + 1,
+                1,
+                latest,
+            )
     restart = latest["cycle"] + 1
     if latest["base_ref"] != base_ref:
         return Round(FIRST, f"the base changed from {latest['base_ref']} to {base_ref}", restart, 1, latest)
     if latest["decision"] == REFUSED:
         return Round(FIRST, "the strike limit no longer applies", restart, 1, latest)
     promotion_bound = is_promotion or latest.get("promotion") is not None
+    if derived_bound and latest["patch_digest"] == digest and not digest.startswith(UNREAD_DIGEST):
+        unattested = (
+            f"the {LABELS[latest['decision']]} decision on head {latest['head_sha']} relied on derived data that this"
+            " review does not attest"
+        )
+        if latest["decision"] == DO_NOT_SHIP:
+            return Round(FIRST, unattested, restart, 1, latest)
+        return Round(FOLLOW_UP, unattested, latest["cycle"], latest["round"] + 1, latest, frozenset(paths))
     if latest["patch_digest"] == digest and not digest.startswith(UNREAD_DIGEST):
         if force and latest["decision"] in (SHIP, SHIP_WITH_FIXES):
             return _forced_round(
@@ -674,6 +725,8 @@ def plan_round(
         if latest.get("coverage")
         else frozenset(paths)
     )
+    if derived_bound:
+        changed = changed | (frozenset(recorded["paths"]) & frozenset(paths))
     streak = finding_streak(found.records, latest["cycle"]) if max_finding_rounds is not None else []
     if (
         max_finding_rounds is not None
@@ -831,6 +884,8 @@ def judge_planned(
 ) -> Judgement:
     rules = plan.get("protocol") or {}
     changed = rules.get("changed") if rules.get("kind") == FOLLOW_UP else None
+    if isinstance(plan.get("derived"), Mapping):
+        changed = [plan["derived"]["summary"]]
     ws = workspace if workspace is not None else plan.get("workspace")
     return judge(
         verdict,

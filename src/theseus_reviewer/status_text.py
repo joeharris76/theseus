@@ -229,6 +229,23 @@ def with_degraded(description: str, providers: Sequence[str], limit: int) -> str
     )
 
 
+DERIVED_ATTESTED = "data attested by "
+DERIVED_UNREAD = ", not read"
+
+
+def derived_note(attested_by: str) -> str:
+    return f"summary only{SEP}{DERIVED_ATTESTED}{attested_by}{DERIVED_UNREAD}"
+
+
+def with_derived(description: str, attested_by: str, limit: int) -> str:
+    fixed = len(SEP) + len(derived_note(""))
+    base = description
+    while limit - len(base) - fixed < len(attested_by) and SEP in base:
+        base = base.rpartition(SEP)[0]
+    room = limit - len(base) - fixed
+    return f"{base}{SEP}{derived_note(hard_clip(attested_by, max(room, 1)))}"
+
+
 def repost(base: str) -> str:
     return trim(base.removesuffix(REPOSTED_MARK), REPOST_LIMIT) + REPOSTED_MARK
 

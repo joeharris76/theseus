@@ -660,6 +660,7 @@ class Outcome:
     findings: tuple[dict[str, Any], ...]
     record: dict[str, Any] | None = None
     skipped: str = ""
+    derived: dict[str, str] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -669,6 +670,7 @@ class Outcome:
             "summary": self.summary,
             "findings": list(self.findings),
             "record": self.record,
+            "derived": self.derived,
         }
 
     @classmethod
@@ -682,7 +684,21 @@ class Outcome:
         record = data.get("record")
         if record is not None and not isinstance(record, dict):
             return None
-        return cls(data["blocked"], data["label"], data["reviewer"], data["summary"], tuple(data["findings"]), record)
+        held = data.get("derived")
+        if held is not None and not (
+            isinstance(held, dict)
+            and all(isinstance(key, str) and isinstance(value, str) for key, value in held.items())
+        ):
+            return None
+        return cls(
+            data["blocked"],
+            data["label"],
+            data["reviewer"],
+            data["summary"],
+            tuple(data["findings"]),
+            record,
+            derived=held,
+        )
 
 
 def _entry_finding(entry: Mapping[str, Any], cycle: int = 1) -> dict[str, Any]:
@@ -722,8 +738,14 @@ def judged_outcome(
 def recorded_outcome(record: Mapping[str, Any]) -> Outcome:
     found = tuple(_entry_finding(entry, record.get("cycle", 1)) for entry in record.get("open_defects", ()))
     blocked = record["decision"] in (DO_NOT_SHIP, protocol.REFUSED) or _blocking(found)
+    held = record.get("derived")
     return Outcome(
-        blocked, protocol.LABELS[record["decision"]], record.get("reviewer", ""), record.get("summary", ""), found
+        blocked,
+        protocol.LABELS[record["decision"]],
+        record.get("reviewer", ""),
+        record.get("summary", ""),
+        found,
+        derived=None if held is None else {"entry": held["entry"], "digest": held["digest"]},
     )
 
 
@@ -1006,7 +1028,11 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
         plan["protocol"]["cycle"],
         report.defect_ids(plan, final.judgement.defects),
     )
-    return replace(outcome, record=record)
+    held = plan.get("derived")
+    reliance = (
+        {key: str(held[key]) for key in ("entry", "digest", "attested_by")} if isinstance(held, Mapping) else None
+    )
+    return replace(outcome, record=record, derived=reliance)
 
 
 def _persist_pool_blocks(run: Run) -> None:
@@ -1075,6 +1101,12 @@ def _show(outcome: Outcome, reporter: Reporter) -> None:
     reporter.say(f"{ADVISORY}: reviewer {outcome.reviewer or 'none'}, decision {outcome.label}.")
     if outcome.summary:
         reporter.say(str(outcome.summary)[:SUMMARY_LIMIT])
+    if outcome.derived:
+        attested = outcome.derived.get("attested_by")
+        reporter.say(
+            f"{ADVISORY}: summary only; the data files of derived path entry {outcome.derived['entry']} were not read"
+            + (f" and are attested by {attested}." if attested else ".")
+        )
     ordered = sorted(outcome.findings, key=_severity_rank)
     for finding in ordered[:FINDING_LIMIT]:
         reporter.say(
@@ -1308,7 +1340,15 @@ def member_binding(root: Path, base: str, head: str) -> dict[str, str]:
     }
 
 
-def _member_record(root: Path, base: str, head: str, trusted_sha: str, outcome: str, reason: str) -> dict[str, Any]:
+def _member_record(
+    root: Path,
+    base: str,
+    head: str,
+    trusted_sha: str,
+    outcome: str,
+    reason: str,
+    derived: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     return {
         "schema": MEMBER_SCHEMA,
         "outcome": outcome,
@@ -1317,6 +1357,7 @@ def _member_record(root: Path, base: str, head: str, trusted_sha: str, outcome: 
         "head_sha": head,
         **member_binding(root, base, head),
         "trusted_sha": trusted_sha,
+        **({"derived": dict(derived)} if derived else {}),
     }
 
 
@@ -1354,7 +1395,7 @@ def _member_review(args: argparse.Namespace, reporter: Reporter) -> int:
     else:
         _show(outcome, reporter)
     _escalated(record, outcome, reporter)
-    result = _member_record(root, base, head, trusted_sha, kind, reason)
+    result = _member_record(root, base, head, trusted_sha, kind, reason, outcome.derived)
     _write_json_atomic(result_path, result)
     if kind == MEMBER_FINDINGS:
         reporter.say(

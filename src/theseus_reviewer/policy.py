@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import bases, omp_pin
+from . import bases, derived, omp_pin
 
 SIZE_BUCKETS = ("trivial", "small", "medium", "large", "huge", "max")
 SEVERITIES = ("Critical", "High", "Medium", "Low")
@@ -17,6 +17,7 @@ DELIVERIES = ("comment", "review")
 BRIEF_MAX_BYTES = 400_000
 INLINE_BRIEF_MAX_BYTES = 100_000
 CLASSIFIER_FALLBACKS = ("decisions",)
+EVIDENCE_KEYS = frozenset({"exempt_paths", "derived_paths"})
 CLASSIFIER_KEYS = frozenset(
     {
         "gate_paths",
@@ -170,6 +171,7 @@ class Consumer:
 @dataclass(frozen=True)
 class EvidenceRules:
     exempt_paths: tuple[str, ...] = ()
+    derived_paths: tuple[derived.DerivedEntry, ...] = ()
 
 
 DEFAULT_ALLOWED_ARTIFACT_HOSTS = (
@@ -412,6 +414,13 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         except omp_pin.PinError as exc:
             raise PolicyError(str(exc)) from exc
     evidence = data.get("evidence") or {}
+    _require(isinstance(evidence, Mapping), "evidence must be a mapping")
+    unknown_evidence = sorted(str(key) for key in set(evidence) - EVIDENCE_KEYS)
+    _require(not unknown_evidence, f"evidence has unknown key {unknown_evidence[0] if unknown_evidence else ''!r}")
+    try:
+        derived_paths = derived.parse_entries(evidence.get("derived_paths", []), classifier.gate_paths)
+    except derived.DerivedError as exc:
+        raise PolicyError(str(exc)) from exc
     promotion_raw = data.get("promotion") or {}
     _require(isinstance(promotion_raw, Mapping), "promotion must be a mapping")
     promo_package = promotion_raw.get("package", "theseus-reviewer")
@@ -504,6 +513,7 @@ def parse_policy(data: Mapping[str, Any]) -> Policy:
         omp_sha256=omp_sha256,
         evidence=EvidenceRules(
             exempt_paths=_str_tuple(evidence.get("exempt_paths") or [], "evidence exempt_paths"),
+            derived_paths=derived_paths,
         ),
         promotion=PromotionRules(
             package=promo_package,

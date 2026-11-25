@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -11,6 +10,7 @@ from types import MappingProxyType
 
 from . import coverage
 from .coverage import Ranges, Returned
+from .globs import glob_match
 from .verdict import FIXED, MAX_PATH, NOT_FIXED, WITHDRAWN, Finding, Verdict, display_path, sanitize, valid_path
 
 INLINE = "inline"
@@ -514,18 +514,6 @@ def has_nul_head(workspace: Path, path: str) -> bool:
             return b"\0" in handle.read(BINARY_PROBE_BYTES)
     except OSError:
         return False
-
-
-def _segments_match(path: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
-    if not pattern:
-        return not path
-    if pattern[0] == "**":
-        return any(_segments_match(path[skip:], pattern[1:]) for skip in range(len(path) + 1))
-    return bool(path) and fnmatch.fnmatchcase(path[0], pattern[0]) and _segments_match(path[1:], pattern[1:])
-
-
-def glob_match(path: str, pattern: str) -> bool:
-    return _segments_match(tuple(path.split("/")), tuple(pattern.split("/")))
 
 
 def required_files(
