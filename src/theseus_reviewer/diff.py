@@ -109,6 +109,15 @@ def select_files(diff_text: str, paths: frozenset[str]) -> str:
     return "".join(kept)
 
 
+def drop_files(diff_text: str, paths: frozenset[str]) -> str:
+    sections = re.split(r"(?m)^(?=diff --git )", diff_text)
+    return "".join(
+        section
+        for section in sections
+        if not (section.startswith("diff --git ") and _header_path(section.split("\n", 1)[0]) in paths)
+    )
+
+
 def binary_notice_count(diff_text: str) -> int:
     return len(re.findall(r"(?m)^(?:Binary files .+ differ|GIT binary patch)$", diff_text))
 

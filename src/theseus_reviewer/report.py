@@ -8,6 +8,7 @@ from typing import Any
 from . import (
     adjudication,
     dedup,
+    derived,
     layout,
     protocol,
     providers,
@@ -298,6 +299,7 @@ def _record(
     promotion_record: Mapping[str, Any] | None = None,
     coverage: bool = False,
     advisory: Sequence[Mapping[str, Any]] = (),
+    derived_record: Mapping[str, Any] | None = None,
 ) -> str:
     rules = plan["protocol"]
     record = {
@@ -332,9 +334,24 @@ def _record(
         record["coverage"] = int(coverage)
     if promotion_record is not None and not carried and decision == protocol.SHIP and not open_defects:
         record["promotion"] = dict(promotion_record)
+    if derived_record is not None:
+        record["derived"] = dict(derived_record)
     if bound_run(plan):
         record["run_uuid"] = bound_run(plan)
     return protocol.encode_marker(redaction_check.redact(record, secrets), rules.get("patch_map"))
+
+
+def _decision_limit(state: str) -> int:
+    return status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.DESCRIPTION_LIMIT
+
+
+def _attestation(plan: Mapping[str, Any], previous: Mapping[str, Any] | None = None) -> str | None:
+    held = plan.get("derived")
+    if not isinstance(held, Mapping):
+        return None
+    if previous is not None and (previous.get("derived") or {}).get("digest") != held.get("digest"):
+        return None
+    return str(held["attested_by"])
 
 
 def _strike_line(plan: Mapping[str, Any], strikes: int) -> list[str]:
@@ -541,6 +558,7 @@ def _marked(
             else None,
             coverage=bool(plan.get("coverage")),
             advisory=[protocol.defect_entry(defect_id, item) for item, defect_id in (advisory or {}).items()],
+            derived_record=derived.record_of(plan),
         )
     except protocol.MarkerError:
         return None
@@ -944,12 +962,15 @@ def finalize(
     shown_strikes = strikes if decided else int(rules.get("strikes", 0))
     limit = rules.get("max_do_not_ship")
     mark, headline = _headline(judgement, description, unrecorded, shown_strikes, limit)
+    attested = _attestation(plan) if decided else None
     ran = terminal.target if terminal is not None and terminal.target != terminal.nominal else ""
     rework = decided and judgement.decision == protocol.DO_NOT_SHIP
 
     def render(cap: int | None, evidence_cap: int | None = None) -> str:
         active = MAX_DETAIL if cap is None else cap
         lines = _head(plan, mark, headline)
+        if attested is not None:
+            lines += [status_text.derived_note(attested), ""]
         if judgement is not None:
             lines += _meta(
                 plan, open_severities, judgement.fixed, judgement.withdrawn, bool(open_severities) and decided
@@ -1008,13 +1029,13 @@ def finalize(
     )
     cause = pending_cause if state == PENDING else None
     final_strikes = strikes if judgement is not None and not unrecorded else None
+    status_limit = _decision_limit(state)
+    described = status_text.with_degraded(description, degraded, status_limit)
+    if attested is not None:
+        described = status_text.with_derived(described, attested, status_limit)
     return Final(
         state,
-        status_text.with_degraded(
-            description,
-            degraded,
-            status_text.SUCCESS_LIMIT if state == SUCCESS else status_text.DESCRIPTION_LIMIT,
-        ),
+        described,
         body if has_content else "",
         review,
         reviewer,
@@ -1070,6 +1091,9 @@ def carried(plan: Mapping[str, Any]) -> Final:
         strike_limit=rules.get("max_do_not_ship") or None,
         tail=status_text.carried_tail(reviewed_head),
     )
+    attested = _attestation(plan, previous)
+    if attested is not None:
+        description = status_text.with_derived(description, attested, _decision_limit(outcome))
     moved = reviewed_head != plan["head_sha"]
     lines = [
         *_head(
@@ -1082,6 +1106,7 @@ def carried(plan: Mapping[str, Any]) -> Final:
                 f"carried from {reviewed_head}" if moved else "decision recorded again for this run",
             ),
         ),
+        *([status_text.derived_note(attested), ""] if attested is not None else []),
         "The patch is unchanged since that head was reviewed, so no reviewer ran."
         if moved
         else "No reviewer ran: the decision on this head is recorded again, bound to this run.",
@@ -1106,6 +1131,7 @@ def carried(plan: Mapping[str, Any]) -> Final:
             coverage=bool(previous.get("coverage")),
             escalated=previous.get("escalated", ()),
             adjudicated=previous.get("adjudicated", ()),
+            derived_record=previous.get("derived"),
         ),
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
@@ -1135,8 +1161,10 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         else "The finding stands and its dispute is closed; push a fix to clear it."
     )
     reason = layout.neutralize_inline(sanitize(ruling["reason"], adjudication.REASON_LIMIT))
+    attested = _attestation(plan, previous)
     lines = [
         *_head(plan, label, _carried_head(label, decision, len(open_defects), f"owner ruling: {action} {defect_id}")),
+        *([status_text.derived_note(attested), ""] if attested is not None else []),
         f"**Owner ruling:** {action} {defect_id} - {reason}",
         "",
         effect,
@@ -1160,6 +1188,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
             coverage=bool(previous.get("coverage")),
             escalated=escalated,
             adjudicated=settled,
+            derived_record=previous.get("derived"),
         ),
     )
     review = {"commit_id": plan["head_sha"], "event": "COMMENT", "body": body, "comments": []}
@@ -1173,6 +1202,8 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         strike_limit=rules.get("max_do_not_ship") or None,
         tail=status_text.ruling_tail(action, defect_id),
     )
+    if attested is not None:
+        description = status_text.with_derived(description, attested, _decision_limit(outcome))
     return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
 
@@ -1197,7 +1228,7 @@ def reposted(plan: Mapping[str, Any]) -> Final:
     )
     base = repost["description"]
     if repost["state"] == SUCCESS:
-        base = status_text.trim(base, status_text.SUCCESS_LIMIT)
+        base = status_text.fit(base, status_text.SUCCESS_LIMIT)
     return Final(repost["state"], status_text.repost(base), body, None, None, None, None)
 
 

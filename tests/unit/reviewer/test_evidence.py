@@ -20,7 +20,6 @@ from theseus_reviewer.evidence import (
     Trace,
     compacted,
     describe,
-    glob_match,
     mark_citations,
     relative,
     returned,
@@ -29,6 +28,7 @@ from theseus_reviewer.evidence import (
 from theseus_reviewer.evidence import (
     check as _check,
 )
+from theseus_reviewer.globs import glob_match
 from theseus_reviewer.matchers import load_matchers
 from theseus_reviewer.policy import load_policy
 from theseus_reviewer.verdict import Finding, PriorDefect, Verdict

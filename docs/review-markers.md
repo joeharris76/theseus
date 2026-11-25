@@ -21,7 +21,13 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 <!-- review-protocol: v1 <data> -->
 ```
 
-`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `REFUSED`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The format is unchanged.
+`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `REFUSED`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The only addition is the optional `derived` key described below.
+
+### The `derived` key
+
+An optional `derived` object on the record, `{"entry": <name>, "digest": <sha256 hex>, "paths": [<path>, ...]}` with exactly those three keys, says the decision relied on a consumer attestation for generated data that no reviewer read; see [consumer-policy.md](consumer-policy.md). `entry` matches `[a-z0-9]+(-[a-z0-9]+)*`, `digest` is the sha256 of the canonical policy entry, and `paths` is a non-empty list of up to 200 distinct data paths. A record with any other shape is invalid. Readers of the 0.2.20 line reject a record that carries the key, so a pin rolled back below the release that introduced it puts such pull requests on HOLD.
+
+A later round carries a `derived` decision only while the policy entry has the same digest. Otherwise the recorded paths are changed required reads again.
 
 ## `review-verdict: v2`
 

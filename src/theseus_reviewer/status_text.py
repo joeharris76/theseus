@@ -229,8 +229,79 @@ def with_degraded(description: str, providers: Sequence[str], limit: int) -> str
     )
 
 
+DERIVED_ATTESTED = "data attested by "
+DERIVED_ATTESTED_BARE = "data attested"
+DERIVED_UNREAD = ", not read"
+DERIVED_FLOOR = 20
+
+
+def derived_note(attested_by: str | None) -> str:
+    named = DERIVED_ATTESTED_BARE if attested_by is None else f"{DERIVED_ATTESTED}{attested_by}"
+    return f"summary only{SEP}{named}{DERIVED_UNREAD}"
+
+
+def _shrunk_escalated(segment: str, room: int) -> str:
+    found = ESCALATED.fullmatch(segment)
+    if found is None:
+        return hard_clip(segment, room)
+    ids = found["ids"].split(",")
+    earlier = int(found["more"] or 0)
+    for shown in range(len(ids), 0, -1):
+        hidden = earlier + len(ids) - shown
+        text = f"{ESCALATED_LABEL} {','.join(ids[:shown])}{f' +{hidden} more' if hidden else ''}"
+        if len(text) <= room:
+            return text
+    return hard_clip(f"{ESCALATED_LABEL} {ids[0]}", room)
+
+
+def with_derived(description: str, attested_by: str | None, limit: int) -> str:
+    segments = description.split(SEP)
+    trimmed = [segment for segment in segments if segment != NO_OPEN_FINDINGS]
+    overhead = len(SEP) + len(derived_note(""))
+    if attested_by is not None:
+        for kept in (segments, trimmed):
+            base = SEP.join(kept)
+            if limit - len(base) - overhead >= len(attested_by):
+                return f"{base}{SEP}{derived_note(attested_by)}"
+    droppable = []
+    for count in range(len(trimmed), 0, -1):
+        droppable.append(count)
+        if ESCALATED.search(trimmed[count - 1]) or trimmed[count - 1] == RULING_HINT:
+            break
+    if attested_by is not None:
+        for count in droppable:
+            base = SEP.join(trimmed[:count])
+            room = limit - len(base) - overhead
+            if room >= min(len(attested_by), DERIVED_FLOOR):
+                return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
+    tail = f"{SEP}{derived_note(None)}"
+    for count in droppable:
+        base = SEP.join(trimmed[:count])
+        if len(base) + len(tail) <= limit:
+            return f"{base}{tail}"
+    kept = trimmed[: droppable[-1]]
+    found = [index for index, segment in enumerate(kept) if ESCALATED.fullmatch(segment)]
+    split = found[-1] if found else len(kept) - 1
+    before, after = kept[:split], kept[split + 1 :]
+    fixed = sum(len(part) + len(SEP) for part in (*before, *after)) + len(tail)
+    shrunk = _shrunk_escalated(kept[split], limit - fixed)
+    return SEP.join((*before, shrunk, *after)) + tail
+
+
+_DERIVED_STATUS = re.compile(
+    rf"(?P<head>.*?){re.escape(SEP)}summary only{re.escape(SEP)}data attested(?: by (?P<name>.*))?, not read", re.DOTALL
+)
+
+
+def fit(description: str, limit: int) -> str:
+    found = _DERIVED_STATUS.fullmatch(description)
+    if found is None:
+        return trim(description, limit)
+    return with_derived(found["head"], found["name"], limit)
+
+
 def repost(base: str) -> str:
-    return trim(base.removesuffix(REPOSTED_MARK), REPOST_LIMIT) + REPOSTED_MARK
+    return fit(base.removesuffix(REPOSTED_MARK), REPOST_LIMIT) + REPOSTED_MARK
 
 
 def with_run_suffix(description: str, run: object) -> str:
