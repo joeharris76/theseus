@@ -31,6 +31,7 @@ from .verdict import (
     MAX_CLAIM,
     MAX_LINE,
     MAX_PATH,
+    MAX_TITLE,
     NOT_FIXED,
     SHIP,
     SHIP_WITH_FIXES,
@@ -612,6 +613,15 @@ def plan_round(
                     f"forced re-review after {LABELS[latest['decision']]}: an author rebuttal disputes an open finding"
                 ),
             )
+        if derived_bound and manual and latest["decision"] != REFUSED:
+            return Round(
+                FIRST,
+                f"the {LABELS[latest['decision']]} decision on head {head_sha} relied on derived data that this"
+                " review does not attest; a manual review reads it in full",
+                latest["cycle"] + 1,
+                1,
+                latest,
+            )
         decided_at = found.latest_at
         stale = latest["decision"] != REFUSED and (
             base_change_unreadable
@@ -882,6 +892,7 @@ def _on_summary(item: Finding, summary: str) -> Finding:
         line=1,
         end_line=None,
         replacement=None,
+        title=sanitize(f"{item.title} [{item.file}:{item.line}]", MAX_TITLE),
         detail=f"(anchored by the reviewer on {item.file}:{item.line}) {item.detail}",
     )
 

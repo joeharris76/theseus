@@ -461,7 +461,7 @@ def test_a_finding_off_the_summary_is_counted_and_anchored_on_the_summary(
     final = _final(policy, tmp_path, plan, verdict)
     assert final.judgement is not None and final.judgement.decision != "SHIP"
     (defect,) = final.judgement.defects
-    assert defect.file == SUMMARY and defect.severity == "High" and defect.title == "Wrong"
+    assert defect.file == SUMMARY and defect.severity == "High" and defect.title == f"Wrong [{path}:7]"
     assert f"{path}:7" in defect.detail and "Because." in defect.detail
     assert final.state == "failure"
 
@@ -814,3 +814,26 @@ def test_a_changed_entry_digest_is_planned_as_a_full_review(tmp_path: Path, monk
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
     assert {MANIFEST, SHARD} <= set(plan["protocol"]["changed"])
     assert MANIFEST in _written(tmp_path)
+
+
+def test_same_title_findings_on_different_files_stay_distinct(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    findings = [
+        {"severity": "High", "file": path, "line": 3, "title": "Same", "detail": f"Detail for {path}."}
+        for path in (SHARD, MANIFEST)
+    ]
+    final = _final(policy, tmp_path, plan, _v("bad", findings))
+    assert final.judgement is not None and len(final.judgement.defects) == 2
+    assert {item.title for item in final.judgement.defects} == {f"Same [{SHARD}:3]", f"Same [{MANIFEST}:3]"}
+    assert final.review is not None
+    text = final.review["body"] + "".join(item["body"] for item in final.review["comments"])
+    assert f"Detail for {SHARD}." in text and f"Detail for {MANIFEST}." in text
+
+
+def test_a_manual_review_on_the_same_head_reads_derived_data_in_full() -> None:
+    held = _round(_found(_bound()), manual=True, derived_digest=DIGEST)
+    assert held.kind != protocol.FIRST
+    for digest in (None, "f" * 64):
+        step = _round(_found(_bound()), manual=True, derived_digest=digest)
+        assert step.kind == protocol.FIRST and step.cycle == 2
+    assert _round(_found(_bound()), manual=False, derived_digest=None).kind == protocol.SKIP
