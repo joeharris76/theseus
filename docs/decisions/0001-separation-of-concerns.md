@@ -18,7 +18,7 @@ Separation of concerns between Theseus and the projects it reviews is a fundamen
 2. **Inputs.** The only inputs Theseus trusts from a consumer are its lock and trusted-base policy, the manifests and files the policy names, the caller workflow inputs and secrets, and commands from the policy's attesters in the forms the policy documents. Theseus's own earlier records, statuses and reviews are also trusted, when they are verified as its own. Everything else in the pull request, including its description, other comments, file names and any file that claims to describe the change, is untrusted data.
 3. **Fail closed.** Theseus's safety guarantees hold for any consumer. They may not depend on a consumer's description of itself being complete or honest, beyond what its trusted-base policy declares. When a required declaration is absent or does not parse, Theseus refuses to run. When a declaration does not fit the change, Theseus falls back to full review. It never falls back to less review. A rule such as "reduce review only when every changed file is declared derived" is inside this rule. A rule such as "trust the consumer's list of generator files" is not.
 4. **No consumer specifics.** The package and the reusable workflows contain no consumer-specific name, path, job or benchmark. Behaviour that one consumer needs goes in policy, expressed as a general mechanism that any consumer can use.
-5. **No consumer CI.** Theseus does not enforce, inspect or re-run consumer CI or branch rulesets, other than the Theseus caller workflows and the statuses its own App posts. Where a clearance relies on an attestation from the consumer, such as an attester's stand-in or adjudication, the gate status and the verdict say so plainly.
+5. **No consumer CI.** Theseus does not enforce, inspect or re-run consumer CI or branch rulesets, other than the Theseus caller workflows and the statuses its own App posts. Where a clearance relies on an attestation from the consumer, such as an attester's stand-in or adjudication, the gate status says so plainly, and so does the verdict when one exists.
 6. **Same rules everywhere.** The reviewer reviews any project it is pointed at by the same rules. Theseus's own repository is a consumer like any other, and nothing in the package or the reusable workflows is keyed to the repository it runs in.
 
 ### Applying it
@@ -40,7 +40,7 @@ Positive:
 
 Negative:
 
-- Some consumer needs, such as very large generated data pull requests, cannot be met by Theseus trusting the consumer. They need a general mechanism that is safe when the consumer's declaration is wrong, and that may be slower or more expensive than a trust-based shortcut. Until one exists, such pull requests are reviewed in full.
+- Some consumer needs, such as very large generated data pull requests, cannot be met by Theseus trusting the consumer. They need a general mechanism that is safe when the consumer's declaration is wrong, and that may be slower or more expensive than a trust-based shortcut. Until one exists, such pull requests are reviewed in full, or, when too large to review, cleared only by an attester's stand-in.
 - Each new key needs review against these rules, which takes time.
 
 Known exceptions to resolve. None of these is fixed by this record:
@@ -49,7 +49,7 @@ Known exceptions to resolve. None of these is fixed by this record:
 - `local.MEMBER_SCHEMA` is `"benchbox_member_review_v1"`, so a consumer's name is in the persisted member record schema. [local-review.md](../local-review.md) documents it as unchanged, and `test_local_review.py` and `test_state_locations.py` assert it. Renaming it changes a persisted format, so it needs a compatibility plan.
 - [consumer-policy.md](../consumer-policy.md) names a consumer in general guidance: the review capacity paragraph ("BenchBox's policy can select these reviewers") and the check-run bullet that mentions "the BenchBox digest". Both fall short of the documentation rule below.
 
-Documentation rule: general docs may name a consumer only as an origin note, a dated record, or a clearly marked example. General behaviour is described without naming one. The other docs that name BenchBox (`local-review.md`, `infra.md`, `review-evals.md`, `review-comment-format-proposal.md`) do so as migration history, an example or dated records, and meet it.
+Documentation rule: general docs may name a consumer only as an origin note, a dated record, or a clearly marked example. General behaviour is described without naming one. Other docs that name BenchBox do so as origin notes, dated records or marked examples.
 
 Checked and not exceptions: the `theseus_repository` input default in `review.yml` and `gate.yml` is Theseus's own repository, which names Theseus and not a consumer. The `review-eval` workflow's repository condition limits Theseus's own scheduled evaluation to its own repository. It is not a reusable workflow and does not change how any review is planned or judged. The `BenchBox` mentions in `PROVENANCE.md` and `LICENSE` record origin and copyright.
 
