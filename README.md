@@ -71,6 +71,7 @@ uv build
 - [SECURITY.md](SECURITY.md): reporting and trust model
 - [RELEASING.md](RELEASING.md): release process
 - [docs/repository-settings.md](docs/repository-settings.md): owner-applied GitHub settings
+- [docs/decisions/0001-separation-of-concerns.md](docs/decisions/0001-separation-of-concerns.md): why Theseus and the projects it reviews stay separate
 - [PROVENANCE.md](PROVENANCE.md): BenchBox source baseline and frozen source hashes through v0.1.6
 
 ## Status
