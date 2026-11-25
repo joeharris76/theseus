@@ -548,14 +548,14 @@ def test_a_short_name_keeps_every_segment() -> None:
     assert text == "SHIP · no open findings · summary only · data attested by Nightly, not read"
 
 
-def test_the_name_is_dropped_before_the_wording() -> None:
+def test_a_trailing_segment_is_dropped_to_keep_the_name() -> None:
     ids = [f"D{n}" for n in range(1, 7)]
     base = status_text.with_findings("SHIP WITH FIXES", 6, [], ids, "", status_text.DESCRIPTION_LIMIT)
     assert "escalated D1,D2,D3,D4,D5,D6" in base
     text = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
     assert len(text) <= status_text.DESCRIPTION_LIMIT
-    assert status_text.ESCALATED.search(text) and "owner ruling needed" in text
-    assert text.endswith(" · summary only · data attested, not read")
+    assert status_text.ESCALATED.search(text) and "escalated D1,D2,D3,D4,D5,D6" in text
+    assert "summary only · data attested by Reproduce the fast-tier" in text and text.endswith(", not read")
     one = status_text.with_findings("SHIP WITH FIXES", 1, [], ["D1"], "", status_text.DESCRIPTION_LIMIT)
     clipped = status_text.with_derived(one, "n" * 200, status_text.DESCRIPTION_LIMIT)
     assert status_text.ESCALATED.search(clipped) and clipped.endswith(", not read") and "summary only" in clipped
@@ -722,5 +722,25 @@ def test_an_owner_ruling_after_a_digest_change_keeps_the_wording(policy: Policy)
         "adjudication": {"action": "WITHDRAW", "id": "D1", "reason": "fine"},
     }
     final = report.adjudicated(plan)
-    assert "summary only · data attested" in final.description and final.description.endswith(", not read")
+    assert final.description == "SHIP · owner ruling: WITHDRAW D1 · summary only · data attested, not read"
+    assert "\nsummary only · data attested, not read\n" in final.body
+    assert "baseline, not read" not in final.body
     assert protocol.decode_marker(final.body)["derived"] == _recorded()
+
+
+@pytest.mark.parametrize("count", [20, 30])
+def test_a_long_escalated_list_is_rebuilt_not_cut(count: int) -> None:
+    ids = [f"D{n}" for n in range(1, count + 1)]
+    base = status_text.with_findings("SHIP WITH FIXES", count, [], ids, "", status_text.DESCRIPTION_LIMIT)
+    text = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
+    assert len(text) <= status_text.DESCRIPTION_LIMIT and text.endswith("summary only · data attested, not read")
+    found = status_text.ESCALATED.search(text)
+    assert found is not None
+    shown = found["ids"].split(",")
+    assert shown == ids[: len(shown)]
+    assert len(shown) + int(found["more"] or 0) == count
+
+
+def test_a_carried_ship_keeps_the_named_form() -> None:
+    text = status_text.with_derived("SHIP · carried from 0123456789ab (same patch)", NAME, status_text.SUCCESS_LIMIT)
+    assert text == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"

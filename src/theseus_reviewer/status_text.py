@@ -240,24 +240,50 @@ def derived_note(attested_by: str | None) -> str:
     return f"summary only{SEP}{named}{DERIVED_UNREAD}"
 
 
-def with_derived(description: str, attested_by: str, limit: int) -> str:
+def _shrunk_escalated(segment: str, room: int) -> str:
+    found = ESCALATED.fullmatch(segment)
+    if found is None:
+        return hard_clip(segment, room)
+    ids = found["ids"].split(",")
+    earlier = int(found["more"] or 0)
+    for shown in range(len(ids), 0, -1):
+        hidden = earlier + len(ids) - shown
+        text = f"{ESCALATED_LABEL} {','.join(ids[:shown])}{f' +{hidden} more' if hidden else ''}"
+        if len(text) <= room:
+            return text
+    return hard_clip(f"{ESCALATED_LABEL} {ids[0]}", room)
+
+
+def with_derived(description: str, attested_by: str | None, limit: int) -> str:
     segments = description.split(SEP)
     trimmed = [segment for segment in segments if segment != NO_OPEN_FINDINGS]
-    for kept in (segments, trimmed):
-        base = SEP.join(kept)
-        room = limit - len(base) - len(SEP) - len(derived_note(""))
-        if room >= len(attested_by):
-            return f"{base}{SEP}{derived_note(attested_by)}"
-    base = SEP.join(trimmed)
-    room = limit - len(base) - len(SEP) - len(derived_note(""))
-    if room >= min(len(attested_by), DERIVED_FLOOR):
-        return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
-    tail = f"{SEP}{derived_note(None)}"
+    overhead = len(SEP) + len(derived_note(""))
+    if attested_by is not None:
+        for kept in (segments, trimmed):
+            base = SEP.join(kept)
+            if limit - len(base) - overhead >= len(attested_by):
+                return f"{base}{SEP}{derived_note(attested_by)}"
+    droppable = []
     for count in range(len(trimmed), 0, -1):
+        droppable.append(count)
+        if ESCALATED.search(trimmed[count - 1]):
+            break
+    if attested_by is not None:
+        for count in droppable:
+            base = SEP.join(trimmed[:count])
+            room = limit - len(base) - overhead
+            if room >= min(len(attested_by), DERIVED_FLOOR):
+                return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
+    tail = f"{SEP}{derived_note(None)}"
+    for count in droppable:
         base = SEP.join(trimmed[:count])
-        if len(base) + len(tail) <= limit or ESCALATED.search(trimmed[count - 1]):
-            return f"{hard_clip(base, limit - len(tail))}{tail}"
-    return f"{hard_clip(trimmed[0], limit - len(tail))}{tail}"
+        if len(base) + len(tail) <= limit:
+            return f"{base}{tail}"
+    last = droppable[-1]
+    prefix = SEP.join(trimmed[: last - 1])
+    joint = SEP if prefix else ""
+    room = limit - len(tail) - len(prefix) - len(joint)
+    return f"{prefix}{joint}{_shrunk_escalated(trimmed[last - 1], room)}{tail}"
 
 
 def repost(base: str) -> str:
