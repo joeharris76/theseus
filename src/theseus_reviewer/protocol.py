@@ -912,7 +912,15 @@ def judge_planned(
     if isinstance(plan.get("derived"), Mapping):
         summary = plan["derived"]["summary"]
         changed = [summary]
-        verdict = replace(verdict, defects=tuple(_on_summary(item, summary) for item in verdict.defects))
+        unread = {item["id"] for item in rules.get("prior", ()) if item.get("file") in plan["derived"]["paths"]}
+        verdict = replace(
+            verdict,
+            defects=tuple(_on_summary(item, summary) for item in verdict.defects),
+            prior_defects=tuple(
+                replace(item, status=NOT_FIXED) if item.id in unread and item.status in (FIXED, WITHDRAWN) else item
+                for item in verdict.prior_defects
+            ),
+        )
     ws = workspace if workspace is not None else plan.get("workspace")
     return judge(
         verdict,

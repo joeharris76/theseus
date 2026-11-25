@@ -34,6 +34,16 @@ LARGE_ROWS = 40_000
 OTHER_HEAD = "b" * 40
 
 
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a derived-paths test reached the GitHub API")
+
+    monkeypatch.setattr(cli.github, "_run_api", refuse)
+    monkeypatch.setattr(cli.github, "issue_comments", lambda *_args: [])
+    monkeypatch.setattr(cli.github, "review_threads", lambda *_args: [])
+
+
 def _entry(**over: Any) -> dict[str, Any]:
     return {
         "name": "baseline",
@@ -232,7 +242,6 @@ def _plan(
     plan.update({"base_sha": "b" * 40, "base_ref": "develop", "head_sha": "a" * 40})
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    monkeypatch.setattr(cli.github, "review_threads", lambda *_args: [])
     inputs = cli.RoundInputs(
         files=scenario.files,
         in_scope={item.path for item in scenario.files},
@@ -852,3 +861,48 @@ def test_a_near_limit_title_keeps_the_location_and_the_limit(policy: Policy, tmp
     assert len(titles) == 3 and len(set(titles)) == 3
     assert all(len(title) <= 200 for title in titles)
     assert titles[0].endswith(f"[{SHARD}:3]") and titles[1].endswith(f"[{MANIFEST}:3]")
+
+
+def _open_on(path: str) -> dict[str, Any]:
+    return {"id": "D1", "severity": "High", "file": path, "line": 3, "end_line": None, "title": "Bad value"}
+
+
+def test_an_open_defect_on_a_data_file_keeps_the_round_a_full_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SHARD)]
+    )
+    plan = _plan(Scenario(), _policy(), tmp_path / "data", monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    elsewhere = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SUMMARY)]
+    )
+    assert _plan(Scenario(), _policy(), tmp_path / "summary", monkeypatch, _found(elsewhere))["derived"]
+
+
+@pytest.mark.parametrize("status", ["fixed", "withdrawn"])
+def test_a_summary_only_round_cannot_clear_a_data_anchored_prior(status: str, policy: Policy, tmp_path: Path) -> None:
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[_open_on(SHARD), {**_open_on(SUMMARY), "id": "D2"}]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [
+        {"id": "D1", "status": status, "evidence": f"{SHARD}:3 is right"},
+        {"id": "D2", "status": "fixed", "evidence": f"{SUMMARY}:3 is right"},
+    ]
+    final = _final(policy, tmp_path, plan, verdict)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    assert [item["id"] for item in final.judgement.carried] == ["D1"]
+
+
+def test_every_segment_is_kept_before_the_name_is_dropped_for_the_bare_note() -> None:
+    text = status_text.with_derived(
+        "SHIP · no open findings · degraded: openai", "Reproduce the baseline", status_text.SUCCESS_LIMIT
+    )
+    assert text == "SHIP · degraded: openai · summary only · data attested, not read"
+    carried = status_text.with_derived("SHIP · carried from 0123456789ab (same patch)", NAME, status_text.SUCCESS_LIMIT)
+    assert carried == "SHIP · summary only · data attested, not read"
+    kept = status_text.with_derived("SHIP · degraded: openai", NAME, status_text.SUCCESS_LIMIT)
+    assert kept == "SHIP · degraded: openai · summary only · data attested, not read"
