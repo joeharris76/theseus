@@ -180,16 +180,18 @@ def _file_diff(path: str, rows: int = 1, *, added: bool = False) -> str:
 
 
 class Scenario:
-    def __init__(self) -> None:
+    def __init__(self, directory: str = DATA_DIR) -> None:
         self.files = [
-            ChangedFile(MANIFEST, None, LARGE_ROWS, 0, status="modified"),
-            ChangedFile(SHARD, None, LARGE_ROWS, 0, status="modified"),
-            ChangedFile(SUMMARY, None, 3, 1, status="modified"),
+            ChangedFile(f"{directory}/manifest.json", None, LARGE_ROWS, 0, status="modified"),
+            ChangedFile(f"{directory}/shard-00.json", None, LARGE_ROWS, 0, status="modified"),
+            ChangedFile(f"{directory}/SUMMARY.md", None, 3, 1, status="modified"),
         ]
         self.states: list[protocol.FileState] | None = [
             protocol.file_state(item.path, None, OLD, NEW) for item in self.files
         ]
-        self.diff = "".join(_file_diff(item.path, 3 if item.path == SUMMARY else LARGE_ROWS) for item in self.files)
+        self.diff = "".join(
+            _file_diff(item.path, 3 if item.path.endswith("SUMMARY.md") else LARGE_ROWS) for item in self.files
+        )
 
     def add(self, item: ChangedFile, old: tuple[str, str] | None = OLD, new: tuple[str, str] | None = NEW) -> None:
         assert self.states is not None
@@ -317,6 +319,10 @@ def _outside_file(scenario: Scenario) -> None:
     scenario.add(ChangedFile("data/other/notes.json", None, 2, 0, status="modified"))
 
 
+def _gate_file(scenario: Scenario) -> None:
+    scenario.add(ChangedFile(".github/review.yml", None, 2, 0, status="modified"))
+
+
 def _nested_conftest(scenario: Scenario) -> None:
     scenario.add(ChangedFile(f"{DATA_DIR}/sub/conftest.py", None, 2, 0, status="added"), None, NEW)
 
@@ -377,6 +383,7 @@ def _only_summary(scenario: Scenario) -> None:
         _missing_summary,
         _deleted_summary,
         _outside_file,
+        _gate_file,
         _nested_conftest,
         _nested_data,
         _rename_in,
@@ -552,3 +559,20 @@ def test_a_local_outcome_and_member_record_carry_the_reliance(monkeypatch: pytes
     member = local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok", reliance)
     assert member["derived"] == reliance
     assert "derived" not in local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok")
+
+
+def test_soundness_data_is_eligible_and_fits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    directory = "tests/fixtures/fast_tier_baseline"
+    entry = _entry(
+        files=[f"{directory}/manifest.json", f"{directory}/shard-[0-9][0-9].json"],
+        summary=f"{directory}/SUMMARY.md",
+    )
+    matchers = load_matchers(_policy(entry).consumer, POLICY_PATH.parents[1])
+    assert matchers.is_soundness_path(f"{directory}/shard-00.json")
+    plain = _plan(Scenario(directory), _plain_policy(), tmp_path / "plain", monkeypatch)
+    derived = _plan(Scenario(directory), _policy(entry), tmp_path / "derived", monkeypatch)
+    assert plain[capacity.LOAD_KEY] > 1_000_000
+    assert derived["evidence_files"] == [f"{directory}/SUMMARY.md"]
+    assert derived["evidence_protected_files"] == [f"{directory}/SUMMARY.md"]
+    assert derived[capacity.LOAD_KEY] < 100_000
+    assert "shard-00" not in _written(tmp_path / "derived")

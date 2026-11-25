@@ -960,7 +960,7 @@ def _derived_eligibility(policy: Policy, inputs: RoundInputs, matchers: Matchers
     gate_paths = policy.classifier.gate_paths
 
     def _held(path: str) -> bool:
-        return matchers.is_protected(path) or matchers.is_soundness_path(path) or bool(matching([path], gate_paths))
+        return bool(matching([path], gate_paths))
 
     return derived.assess(policy.evidence.derived_paths, inputs.files, inputs.states, inputs.full_diff, _held)
 

@@ -180,7 +180,7 @@ A pull request is planned as derived only when every one of these holds for one 
 - every changed file, by both its path and its previous path, matches the entry's `files` or is its `summary`;
 - data files are `modified`; the summary is `modified` or `added`; nothing is renamed, copied, deleted or added as data;
 - the old and new git modes of every file are `100644` (the summary may be absent before it is added);
-- no changed file is binary, none is a soundness or machine-read path or a classifier gate path, and the file modes could be read;
+- no changed file is binary or a classifier gate path, and the file modes could be read. A data directory may be a soundness path: that is allowed, and the summary stays the only required read;
 - the summary is among the changed files, and at least one data file changed.
 
 When the change is derived:
