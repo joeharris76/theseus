@@ -532,6 +532,15 @@ def adjudicate_round(
     latest = found.latest or {}
     plan["adjudication"] = {"action": ruling.action, "id": ruling.defect_id, "reason": ruling.reason}
     held = derived.recorded_plan(policy.evidence.derived_paths, latest.get("derived"))
+    if latest.get("derived") and held is None:
+        plan.update(
+            {
+                "decision": HOLD,
+                "decision_reason": "the decision relied on derived data whose policy entry has changed, so an owner"
+                " ruling cannot clear it; a full review is needed (/review)",
+            }
+        )
+        return _finish_plan(out_dir, plan)
     if held is not None:
         plan["derived"] = held
     plan["previous_state"] = previous.to_json() if previous else None

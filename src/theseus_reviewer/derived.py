@@ -94,14 +94,16 @@ def _bad_path(path: str) -> bool:
     )
 
 
+_TOKEN = re.compile(r"\[[!^]?\]?[^\]]*\]|.", re.DOTALL)
+
+
 def _code_like(segment: str) -> bool:
-    base = _instance(segment)
-    names = {"conftest", "conftest.py"}
+    tokens = _TOKEN.findall(segment)
     for suffix in CODE_SUFFIXES:
-        names.update((f"x{suffix}", f"{base}{suffix}"))
-    return any(segment.endswith(suffix) for suffix in CODE_SUFFIXES) or any(
-        fnmatch.fnmatchcase(name, segment) for name in names
-    )
+        for cut in range(len(tokens) + 1):
+            if fnmatch.fnmatchcase(suffix, "".join(tokens[cut:])):
+                return True
+    return any(fnmatch.fnmatchcase(name, segment) for name in ("conftest", "conftest.py"))
 
 
 def _check_pattern(pattern: str, label: str, gate_paths: Sequence[str]) -> None:

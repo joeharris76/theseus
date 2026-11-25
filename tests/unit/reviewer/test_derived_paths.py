@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import capacity, cli, derived, local, protocol, report, status_text
+from theseus_reviewer import adjudication, capacity, cli, derived, local, protocol, report, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
@@ -137,6 +137,9 @@ def test_names_follow_the_slug_form(name: str) -> None:
         [f"{DATA_DIR}/*.py"],
         [f"{DATA_DIR}/*"],
         [f"{DATA_DIR}/[!cx]*"],
+        [f"{DATA_DIR}/run.p?"],
+        [f"{DATA_DIR}/run.[ps]h"],
+        [f"{DATA_DIR}/[!xc]*"],
         [f"{DATA_DIR}/[^c-x]*.*"],
         [f"{DATA_DIR}/[!a-z]*"],
         [f"{DATA_DIR}/tests-*"],
@@ -624,12 +627,18 @@ def _bypass_entry(pattern: str) -> DerivedEntry:
 
 @pytest.mark.parametrize(
     "path",
-    [f"{DATA_DIR}/evil.py", f"{DATA_DIR}/__init__.py", f"{DATA_DIR}/conftest.json", f"{DATA_DIR}/run.sh"],
+    [
+        f"{DATA_DIR}/evil.py",
+        f"{DATA_DIR}/__init__.py",
+        f"{DATA_DIR}/conftest.json",
+        f"{DATA_DIR}/run.sh",
+        f"{DATA_DIR}/run.py",
+    ],
 )
 def test_a_code_path_is_never_eligible_whatever_the_pattern_matches(path: str) -> None:
     files = [ChangedFile(path, None, 2, 0, status="modified"), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
-    assert _eligible(_bypass_entry(f"{DATA_DIR}/[!cx]*"), files) is None
-    assert _eligible(_bypass_entry(f"{DATA_DIR}/*"), files) is None
+    for pattern in ("[!cx]*", "*", "run.p?", "run.[ps]h", "*.p?", "[!xc]*"):
+        assert _eligible(_bypass_entry(f"{DATA_DIR}/{pattern}"), files) is None
 
 
 def test_a_github_path_is_never_eligible_whatever_the_pattern_matches() -> None:
@@ -709,39 +718,82 @@ def test_the_inline_brief_lists_data_files_as_not_read(tmp_path: Path, monkeypat
     assert f"anchor every such finding on `{SUMMARY}`" in brief
 
 
-def test_an_owner_ruling_after_a_digest_change_keeps_the_wording(policy: Policy) -> None:
-    previous = _bound(
+def _ruled(policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(cli, "_carry_disagreement", lambda *_args: None)
+    latest = _bound(
         "SHIP_WITH_FIXES",
         open_defects=[{"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": "T"}],
         strikes_after=0,
         next_id=2,
         reviewer="small",
     )
-    plan = {
-        **_comment_plan(policy, kind="carry", previous=previous),
-        "findings_delivery": "review",
-        "adjudication": {"action": "WITHDRAW", "id": "D1", "reason": "fine"},
-    }
-    final = report.adjudicated(plan)
-    assert final.description == "SHIP · owner ruling: WITHDRAW D1 · summary only · data attested, not read"
-    assert "\nsummary only · data attested, not read\n" in final.body
-    assert "baseline, not read" not in final.body
+    plan = cli._base_plan(policy, "owner/repo", 7, "1")
+    plan.update({"base_sha": "b" * 40, "base_ref": "develop", "head_sha": "a" * 40})
+    ruling = adjudication.Adjudication("WITHDRAW", "D1", "fine")
+    assert cli.adjudicate_round(tmp_path, plan, policy, _found(latest), ruling, None) == 0
+    return plan
+
+
+def test_an_owner_ruling_after_the_entry_changed_cannot_clear_derived_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _ruled(_plain_policy(), tmp_path, monkeypatch)
+    assert plan["decision"] == cli.HOLD and "policy entry has changed" in plan["decision_reason"]
+    other = _policy(_entry(attested_by="Another check"))
+    assert _ruled(other, tmp_path, monkeypatch)["decision"] == cli.HOLD
+
+
+def test_an_owner_ruling_with_the_same_entry_carries_with_the_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _ruled(_policy(), tmp_path, monkeypatch)
+    assert plan["decision"] == cli.CARRY and plan["derived"]["attested_by"] == ATTESTED
+    final = report.adjudicated({**plan, "findings_delivery": "review"})
+    assert final.description.endswith(", not read") and "summary only" in final.description
     assert protocol.decode_marker(final.body)["derived"] == _recorded()
 
 
-@pytest.mark.parametrize("count", [20, 30])
-def test_a_long_escalated_list_is_rebuilt_not_cut(count: int) -> None:
+@pytest.mark.parametrize("count", range(1, 41))
+def test_escalated_ids_survive_the_derived_note_at_every_length(count: int) -> None:
     ids = [f"D{n}" for n in range(1, count + 1)]
     base = status_text.with_findings("SHIP WITH FIXES", count, [], ids, "", status_text.DESCRIPTION_LIMIT)
     text = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
-    assert len(text) <= status_text.DESCRIPTION_LIMIT and text.endswith("summary only · data attested, not read")
-    found = status_text.ESCALATED.search(text)
-    assert found is not None
-    shown = found["ids"].split(",")
+    assert len(text) <= status_text.DESCRIPTION_LIMIT
+    assert "summary only · data attested" in text and text.endswith(", not read")
+    kept = status_text.ESCALATED.search(text)
+    original = status_text.ESCALATED.search(base)
+    assert kept is not None and original is not None
+    shown = kept["ids"].split(",")
     assert shown == ids[: len(shown)]
-    assert len(shown) + int(found["more"] or 0) == count
+    assert len(shown) + int(kept["more"] or 0) == count
+    assert ("owner ruling needed" in text) or len(shown) < count
 
 
-def test_a_carried_ship_keeps_the_named_form() -> None:
-    text = status_text.with_derived("SHIP · carried from 0123456789ab (same patch)", NAME, status_text.SUCCESS_LIMIT)
-    assert text == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"
+@pytest.mark.parametrize("escalated", [[], ["D1", "D2", "D3"]])
+def test_a_repost_near_the_limit_keeps_the_derived_note(escalated: list[str]) -> None:
+    base = status_text.with_findings(
+        "SHIP WITH FIXES", 12, [("High", 7), ("Medium", 5)], escalated, "", status_text.DESCRIPTION_LIMIT
+    )
+    held = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
+    posted = status_text.repost(held)
+    assert len(posted) <= status_text.DESCRIPTION_LIMIT and posted.endswith(status_text.REPOSTED_MARK)
+    assert "summary only · data attested" in posted and ", not read" in posted
+    if escalated:
+        assert status_text.ESCALATED.search(posted) and "owner ruling needed" in posted
+    again = status_text.repost(posted)
+    assert again == posted
+
+
+def test_a_success_repost_keeps_the_derived_note() -> None:
+    plan = {
+        "repost": {
+            "state": "success",
+            "label": "SHIP",
+            "description": status_text.with_derived("SHIP · no open findings", NAME, status_text.SUCCESS_LIMIT),
+        },
+        "head_sha": "a" * 40,
+    }
+    final = report.reposted(plan)
+    assert "summary only · data attested" in final.description and ", not read" in final.description

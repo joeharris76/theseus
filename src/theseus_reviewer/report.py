@@ -1161,11 +1161,10 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         else "The finding stands and its dispute is closed; push a fix to clear it."
     )
     reason = layout.neutralize_inline(sanitize(ruling["reason"], adjudication.REASON_LIMIT))
-    relied = bool(previous.get("derived"))
     attested = _attestation(plan, previous)
     lines = [
         *_head(plan, label, _carried_head(label, decision, len(open_defects), f"owner ruling: {action} {defect_id}")),
-        *([status_text.derived_note(attested), ""] if relied else []),
+        *([status_text.derived_note(attested), ""] if attested is not None else []),
         f"**Owner ruling:** {action} {defect_id} - {reason}",
         "",
         effect,
@@ -1203,7 +1202,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         strike_limit=rules.get("max_do_not_ship") or None,
         tail=status_text.ruling_tail(action, defect_id),
     )
-    if relied:
+    if attested is not None:
         description = status_text.with_derived(description, attested, _decision_limit(outcome))
     return Final(outcome, description, body, delivered, None, None, int(previous["strikes_after"]))
 
@@ -1229,7 +1228,7 @@ def reposted(plan: Mapping[str, Any]) -> Final:
     )
     base = repost["description"]
     if repost["state"] == SUCCESS:
-        base = status_text.trim(base, status_text.SUCCESS_LIMIT)
+        base = status_text.fit(base, status_text.SUCCESS_LIMIT)
     return Final(repost["state"], status_text.repost(base), body, None, None, None, None)
 
 

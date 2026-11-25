@@ -288,8 +288,20 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
     return SEP.join((*before, shrunk, *after)) + tail
 
 
+_DERIVED_STATUS = re.compile(
+    rf"(?P<head>.*?){re.escape(SEP)}summary only{re.escape(SEP)}data attested(?: by (?P<name>.*))?, not read", re.DOTALL
+)
+
+
+def fit(description: str, limit: int) -> str:
+    found = _DERIVED_STATUS.fullmatch(description)
+    if found is None:
+        return trim(description, limit)
+    return with_derived(found["head"], found["name"], limit)
+
+
 def repost(base: str) -> str:
-    return trim(base.removesuffix(REPOSTED_MARK), REPOST_LIMIT) + REPOSTED_MARK
+    return fit(base.removesuffix(REPOSTED_MARK), REPOST_LIMIT) + REPOSTED_MARK
 
 
 def with_run_suffix(description: str, run: object) -> str:
