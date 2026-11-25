@@ -528,14 +528,42 @@ def test_the_status_and_verdict_say_the_data_was_not_read(policy: Policy, tmp_pa
     assert _record(final)["derived"] == _recorded()
 
 
-def test_a_long_attestation_is_clipped_inside_the_status_limit() -> None:
-    long = "Reproduce the duration baseline from the recorded runs and compare it"
-    text = status_text.with_derived("SHIP · no open findings", long, status_text.SUCCESS_LIMIT)
+NAME = "Reproduce the fast-tier duration baseline"
+
+
+def test_the_ship_status_keeps_the_wording_and_clips_the_name_to_fit() -> None:
+    text = status_text.with_derived("SHIP · no open findings", NAME, status_text.SUCCESS_LIMIT)
+    assert text == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"
     assert len(text) <= status_text.SUCCESS_LIMIT
-    assert text.startswith("SHIP · no open findings · data attested by Reproduce") and text.endswith("…, not read")
-    assert "summary only" not in text
-    wide = status_text.with_derived("SHIP WITH FIXES · 2 to fix (1 High)", ATTESTED, status_text.DESCRIPTION_LIMIT)
-    assert wide == f"SHIP WITH FIXES · 2 to fix (1 High) · summary only · data attested by {ATTESTED}, not read"
+
+
+def test_a_very_long_name_is_clipped_never_the_wording() -> None:
+    text = status_text.with_derived("SHIP · no open findings", "n" * 200, status_text.SUCCESS_LIMIT)
+    assert len(text) <= status_text.SUCCESS_LIMIT
+    assert text.startswith("SHIP · summary only · data attested by nnnn") and text.endswith("…, not read")
+
+
+def test_a_short_name_keeps_every_segment() -> None:
+    text = status_text.with_derived("SHIP · no open findings", "Nightly", status_text.SUCCESS_LIMIT)
+    assert text == "SHIP · no open findings · summary only · data attested by Nightly, not read"
+
+
+def test_the_name_is_dropped_before_the_wording() -> None:
+    ids = [f"D{n}" for n in range(1, 7)]
+    base = status_text.with_findings("SHIP WITH FIXES", 6, [], ids, "", status_text.DESCRIPTION_LIMIT)
+    assert "escalated D1,D2,D3,D4,D5,D6" in base
+    text = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
+    assert len(text) <= status_text.DESCRIPTION_LIMIT
+    assert status_text.ESCALATED.search(text) and "owner ruling needed" in text
+    assert text.endswith(" · summary only · data attested, not read")
+    one = status_text.with_findings("SHIP WITH FIXES", 1, [], ["D1"], "", status_text.DESCRIPTION_LIMIT)
+    clipped = status_text.with_derived(one, "n" * 200, status_text.DESCRIPTION_LIMIT)
+    assert status_text.ESCALATED.search(clipped) and clipped.endswith(", not read") and "summary only" in clipped
+
+
+def test_findings_keep_the_full_name_when_it_fits() -> None:
+    text = status_text.with_derived("SHIP WITH FIXES · 2 to fix (1 High)", ATTESTED, status_text.DESCRIPTION_LIMIT)
+    assert text == f"SHIP WITH FIXES · 2 to fix (1 High) · summary only · data attested by {ATTESTED}, not read"
 
 
 def test_a_carried_decision_keeps_the_record_and_the_wording(policy: Policy) -> None:
@@ -547,7 +575,7 @@ def test_a_carried_decision_keeps_the_record_and_the_wording(policy: Policy) -> 
         "findings_delivery": "review",
     }
     final = report.carried(plan)
-    assert final.description.endswith(f"summary only · data attested by {ATTESTED}, not read")
+    assert "summary only · data attested" in final.description and final.description.endswith(", not read")
     assert protocol.decode_marker(final.body)["derived"] == _recorded()
     unattested = report.carried({**plan, "derived": None})
     assert "summary only" not in unattested.description
@@ -680,25 +708,6 @@ def test_the_inline_brief_lists_data_files_as_not_read(tmp_path: Path, monkeypat
     assert f"anchor every such finding on `{SUMMARY}`" in brief
 
 
-def test_an_escalated_segment_is_never_dropped_for_the_attestation() -> None:
-    ids = [f"D{n}" for n in range(1, 7)]
-    base = status_text.with_findings("SHIP WITH FIXES", 6, [], ids, "", status_text.DESCRIPTION_LIMIT)
-    assert "escalated D1,D2,D3,D4,D5,D6" in base
-    name = "Reproduce the fast-tier duration baseline"
-    text = status_text.with_derived(base, name, status_text.DESCRIPTION_LIMIT)
-    assert len(text) <= status_text.DESCRIPTION_LIMIT
-    assert status_text.ESCALATED.search(text) and "owner ruling needed" in text
-    assert text.endswith(", not read") and "data attested by Reproduce the" in text
-    one = status_text.with_findings("SHIP WITH FIXES", 1, [], ["D1"], "", status_text.DESCRIPTION_LIMIT)
-    assert status_text.ESCALATED.search(status_text.with_derived(one, "n" * 200, status_text.DESCRIPTION_LIMIT))
-
-
-def test_the_check_name_stays_readable_on_ship() -> None:
-    name = "Reproduce the fast-tier duration baseline"
-    text = status_text.with_derived("SHIP · no open findings", name, status_text.SUCCESS_LIMIT)
-    assert len(text) <= status_text.SUCCESS_LIMIT and "Reproduce the fast-tier durat" in text
-
-
 def test_an_owner_ruling_after_a_digest_change_keeps_the_wording(policy: Policy) -> None:
     previous = _bound(
         "SHIP_WITH_FIXES",
@@ -713,5 +722,5 @@ def test_an_owner_ruling_after_a_digest_change_keeps_the_wording(policy: Policy)
         "adjudication": {"action": "WITHDRAW", "id": "D1", "reason": "fine"},
     }
     final = report.adjudicated(plan)
-    assert final.description.endswith("data attested by baseline, not read")
+    assert "summary only · data attested" in final.description and final.description.endswith(", not read")
     assert protocol.decode_marker(final.body)["derived"] == _recorded()

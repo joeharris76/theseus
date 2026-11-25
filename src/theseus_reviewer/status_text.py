@@ -230,30 +230,34 @@ def with_degraded(description: str, providers: Sequence[str], limit: int) -> str
 
 
 DERIVED_ATTESTED = "data attested by "
+DERIVED_ATTESTED_BARE = "data attested"
 DERIVED_UNREAD = ", not read"
 DERIVED_FLOOR = 20
 
 
-def derived_note(attested_by: str) -> str:
-    return f"summary only{SEP}{DERIVED_ATTESTED}{attested_by}{DERIVED_UNREAD}"
-
-
-def _attestation_only(attested_by: str) -> str:
-    return f"{DERIVED_ATTESTED}{attested_by}{DERIVED_UNREAD}"
+def derived_note(attested_by: str | None) -> str:
+    named = DERIVED_ATTESTED_BARE if attested_by is None else f"{DERIVED_ATTESTED}{attested_by}"
+    return f"summary only{SEP}{named}{DERIVED_UNREAD}"
 
 
 def with_derived(description: str, attested_by: str, limit: int) -> str:
     segments = description.split(SEP)
-    for count in range(len(segments), 0, -1):
-        base = SEP.join(segments[:count])
-        for wanted in (len(attested_by), min(len(attested_by), DERIVED_FLOOR)):
-            for note in (derived_note, _attestation_only):
-                room = limit - len(base) - len(SEP) - len(note(""))
-                if room >= wanted:
-                    return f"{base}{SEP}{note(hard_clip(attested_by, room))}"
-        if ESCALATED.search(segments[count - 1]):
-            break
-    return hard_clip(f"{description}{SEP}{_attestation_only(attested_by)}", limit)
+    trimmed = [segment for segment in segments if segment != NO_OPEN_FINDINGS]
+    for kept in (segments, trimmed):
+        base = SEP.join(kept)
+        room = limit - len(base) - len(SEP) - len(derived_note(""))
+        if room >= len(attested_by):
+            return f"{base}{SEP}{derived_note(attested_by)}"
+    base = SEP.join(trimmed)
+    room = limit - len(base) - len(SEP) - len(derived_note(""))
+    if room >= min(len(attested_by), DERIVED_FLOOR):
+        return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
+    tail = f"{SEP}{derived_note(None)}"
+    for count in range(len(trimmed), 0, -1):
+        base = SEP.join(trimmed[:count])
+        if len(base) + len(tail) <= limit or ESCALATED.search(trimmed[count - 1]):
+            return f"{hard_clip(base, limit - len(tail))}{tail}"
+    return f"{hard_clip(trimmed[0], limit - len(tail))}{tail}"
 
 
 def repost(base: str) -> str:
