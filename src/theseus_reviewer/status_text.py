@@ -266,7 +266,7 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
     droppable = []
     for count in range(len(trimmed), 0, -1):
         droppable.append(count)
-        if ESCALATED.search(trimmed[count - 1]):
+        if ESCALATED.search(trimmed[count - 1]) or trimmed[count - 1] == RULING_HINT:
             break
     if attested_by is not None:
         for count in droppable:
@@ -279,11 +279,13 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
         base = SEP.join(trimmed[:count])
         if len(base) + len(tail) <= limit:
             return f"{base}{tail}"
-    last = droppable[-1]
-    prefix = SEP.join(trimmed[: last - 1])
-    joint = SEP if prefix else ""
-    room = limit - len(tail) - len(prefix) - len(joint)
-    return f"{prefix}{joint}{_shrunk_escalated(trimmed[last - 1], room)}{tail}"
+    kept = trimmed[: droppable[-1]]
+    found = [index for index, segment in enumerate(kept) if ESCALATED.fullmatch(segment)]
+    split = found[-1] if found else len(kept) - 1
+    before, after = kept[:split], kept[split + 1 :]
+    fixed = sum(len(part) + len(SEP) for part in (*before, *after)) + len(tail)
+    shrunk = _shrunk_escalated(kept[split], limit - fixed)
+    return SEP.join((*before, shrunk, *after)) + tail
 
 
 def repost(base: str) -> str:

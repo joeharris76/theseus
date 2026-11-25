@@ -548,14 +548,15 @@ def test_a_short_name_keeps_every_segment() -> None:
     assert text == "SHIP · no open findings · summary only · data attested by Nightly, not read"
 
 
-def test_a_trailing_segment_is_dropped_to_keep_the_name() -> None:
+def test_the_ruling_hint_outranks_the_check_name() -> None:
     ids = [f"D{n}" for n in range(1, 7)]
     base = status_text.with_findings("SHIP WITH FIXES", 6, [], ids, "", status_text.DESCRIPTION_LIMIT)
     assert "escalated D1,D2,D3,D4,D5,D6" in base
     text = status_text.with_derived(base, NAME, status_text.DESCRIPTION_LIMIT)
-    assert len(text) <= status_text.DESCRIPTION_LIMIT
-    assert status_text.ESCALATED.search(text) and "escalated D1,D2,D3,D4,D5,D6" in text
-    assert "summary only · data attested by Reproduce the fast-tier" in text and text.endswith(", not read")
+    assert text == (
+        "SHIP WITH FIXES · 6 to fix · escalated D1,D2,D3,D4,D5,D6 · owner ruling needed"
+        " · summary only · data attested, not read"
+    )
     one = status_text.with_findings("SHIP WITH FIXES", 1, [], ["D1"], "", status_text.DESCRIPTION_LIMIT)
     clipped = status_text.with_derived(one, "n" * 200, status_text.DESCRIPTION_LIMIT)
     assert status_text.ESCALATED.search(clipped) and clipped.endswith(", not read") and "summary only" in clipped
