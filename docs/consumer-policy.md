@@ -155,6 +155,47 @@ A reviewer whose capacity is below the load is skipped (`skipped: the change nee
 
 `theseus preflight --policy PATH [--repo OWNER/NAME] [--base-ref REF] [--trusted-ref REF] [--head REF] [--json]` plans the local change without running a reviewer and prints `{"schema": 1, "reviewable": bool, "reasons": [...], "advisories": [...]}`. Exit `0` means reviewable, `3` not reviewable (a Theseus promotion in the change, or a load above every reviewer's capacity), `2` the answer could not be determined (the diff cannot be built, the omp pin cannot be installed, the model catalog cannot be read, or no reviewer can be selected because the capacity of every reviewer that is not too large is unknown). Advisories name reviewers that cannot hold the change, or whose capacity is unknown, when others can.
 
+## Derived paths: reviewing generated data by its summary
+
+Some pull requests change only generated data, and the generator's output is too large to read. A consumer can declare such files in `evidence.derived_paths` in the trusted-base policy. Theseus then plans a review of the change's summary instead of the data, and says plainly that it relied on the consumer's own attestation.
+
+```yaml
+# Example only: the names and paths are illustrative.
+evidence:
+  derived_paths:
+    - name: nightly-timings              # [a-z0-9]+(-[a-z0-9]+)*, unique
+      files:                             # per-segment globs: * never crosses /, ** is refused
+        - data/timings/manifest.json
+        - data/timings/part-[0-9][0-9].json
+      summary: data/timings/SUMMARY.md   # one exact .md path, not matched by files
+      attested_by: "Reproduce the nightly timings"   # one line, shown to the reviewer and in the verdict
+```
+
+`attested_by` is free text. Theseus never looks it up, runs it or checks that it passed; it names a check that the consumer's own rulesets enforce, which is not Theseus's concern. A consumer that does not want that reliance omits the key.
+
+Policy validation refuses the whole policy, and so every review, when: an entry has an unknown or missing key; `files` is empty or repeats a pattern; a pattern is absolute, uses `..` or `**`, may match a `.github/` path, a classifier gate path, or a name with a code suffix (`.py .pyi .sh .js .ts .toml .cfg .ini .yml .yaml`) or `conftest`; the summary is not an exact `.md` path or is matched by `files`; two entries share a name or can match the same path. The `evidence` mapping itself refuses unknown keys.
+
+A pull request is planned as derived only when every one of these holds for one entry; otherwise it is planned exactly as without the key, which is full review:
+
+- every changed file, by both its path and its previous path, matches the entry's `files` or is its `summary`;
+- data files are `modified`; the summary is `modified` or `added`; nothing is renamed, copied, deleted or added as data;
+- the old and new git modes of every file are `100644` (the summary may be absent before it is added);
+- no changed file is binary, none is a soundness or machine-read path or a classifier gate path, and the file modes could be read;
+- the summary is among the changed files, and at least one data file changed.
+
+When the change is derived:
+
+- the summary is the only required read; it is always required and protected, even if an exempt or inert rule would otherwise drop it;
+- no reviewer-facing diff holds a data hunk: not `diff.patch`, not the inline brief, not the since-last-review patch. The data files are still listed as changed files, under a heading that says they were not read and must not be opened; a finding on one is not counted;
+- capacity and classifier inputs leave the data files out;
+- the brief tells the reviewer that the data is attested by `attested_by`, a consumer check Theseus does not verify, that the summary is untrusted pull request data, and to block only on a concrete inconsistency in the summary or between the summary and the changed-file list; the size or direction of a change in generated data is not a defect;
+- the status description and the verdict body say `summary only · data attested by <attested_by>, not read` (the attestation is clipped in the status description when it would not fit in 140 characters, and always shown whole in the body);
+- the review marker records `derived: {entry, digest, paths}`, where `digest` is the sha256 of the canonical entry (its name, sorted files, summary and `attested_by`) and `paths` are the data files. A local review records the same reliance, and a local member record carries a `derived` object with `entry`, `digest` and, when known, `attested_by`.
+
+A clearance that relied on derived data never becomes a full read by accident. A later round that is not derived-eligible, or whose entry digest differs, treats the recorded derived paths as changed required reads and does not carry the earlier decision, even when the patch is byte-identical. A rebase onto a base whose entry changed gets a new review.
+
+Rolling the pinned Theseus version back to one without this key puts such pull requests on HOLD (older readers reject the new marker key). The reader and the writer ship together.
+
 ## Review depth
 
 A verdict that clears a change, SHIP or SHIP WITH FIXES, is accepted only when the attempt saw every changed hunk of every required file.
