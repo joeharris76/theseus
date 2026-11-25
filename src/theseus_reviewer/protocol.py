@@ -873,6 +873,19 @@ def judge(
     return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
 
 
+def _on_summary(item: Finding, summary: str) -> Finding:
+    if item.file == summary:
+        return item
+    return replace(
+        item,
+        file=summary,
+        line=1,
+        end_line=None,
+        replacement=None,
+        detail=f"(anchored by the reviewer on {item.file}:{item.line}) {item.detail}",
+    )
+
+
 def judge_planned(
     verdict: Verdict,
     plan: Mapping[str, Any],
@@ -882,7 +895,9 @@ def judge_planned(
     rules = plan.get("protocol") or {}
     changed = rules.get("changed") if rules.get("kind") == FOLLOW_UP else None
     if isinstance(plan.get("derived"), Mapping):
-        changed = [plan["derived"]["summary"]]
+        summary = plan["derived"]["summary"]
+        changed = [summary]
+        verdict = replace(verdict, defects=tuple(_on_summary(item, summary) for item in verdict.defects))
     ws = workspace if workspace is not None else plan.get("workspace")
     return judge(
         verdict,

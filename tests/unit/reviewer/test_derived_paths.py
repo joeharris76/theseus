@@ -452,11 +452,18 @@ def test_a_non_eligible_round_after_a_derived_clearance_reads_the_data(
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
-def test_findings_on_data_lines_are_not_counted(policy: Policy, tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", [SHARD, "src/unchanged_module.py"])
+def test_a_finding_off_the_summary_is_counted_and_anchored_on_the_summary(
+    path: str, policy: Policy, tmp_path: Path
+) -> None:
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
-    verdict = _v("fine", [{"severity": "High", "file": SHARD, "line": 2, "title": "Data", "detail": ""}])
+    verdict = _v("bad", [{"severity": "High", "file": path, "line": 7, "title": "Wrong", "detail": "Because."}])
     final = _final(policy, tmp_path, plan, verdict)
-    assert final.judgement is not None and final.judgement.defects == ()
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SUMMARY and defect.severity == "High" and defect.title == "Wrong"
+    assert f"{path}:7" in defect.detail and "Because." in defect.detail
+    assert final.state == "failure"
 
 
 def test_a_marker_round_trips_a_derived_record() -> None:
@@ -797,3 +804,13 @@ def test_a_success_repost_keeps_the_derived_note() -> None:
     }
     final = report.reposted(plan)
     assert "summary only · data attested" in final.description and ", not read" in final.description
+
+
+def test_a_changed_entry_digest_is_planned_as_a_full_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stale = {**_recorded(), "digest": "f" * 64}
+    latest = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha="c" * 40, derived=stale)
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    assert {MANIFEST, SHARD} <= set(plan["protocol"]["changed"])
+    assert MANIFEST in _written(tmp_path)

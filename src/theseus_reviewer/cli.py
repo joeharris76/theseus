@@ -1000,6 +1000,9 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     upstream_files = list(active_promotion.changed_files) if active_promotion is not None else []
     upstream_in_scope = set(active_promotion.required_paths) if active_promotion is not None else set()
     eligible = None if is_promotion else _derived_eligibility(policy, inputs, matchers)
+    recorded = (inputs.found.latest or {}).get("derived")
+    if eligible is not None and recorded is not None and recorded["digest"] != eligible.entry.digest():
+        eligible = None
     if eligible is not None:
         inputs = _derived_inputs(inputs, eligible)
         plan["derived"] = eligible.to_plan()
