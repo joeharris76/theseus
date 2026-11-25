@@ -837,3 +837,18 @@ def test_a_manual_review_on_the_same_head_reads_derived_data_in_full() -> None:
         step = _round(_found(_bound()), manual=True, derived_digest=digest)
         assert step.kind == protocol.FIRST and step.cycle == 2
     assert _round(_found(_bound()), manual=False, derived_digest=None).kind == protocol.SKIP
+
+
+def test_a_near_limit_title_keeps_the_location_and_the_limit(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    long_path = "data/" + "d" * 380 + "/shard.json"
+    findings = [
+        {"severity": "High", "file": path, "line": 3, "title": "t" * 199, "detail": f"Detail {n}."}
+        for n, path in enumerate((SHARD, MANIFEST, long_path))
+    ]
+    final = _final(policy, tmp_path, plan, _v("bad", findings))
+    assert final.judgement is not None
+    titles = [item.title for item in final.judgement.defects]
+    assert len(titles) == 3 and len(set(titles)) == 3
+    assert all(len(title) <= 200 for title in titles)
+    assert titles[0].endswith(f"[{SHARD}:3]") and titles[1].endswith(f"[{MANIFEST}:3]")

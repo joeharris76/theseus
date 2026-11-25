@@ -886,13 +886,17 @@ def judge(
 def _on_summary(item: Finding, summary: str) -> Finding:
     if item.file == summary:
         return item
+    location = f"{item.file}:{item.line}"
+    if len(location) > MAX_TITLE // 2:
+        location = "…" + location[-(MAX_TITLE // 2) :]
+    suffix = f" [{location}]"
     return replace(
         item,
         file=summary,
         line=1,
         end_line=None,
         replacement=None,
-        title=sanitize(f"{item.title} [{item.file}:{item.line}]", MAX_TITLE),
+        title=sanitize(item.title, max(MAX_TITLE - len(suffix), 1)) + suffix,
         detail=f"(anchored by the reviewer on {item.file}:{item.line}) {item.detail}",
     )
 
