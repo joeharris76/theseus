@@ -21,7 +21,7 @@ Consumers MUST ignore markers whose name or version they do not know, and MUST N
 <!-- review-protocol: v1 <data> -->
 ```
 
-`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `REFUSED`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The format is unchanged.
+`<data>` is URL-safe base64 (padding removed) of zlib-compressed JSON. It is the last thing in the body, followed only by whitespace. Exactly one per review; a body with zero is not a protocol review and a body with more than one, or one that fails to decode or validate, is invalid and treated as unreadable. The record carries `v`, `cycle`, `round`, `kind`, `decision` (`SHIP`, `SHIP_WITH_FIXES`, `DO_NOT_SHIP`, `REFUSED`), `head_sha`, `base_ref`, `reviewer`, `tier`, `strikes_after`, `open_defects`, `next_id`, `patch_digest`, `carried`, `summary` and, when the run is known, `run_uuid`. Read the decision and the open defects from here, never from the body text. The only addition is the optional `derived` key described below.
 
 ### The `derived` key
 

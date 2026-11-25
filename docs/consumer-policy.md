@@ -173,12 +173,13 @@ evidence:
 
 `attested_by` is free text. Theseus never looks it up, runs it or checks that it passed; it names a check that the consumer's own rulesets enforce, which is not Theseus's concern. A consumer that does not want that reliance omits the key.
 
-Policy validation refuses the whole policy, and so every review, when: an entry has an unknown or missing key; `files` is empty or repeats a pattern; a pattern is absolute, uses `..` or `**`, may match a `.github/` path, a classifier gate path, or a name with a code suffix (`.py .pyi .sh .js .ts .toml .cfg .ini .yml .yaml`) or `conftest`; the summary is not an exact `.md` path or is matched by `files`; two entries share a name or can match the same path. The `evidence` mapping itself refuses unknown keys.
+Policy validation refuses the whole policy, and so every review, when: an entry has an unknown or missing key; `files` is empty or repeats a pattern; a pattern is absolute, uses `..`, `**` or a negated character class (`[!…]`), may match a `.github/` path, a classifier gate path, or a name with a code suffix (`.py .pyi .sh .js .ts .toml .cfg .ini .yml .yaml`) or `conftest`; the summary is not an exact `.md` path or is matched by `files`; two entries share a name. Entries may overlap: for a given change the first entry, in policy order, that fits wins. The `evidence` mapping itself refuses unknown keys.
 
 A pull request is planned as derived only when every one of these holds for one entry; otherwise it is planned exactly as without the key, which is full review:
 
 - every changed file, by both its path and its previous path, matches the entry's `files` or is its `summary`;
-- data files are `modified`; the summary is `modified` or `added`; nothing is renamed, copied, deleted or added as data;
+- data files are `modified` and are not `.github/`, `conftest*` or code-suffix paths (checked again here, whatever the patterns match); the summary is `modified` or `added`; nothing is renamed, copied, deleted or added as data;
+- there are at most 200 data files, each path within the marker's path limit; more is full review;
 - the old and new git modes of every file are `100644` (the summary may be absent before it is added);
 - no changed file is binary or a classifier gate path, and the file modes could be read. A data directory may be a soundness path: that is allowed, and the summary stays the only required read;
 - the summary is among the changed files, and at least one data file changed.

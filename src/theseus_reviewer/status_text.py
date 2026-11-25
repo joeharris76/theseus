@@ -231,19 +231,29 @@ def with_degraded(description: str, providers: Sequence[str], limit: int) -> str
 
 DERIVED_ATTESTED = "data attested by "
 DERIVED_UNREAD = ", not read"
+DERIVED_FLOOR = 20
 
 
 def derived_note(attested_by: str) -> str:
     return f"summary only{SEP}{DERIVED_ATTESTED}{attested_by}{DERIVED_UNREAD}"
 
 
+def _attestation_only(attested_by: str) -> str:
+    return f"{DERIVED_ATTESTED}{attested_by}{DERIVED_UNREAD}"
+
+
 def with_derived(description: str, attested_by: str, limit: int) -> str:
-    fixed = len(SEP) + len(derived_note(""))
-    base = description
-    while limit - len(base) - fixed < len(attested_by) and SEP in base:
-        base = base.rpartition(SEP)[0]
-    room = limit - len(base) - fixed
-    return f"{base}{SEP}{derived_note(hard_clip(attested_by, max(room, 1)))}"
+    segments = description.split(SEP)
+    for count in range(len(segments), 0, -1):
+        base = SEP.join(segments[:count])
+        for wanted in (len(attested_by), min(len(attested_by), DERIVED_FLOOR)):
+            for note in (derived_note, _attestation_only):
+                room = limit - len(base) - len(SEP) - len(note(""))
+                if room >= wanted:
+                    return f"{base}{SEP}{note(hard_clip(attested_by, room))}"
+        if ESCALATED.search(segments[count - 1]):
+            break
+    return hard_clip(f"{description}{SEP}{_attestation_only(attested_by)}", limit)
 
 
 def repost(base: str) -> str:

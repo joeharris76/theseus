@@ -1734,11 +1734,12 @@ def compose_brief(
     diff_file = plan_dir / DIFF_FILE
     binary = _binary_required(plan, diff_file, evidence_files) if file_list else []
     attested = plan.get("derived") or {}
+    unread_data = set(attested.get("paths", ()))
     hints = _retry_hints(plan, plan_dir, diff_file, evidence_files, marked, unseen, worst_case_retry) if marked else {}
     files_block = (
         f"Changed files:\n{file_list_block(reviewed, evidence_files, marked, hints, binary, attested.get('paths', ()))}"
         if file_list
-        else f"Changed files:\n{file_listing(reviewed)}\n"
+        else f"Changed files:\n{file_listing([item for item in reviewed if item.path not in unread_data])}\n"
     )
     if plan.get("promotion"):
         files_block = (
@@ -1751,7 +1752,8 @@ def compose_brief(
             f" for removed files, which are also seen by reading them whole).\n\n{files_block}"
         )
     if attested:
-        files_block += derived_block(attested["attested_by"], attested["summary"])
+        inline_data = [item for item in reviewed if item.path in unread_data] if not file_list else []
+        files_block += derived_block(attested["attested_by"], attested["summary"], file_listing(inline_data))
     if plan.get("scope") == "changed":
         unchanged = "\n".join(plan.get("unchanged_files", []))
         files_block += (

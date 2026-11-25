@@ -16,8 +16,10 @@ from typing import Any
 
 from . import adjudication, legacy, promotion
 from .coverage import Returned
+from .derived import DERIVED_NAME, DERIVED_PATHS_MAX
 from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
+from .gitmodes import ABSENT_MODE
 from .policy import SEVERITIES
 from .status_text import DO_NOT_SHIP_LABEL, EDITED_REASON, OPEN_FINDINGS_LABEL, REFUSED_LABEL, SHIP_LABEL
 from .verdict import (
@@ -70,7 +72,6 @@ DEFECT_ID = re.compile(r"D([1-9][0-9]{0,3})")
 NOT_COUNTED_LIMIT = 5
 PATCH_HEX = 16
 MISSING = "missing"
-ABSENT_MODE = "000000"
 ABSENT_ID = "0" * 40
 ADVISORY_RECORD_LIMIT = 5
 RECORD_KEYS = frozenset(
@@ -283,10 +284,6 @@ def _valid_defect(item: Any) -> bool:
         and (item["end_line"] is None or isinstance(item["end_line"], int))
         and isinstance(item["title"], str)
     )
-
-
-DERIVED_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-DERIVED_PATHS_MAX = 200
 
 
 def _valid_derived(value: Any) -> bool:

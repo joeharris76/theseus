@@ -9,19 +9,19 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .diff import binary_notice_count, drop_files, hunk_index
+from .gitmodes import ABSENT_MODE, REGULAR_MODE
 from .globs import glob_match
+from .limits import MAX_PATH
 
 if TYPE_CHECKING:
     from .classifier import ChangedFile
     from .protocol import FileState
 
-ABSENT_MODE = "000000"
-
 ENTRY_KEYS = frozenset({"name", "files", "summary", "attested_by"})
-NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 CODE_SUFFIXES = (".py", ".pyi", ".sh", ".js", ".ts", ".toml", ".cfg", ".ini", ".yml", ".yaml")
+DERIVED_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+DERIVED_PATHS_MAX = 200
 SUMMARY_SUFFIX = ".md"
-REGULAR_MODE = "100644"
 ATTESTED_BY_MAX = 200
 DATA_STATUS = "modified"
 SUMMARY_STATUSES = ("modified", "added")
@@ -110,6 +110,8 @@ def _check_pattern(pattern: str, label: str, gate_paths: Sequence[str]) -> None:
     segments = pattern.split("/")
     if "**" in segments or any("**" in segment for segment in segments):
         raise DerivedError(f"{label} {pattern!r} must not use **")
+    if "[!" in pattern or "[^" in pattern:
+        raise DerivedError(f"{label} {pattern!r} must not use a negated character class")
     if fnmatch.fnmatchcase(".github", segments[0]):
         raise DerivedError(f"{label} {pattern!r} may match a .github path")
     if _code_like(segments[-1]):
@@ -118,14 +120,6 @@ def _check_pattern(pattern: str, label: str, gate_paths: Sequence[str]) -> None:
     for gate in gate_paths:
         if fnmatch.fnmatchcase(instance, gate) or glob_match(gate, pattern):
             raise DerivedError(f"{label} {pattern!r} overlaps the gate path {gate!r}")
-
-
-def _overlap(left: DerivedEntry, right: DerivedEntry) -> bool:
-    paths = [*left.files, left.summary, *right.files, right.summary]
-    return any(
-        (left.is_data(path) or path == left.summary) and (right.is_data(path) or path == right.summary)
-        for path in {_instance(item) for item in paths} | set(paths)
-    )
 
 
 def parse_entries(raw: Any, gate_paths: Sequence[str]) -> tuple[DerivedEntry, ...]:
@@ -143,7 +137,7 @@ def parse_entries(raw: Any, gate_paths: Sequence[str]) -> tuple[DerivedEntry, ..
         if missing:
             raise DerivedError(f"{label} is missing {missing[0]!r}")
         name, files, summary, attested = item["name"], item["files"], item["summary"], item["attested_by"]
-        if not isinstance(name, str) or NAME.fullmatch(name) is None:
+        if not isinstance(name, str) or DERIVED_NAME.fullmatch(name) is None:
             raise DerivedError(f"{label} name must match [a-z0-9]+(-[a-z0-9]+)*")
         label = f"evidence derived_paths entry {name!r}"
         if not isinstance(files, list) or not files or not all(isinstance(path, str) for path in files):
@@ -174,10 +168,6 @@ def parse_entries(raw: Any, gate_paths: Sequence[str]) -> tuple[DerivedEntry, ..
     names = [entry.name for entry in entries]
     if len(set(names)) != len(names):
         raise DerivedError("evidence derived_paths names must be unique")
-    for position, left in enumerate(entries):
-        for right in entries[position + 1 :]:
-            if _overlap(left, right):
-                raise DerivedError(f"evidence derived_paths entries {left.name!r} and {right.name!r} overlap")
     return tuple(entries)
 
 
@@ -186,6 +176,10 @@ def _state_ok(state: FileState | None, summary: bool, added: bool) -> bool:
         return False
     old_ok = state.old_mode == (ABSENT_MODE if added else REGULAR_MODE)
     return old_ok and state.new_mode == REGULAR_MODE and (summary or not added)
+
+
+def _code_path(path: str) -> bool:
+    return path.endswith(CODE_SUFFIXES) or path.rsplit("/", 1)[-1].startswith("conftest") or path.startswith(".github/")
 
 
 def _fits(entry: DerivedEntry, files: Sequence[ChangedFile], states: Mapping[str, FileState]) -> bool:
@@ -202,7 +196,7 @@ def _fits(entry: DerivedEntry, files: Sequence[ChangedFile], states: Mapping[str
                 return False
             summary_changed = True
         else:
-            if item.status != DATA_STATUS:
+            if item.status != DATA_STATUS or _code_path(item.path):
                 return False
             data += 1
         if not _state_ok(states.get(item.path), is_summary, item.status == "added"):
@@ -228,6 +222,8 @@ def assess(
         if not _fits(entry, files, by_path):
             continue
         paths = tuple(sorted(item.path for item in files if item.path != entry.summary))
+        if len(paths) > DERIVED_PATHS_MAX or any(len(path) > MAX_PATH for path in paths):
+            return None
         stripped = drop_files(full_diff, frozenset(paths))
         if set(hunk_index(stripped)) & set(paths):
             return None

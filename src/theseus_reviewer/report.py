@@ -1161,7 +1161,7 @@ def adjudicated(plan: Mapping[str, Any]) -> Final:
         else "The finding stands and its dispute is closed; push a fix to clear it."
     )
     reason = layout.neutralize_inline(sanitize(ruling["reason"], adjudication.REASON_LIMIT))
-    attested = _attestation(plan, previous)
+    attested = _attestation(plan, previous) or (previous.get("derived") or {}).get("entry")
     lines = [
         *_head(plan, label, _carried_head(label, decision, len(open_defects), f"owner ruling: {action} {defect_id}")),
         *([status_text.derived_note(attested), ""] if attested is not None else []),

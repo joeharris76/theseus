@@ -6,10 +6,11 @@ from typing import Any
 
 import pytest
 
-from theseus_reviewer import capacity, cli, local, protocol, report, status_text
+from theseus_reviewer import capacity, cli, derived, local, protocol, report, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
+from theseus_reviewer.derived import DerivedEntry
 from theseus_reviewer.matchers import load_matchers
 from theseus_reviewer.policy import Policy, PolicyError, parse_policy
 from theseus_reviewer.render import DERIVED_FILES_HEADER
@@ -116,10 +117,10 @@ def test_names_must_be_unique() -> None:
         _policy(_entry(), other)
 
 
-def test_entries_must_not_overlap() -> None:
+def test_overlapping_entries_are_allowed_and_the_first_fit_wins() -> None:
     other = _entry(name="other", files=[f"{DATA_DIR}/shard-0*.json"], summary="data/other/SUMMARY.md")
-    with pytest.raises(PolicyError, match="overlap"):
-        _policy(_entry(), other)
+    first, second = _policy(_entry(), other).evidence.derived_paths
+    assert (first.name, second.name) == ("baseline", "other")
 
 
 @pytest.mark.parametrize("name", ["Baseline", "base_line", "-x", "x-", ""])
@@ -135,6 +136,9 @@ def test_names_follow_the_slug_form(name: str) -> None:
         ["*/manifest.json"],
         [f"{DATA_DIR}/*.py"],
         [f"{DATA_DIR}/*"],
+        [f"{DATA_DIR}/[!cx]*"],
+        [f"{DATA_DIR}/[^c-x]*.*"],
+        [f"{DATA_DIR}/[!a-z]*"],
         [f"{DATA_DIR}/tests-*"],
         [f"{DATA_DIR}/conftest.py"],
         [f"{DATA_DIR}/run.sh"],
@@ -516,10 +520,10 @@ def test_recorded_derived_paths_are_changed_reads_in_a_later_round() -> None:
 
 
 def test_the_status_and_verdict_say_the_data_was_not_read(policy: Policy, tmp_path: Path) -> None:
-    held = {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}
+    held = {**_recorded(), "summary": SUMMARY, "attested_by": "Nightly timings"}
     final = _final(policy, tmp_path, {**_protocol_plan(policy), "derived": held}, _v("fine"))
-    expected = f"summary only · data attested by {ATTESTED}, not read"
-    assert final.description == f"SHIP · {expected}"
+    expected = "summary only · data attested by Nightly timings, not read"
+    assert final.description == f"SHIP · no open findings · {expected}"
     assert final.review is not None and f"\n{expected}\n" in final.review["body"]
     assert _record(final)["derived"] == _recorded()
 
@@ -528,7 +532,8 @@ def test_a_long_attestation_is_clipped_inside_the_status_limit() -> None:
     long = "Reproduce the duration baseline from the recorded runs and compare it"
     text = status_text.with_derived("SHIP · no open findings", long, status_text.SUCCESS_LIMIT)
     assert len(text) <= status_text.SUCCESS_LIMIT
-    assert text.startswith("SHIP · summary only · data attested by Reproduce") and text.endswith("…, not read")
+    assert text.startswith("SHIP · no open findings · data attested by Reproduce") and text.endswith("…, not read")
+    assert "summary only" not in text
     wide = status_text.with_derived("SHIP WITH FIXES · 2 to fix (1 High)", ATTESTED, status_text.DESCRIPTION_LIMIT)
     assert wide == f"SHIP WITH FIXES · 2 to fix (1 High) · summary only · data attested by {ATTESTED}, not read"
 
@@ -576,3 +581,137 @@ def test_soundness_data_is_eligible_and_fits(tmp_path: Path, monkeypatch: pytest
     assert derived["evidence_protected_files"] == [f"{directory}/SUMMARY.md"]
     assert derived[capacity.LOAD_KEY] < 100_000
     assert "shard-00" not in _written(tmp_path / "derived")
+
+
+def _eligible(entry: DerivedEntry, files: list[ChangedFile], diff: str | None = None) -> Any:
+    states = [protocol.file_state(item.path, item.previous_path, OLD, NEW) for item in files]
+    text = diff if diff is not None else "".join(_file_diff(item.path, 2) for item in files)
+    return derived.assess([entry], files, states, text, lambda _path: False)
+
+
+def _bypass_entry(pattern: str) -> DerivedEntry:
+    return DerivedEntry("baseline", (pattern,), SUMMARY, ATTESTED)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [f"{DATA_DIR}/evil.py", f"{DATA_DIR}/__init__.py", f"{DATA_DIR}/conftest.json", f"{DATA_DIR}/run.sh"],
+)
+def test_a_code_path_is_never_eligible_whatever_the_pattern_matches(path: str) -> None:
+    files = [ChangedFile(path, None, 2, 0, status="modified"), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
+    assert _eligible(_bypass_entry(f"{DATA_DIR}/[!cx]*"), files) is None
+    assert _eligible(_bypass_entry(f"{DATA_DIR}/*"), files) is None
+
+
+def test_a_github_path_is_never_eligible_whatever_the_pattern_matches() -> None:
+    files = [
+        ChangedFile(".github/data.json", None, 2, 0, status="modified"),
+        ChangedFile(".github/SUMMARY.md", None, 2, 0, status="modified"),
+    ]
+    entry = DerivedEntry("baseline", (".github/*.json",), ".github/SUMMARY.md", ATTESTED)
+    assert _eligible(entry, files) is None
+
+
+def _many(count: int, width: int = 1) -> list[ChangedFile]:
+    names = [f"{DATA_DIR}/p{'x' * width}{n}.json" for n in range(count)]
+    return [
+        *(ChangedFile(name, None, 1, 0, status="modified") for name in names),
+        ChangedFile(SUMMARY, None, 2, 0, status="modified"),
+    ]
+
+
+def test_the_marker_path_limits_decide_eligibility() -> None:
+    entry = DerivedEntry("baseline", (f"{DATA_DIR}/*.json",), SUMMARY, ATTESTED)
+    assert _eligible(entry, _many(200)) is not None
+    assert _eligible(entry, _many(201)) is None
+    assert _eligible(entry, _many(2, width=500)) is None
+
+
+@pytest.mark.parametrize("status", ["copied", "changed", "unchanged"])
+def test_other_file_statuses_are_not_eligible(status: str) -> None:
+    entry = DerivedEntry("baseline", (f"{DATA_DIR}/*.json",), SUMMARY, ATTESTED)
+    files = [ChangedFile(SHARD, None, 2, 0, status=status), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
+    assert _eligible(entry, files) is None
+
+
+def test_a_gitlink_is_not_eligible() -> None:
+    entry = DerivedEntry("baseline", (f"{DATA_DIR}/*.json",), SUMMARY, ATTESTED)
+    files = [ChangedFile(SHARD, None, 2, 0, status="modified"), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
+    states = [
+        protocol.file_state(SHARD, None, ("160000", "1" * 40), ("160000", "2" * 40)),
+        protocol.file_state(SUMMARY, None, OLD, NEW),
+    ]
+    diff = _file_diff(SHARD, 2) + _file_diff(SUMMARY, 2)
+    assert derived.assess([entry], files, states, diff, lambda _path: False) is None
+
+
+def test_a_quoted_unicode_data_header_is_stripped() -> None:
+    entry = DerivedEntry("baseline", (f"{DATA_DIR}/*.json",), SUMMARY, ATTESTED)
+    name = f"{DATA_DIR}/sh\u00e4rd.json"
+    files = [ChangedFile(name, None, 1, 0, status="modified"), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
+    quoted = f"{DATA_DIR}/sh\\303\\244rd.json"
+    data = f'diff --git "a/{quoted}" "b/{quoted}"\n--- "a/{quoted}"\n+++ "b/{quoted}"\n@@ -1,1 +1,2 @@\n old\n+new\n'
+    found = _eligible(entry, files, data + _file_diff(SUMMARY, 2))
+    assert found is not None and ".json" not in found.diff and SUMMARY in found.diff
+
+
+def test_a_data_hunk_that_survives_stripping_is_not_eligible() -> None:
+    entry = DerivedEntry("baseline", (f"{DATA_DIR}/*.json",), SUMMARY, ATTESTED)
+    files = [ChangedFile(SHARD, None, 1, 0, status="modified"), ChangedFile(SUMMARY, None, 2, 0, status="modified")]
+    garbled = f"diff --git garbled\n--- a/{SHARD}\n+++ b/{SHARD}\n@@ -1,1 +1,2 @@\n old\n+new\n"
+    assert _eligible(entry, files, garbled + _file_diff(SUMMARY, 2)) is None
+
+
+def test_the_since_review_filter_fails_closed() -> None:
+    assert cli._without_files(None, [SHARD]) is None
+    garbled = f"diff --git garbled\n--- a/{SHARD}\n+++ b/{SHARD}\n@@ -1,1 +1,2 @@\n old\n+new\n"
+    assert cli._without_files(garbled, [SHARD]) is None
+    assert cli._without_files(_file_diff(SHARD) + _file_diff(SUMMARY), [SHARD]) == _file_diff(SUMMARY)
+
+
+def test_the_inline_brief_lists_data_files_as_not_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch)
+    assert plan["brief_mode"] == "inline"
+    classification = Classification("small", "routine", "standard", 1.0, (), ())
+    brief = cli.compose_brief(plan, tmp_path, classification, (), (), None, False, 400_000)
+    before, _, after = brief.partition(DERIVED_FILES_HEADER)
+    assert after and MANIFEST in after and SHARD in after
+    assert f"{MANIFEST} (" not in before and f"{SUMMARY} (" in before
+    assert f"anchor every such finding on `{SUMMARY}`" in brief
+
+
+def test_an_escalated_segment_is_never_dropped_for_the_attestation() -> None:
+    ids = [f"D{n}" for n in range(1, 7)]
+    base = status_text.with_findings("SHIP WITH FIXES", 6, [], ids, "", status_text.DESCRIPTION_LIMIT)
+    assert "escalated D1,D2,D3,D4,D5,D6" in base
+    name = "Reproduce the fast-tier duration baseline"
+    text = status_text.with_derived(base, name, status_text.DESCRIPTION_LIMIT)
+    assert len(text) <= status_text.DESCRIPTION_LIMIT
+    assert status_text.ESCALATED.search(text) and "owner ruling needed" in text
+    assert text.endswith(", not read") and "data attested by Reproduce the" in text
+    one = status_text.with_findings("SHIP WITH FIXES", 1, [], ["D1"], "", status_text.DESCRIPTION_LIMIT)
+    assert status_text.ESCALATED.search(status_text.with_derived(one, "n" * 200, status_text.DESCRIPTION_LIMIT))
+
+
+def test_the_check_name_stays_readable_on_ship() -> None:
+    name = "Reproduce the fast-tier duration baseline"
+    text = status_text.with_derived("SHIP · no open findings", name, status_text.SUCCESS_LIMIT)
+    assert len(text) <= status_text.SUCCESS_LIMIT and "Reproduce the fast-tier durat" in text
+
+
+def test_an_owner_ruling_after_a_digest_change_keeps_the_wording(policy: Policy) -> None:
+    previous = _bound(
+        "SHIP_WITH_FIXES",
+        open_defects=[{"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": "T"}],
+        strikes_after=0,
+        next_id=2,
+        reviewer="small",
+    )
+    plan = {
+        **_comment_plan(policy, kind="carry", previous=previous),
+        "findings_delivery": "review",
+        "adjudication": {"action": "WITHDRAW", "id": "D1", "reason": "fine"},
+    }
+    final = report.adjudicated(plan)
+    assert final.description.endswith("data attested by baseline, not read")
+    assert protocol.decode_marker(final.body)["derived"] == _recorded()

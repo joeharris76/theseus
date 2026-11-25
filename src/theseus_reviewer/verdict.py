@@ -9,6 +9,7 @@ from typing import Any
 
 from . import credentials
 from .credentials import REDACTED
+from .limits import MAX_PATH
 from .policy import SEVERITIES
 
 MAX_LISTED = 50
@@ -18,7 +19,6 @@ MAX_TITLE = 200
 MAX_DETAIL = 4000
 MAX_EVIDENCE = 1000
 MAX_REPLAYED_EVIDENCE = MAX_EVIDENCE + 1000
-MAX_PATH = 400
 MAX_LINE = 10_000_000
 MAX_EXAMINED = 2000
 
