@@ -452,11 +452,18 @@ def test_a_non_eligible_round_after_a_derived_clearance_reads_the_data(
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
-def test_findings_on_data_lines_are_not_counted(policy: Policy, tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", [SHARD, "src/unchanged_module.py"])
+def test_a_finding_off_the_summary_is_counted_and_anchored_on_the_summary(
+    path: str, policy: Policy, tmp_path: Path
+) -> None:
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
-    verdict = _v("fine", [{"severity": "High", "file": SHARD, "line": 2, "title": "Data", "detail": ""}])
+    verdict = _v("bad", [{"severity": "High", "file": path, "line": 7, "title": "Wrong", "detail": "Because."}])
     final = _final(policy, tmp_path, plan, verdict)
-    assert final.judgement is not None and final.judgement.defects == ()
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SUMMARY and defect.severity == "High" and defect.title == f"Wrong [{path}:7]"
+    assert f"{path}:7" in defect.detail and "Because." in defect.detail
+    assert final.state == "failure"
 
 
 def test_a_marker_round_trips_a_derived_record() -> None:
@@ -797,3 +804,51 @@ def test_a_success_repost_keeps_the_derived_note() -> None:
     }
     final = report.reposted(plan)
     assert "summary only · data attested" in final.description and ", not read" in final.description
+
+
+def test_a_changed_entry_digest_is_planned_as_a_full_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stale = {**_recorded(), "digest": "f" * 64}
+    latest = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha="c" * 40, derived=stale)
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    assert {MANIFEST, SHARD} <= set(plan["protocol"]["changed"])
+    assert MANIFEST in _written(tmp_path)
+
+
+def test_same_title_findings_on_different_files_stay_distinct(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    findings = [
+        {"severity": "High", "file": path, "line": 3, "title": "Same", "detail": f"Detail for {path}."}
+        for path in (SHARD, MANIFEST)
+    ]
+    final = _final(policy, tmp_path, plan, _v("bad", findings))
+    assert final.judgement is not None and len(final.judgement.defects) == 2
+    assert {item.title for item in final.judgement.defects} == {f"Same [{SHARD}:3]", f"Same [{MANIFEST}:3]"}
+    assert final.review is not None
+    text = final.review["body"] + "".join(item["body"] for item in final.review["comments"])
+    assert f"Detail for {SHARD}." in text and f"Detail for {MANIFEST}." in text
+
+
+def test_a_manual_review_on_the_same_head_reads_derived_data_in_full() -> None:
+    held = _round(_found(_bound()), manual=True, derived_digest=DIGEST)
+    assert held.kind != protocol.FIRST
+    for digest in (None, "f" * 64):
+        step = _round(_found(_bound()), manual=True, derived_digest=digest)
+        assert step.kind == protocol.FIRST and step.cycle == 2
+    assert _round(_found(_bound()), manual=False, derived_digest=None).kind == protocol.SKIP
+
+
+def test_a_near_limit_title_keeps_the_location_and_the_limit(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    long_path = "data/" + "d" * 380 + "/shard.json"
+    findings = [
+        {"severity": "High", "file": path, "line": 3, "title": "t" * 199, "detail": f"Detail {n}."}
+        for n, path in enumerate((SHARD, MANIFEST, long_path))
+    ]
+    final = _final(policy, tmp_path, plan, _v("bad", findings))
+    assert final.judgement is not None
+    titles = [item.title for item in final.judgement.defects]
+    assert len(titles) == 3 and len(set(titles)) == 3
+    assert all(len(title) <= 200 for title in titles)
+    assert titles[0].endswith(f"[{SHARD}:3]") and titles[1].endswith(f"[{MANIFEST}:3]")

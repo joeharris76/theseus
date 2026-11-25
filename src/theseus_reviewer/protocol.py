@@ -31,6 +31,7 @@ from .verdict import (
     MAX_CLAIM,
     MAX_LINE,
     MAX_PATH,
+    MAX_TITLE,
     NOT_FIXED,
     SHIP,
     SHIP_WITH_FIXES,
@@ -612,6 +613,15 @@ def plan_round(
                     f"forced re-review after {LABELS[latest['decision']]}: an author rebuttal disputes an open finding"
                 ),
             )
+        if derived_bound and manual and latest["decision"] != REFUSED:
+            return Round(
+                FIRST,
+                f"the {LABELS[latest['decision']]} decision on head {head_sha} relied on derived data that this"
+                " review does not attest; a manual review reads it in full",
+                latest["cycle"] + 1,
+                1,
+                latest,
+            )
         decided_at = found.latest_at
         stale = latest["decision"] != REFUSED and (
             base_change_unreadable
@@ -873,6 +883,24 @@ def judge(
     return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
 
 
+def _on_summary(item: Finding, summary: str) -> Finding:
+    if item.file == summary:
+        return item
+    location = f"{item.file}:{item.line}"
+    if len(location) > MAX_TITLE // 2:
+        location = "…" + location[-(MAX_TITLE // 2) :]
+    suffix = f" [{location}]"
+    return replace(
+        item,
+        file=summary,
+        line=1,
+        end_line=None,
+        replacement=None,
+        title=sanitize(item.title, max(MAX_TITLE - len(suffix), 1)) + suffix,
+        detail=f"(anchored by the reviewer on {item.file}:{item.line}) {item.detail}",
+    )
+
+
 def judge_planned(
     verdict: Verdict,
     plan: Mapping[str, Any],
@@ -882,7 +910,9 @@ def judge_planned(
     rules = plan.get("protocol") or {}
     changed = rules.get("changed") if rules.get("kind") == FOLLOW_UP else None
     if isinstance(plan.get("derived"), Mapping):
-        changed = [plan["derived"]["summary"]]
+        summary = plan["derived"]["summary"]
+        changed = [summary]
+        verdict = replace(verdict, defects=tuple(_on_summary(item, summary) for item in verdict.defects))
     ws = workspace if workspace is not None else plan.get("workspace")
     return judge(
         verdict,
