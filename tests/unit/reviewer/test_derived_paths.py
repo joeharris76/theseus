@@ -461,8 +461,8 @@ def test_a_non_eligible_round_after_a_derived_clearance_reads_the_data(
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
-@pytest.mark.parametrize("path", [SHARD, "src/unchanged_module.py"])
-def test_a_finding_off_the_summary_is_counted_and_anchored_on_the_summary(
+@pytest.mark.parametrize("path", ["src/unchanged_module.py", "src/other.py"])
+def test_a_finding_outside_the_entry_is_counted_and_anchored_on_the_summary(
     path: str, policy: Policy, tmp_path: Path
 ) -> None:
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
@@ -829,14 +829,14 @@ def test_same_title_findings_on_different_files_stay_distinct(policy: Policy, tm
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
     findings = [
         {"severity": "High", "file": path, "line": 3, "title": "Same", "detail": f"Detail for {path}."}
-        for path in (SHARD, MANIFEST)
+        for path in ("src/a.py", "src/b.py")
     ]
     final = _final(policy, tmp_path, plan, _v("bad", findings))
     assert final.judgement is not None and len(final.judgement.defects) == 2
-    assert {item.title for item in final.judgement.defects} == {f"Same [{SHARD}:3]", f"Same [{MANIFEST}:3]"}
+    assert {item.title for item in final.judgement.defects} == {"Same [src/a.py:3]", "Same [src/b.py:3]"}
     assert final.review is not None
     text = final.review["body"] + "".join(item["body"] for item in final.review["comments"])
-    assert f"Detail for {SHARD}." in text and f"Detail for {MANIFEST}." in text
+    assert "Detail for src/a.py." in text and "Detail for src/b.py." in text
 
 
 def test_a_manual_review_on_the_same_head_reads_derived_data_in_full() -> None:
@@ -853,14 +853,14 @@ def test_a_near_limit_title_keeps_the_location_and_the_limit(policy: Policy, tmp
     long_path = "data/" + "d" * 380 + "/shard.json"
     findings = [
         {"severity": "High", "file": path, "line": 3, "title": "t" * 199, "detail": f"Detail {n}."}
-        for n, path in enumerate((SHARD, MANIFEST, long_path))
+        for n, path in enumerate(("src/a.py", "src/b.py", long_path))
     ]
     final = _final(policy, tmp_path, plan, _v("bad", findings))
     assert final.judgement is not None
     titles = [item.title for item in final.judgement.defects]
     assert len(titles) == 3 and len(set(titles)) == 3
     assert all(len(title) <= 200 for title in titles)
-    assert titles[0].endswith(f"[{SHARD}:3]") and titles[1].endswith(f"[{MANIFEST}:3]")
+    assert titles[0].endswith("[src/a.py:3]") and titles[1].endswith("[src/b.py:3]")
 
 
 def _open_on(path: str) -> dict[str, Any]:
@@ -906,3 +906,32 @@ def test_every_segment_is_kept_before_the_name_is_dropped_for_the_bare_note() ->
     assert carried == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"
     kept = status_text.with_derived("SHIP · degraded: openai", NAME, status_text.SUCCESS_LIMIT)
     assert kept == "SHIP · degraded: openai · summary only · data attested, not read"
+
+
+def _data_finding_round(policy: Policy, tmp_path: Path) -> report.Final:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    finding = {"severity": "High", "file": SHARD, "line": 3, "title": "Bad value", "detail": "Wrong baseline."}
+    return _final(policy, tmp_path, plan, _v("bad", [finding]))
+
+
+def test_a_finding_on_a_data_file_keeps_its_file_and_blocks(policy: Policy, tmp_path: Path) -> None:
+    final = _data_finding_round(policy, tmp_path)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SHARD and defect.title == "Bad value" and defect.line == 3
+    assert final.state == "failure" and final.review is not None
+    assert "Wrong baseline." in final.review["body"] + "".join(item["body"] for item in final.review["comments"])
+    (entry,) = _record(final)["open_defects"]
+    assert entry["file"] == SHARD and entry["title"] == "Bad value"
+
+
+def test_the_trigger_sequence_for_a_data_finding_ends_in_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = {
+        **_record(_data_finding_round(policy, tmp_path / "first")),
+        "head_sha": "c" * 40,
+        "patch_digest": "z" * 32,
+    }
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(record))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
