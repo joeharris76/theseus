@@ -8,7 +8,7 @@ import os
 import re
 import unicodedata
 import zlib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +16,7 @@ from typing import Any
 
 from . import adjudication, legacy, promotion
 from .coverage import Returned
-from .derived import DERIVED_NAME, DERIVED_PATHS_MAX
+from .derived import DERIVED_NAME, DERIVED_PATHS_MAX, data_anchored, norm_path
 from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .gitmodes import ABSENT_MODE
@@ -883,9 +883,12 @@ def judge(
     return Judgement(SHIP, (), verdict.summary, (), fixed, outside, withdrawn)
 
 
-def _on_summary(item: Finding, summary: str) -> Finding:
-    if item.file == summary:
+def _on_summary(item: Finding, summary: str, own: Collection[str]) -> Finding:
+    if item.file == summary or item.file in own:
         return item
+    folded = sorted(path for path in own if norm_path(path) == norm_path(item.file))
+    if folded:
+        return replace(item, file=folded[0])
     location = f"{item.file}:{item.line}"
     if len(location) > MAX_TITLE // 2:
         location = "…" + location[-(MAX_TITLE // 2) :]
@@ -911,8 +914,21 @@ def judge_planned(
     changed = rules.get("changed") if rules.get("kind") == FOLLOW_UP else None
     if isinstance(plan.get("derived"), Mapping):
         summary = plan["derived"]["summary"]
-        changed = [summary]
-        verdict = replace(verdict, defects=tuple(_on_summary(item, summary) for item in verdict.defects))
+        own = plan["derived"]["paths"]
+        changed = [summary, *own]
+        unread = {
+            item["id"]
+            for item in rules.get("prior", ())
+            if data_anchored(str(item.get("file", "")), str(item.get("title", "")), own, summary)
+        }
+        verdict = replace(
+            verdict,
+            defects=tuple(_on_summary(item, summary, own) for item in verdict.defects),
+            prior_defects=tuple(
+                replace(item, status=NOT_FIXED) if item.id in unread and item.status in (FIXED, WITHDRAWN) else item
+                for item in verdict.prior_defects
+            ),
+        )
     ws = workspace if workspace is not None else plan.get("workspace")
     return judge(
         verdict,

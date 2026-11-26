@@ -1003,6 +1003,13 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     recorded = (inputs.found.latest or {}).get("derived")
     if eligible is not None and recorded is not None and recorded["digest"] != eligible.entry.digest():
         eligible = None
+    if eligible is not None and any(
+        derived.data_anchored(
+            str(item.get("file", "")), str(item.get("title", "")), eligible.paths, eligible.entry.summary
+        )
+        for item in (inputs.found.latest or {}).get("open_defects", ())
+    ):
+        eligible = None
     if eligible is not None:
         inputs = _derived_inputs(inputs, eligible)
         plan["derived"] = eligible.to_plan()
