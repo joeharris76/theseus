@@ -1080,3 +1080,62 @@ def test_a_remapped_bracketed_title_is_recognised_as_data_anchored() -> None:
     moved = protocol._on_summary(item, SUMMARY, [SHARD])
     assert moved.file == SUMMARY and moved.title == "Wrong [ms] value [src/x.py:4]"
     assert not derived.data_anchored(moved.file, moved.title, [SHARD], SUMMARY)
+
+
+def _derived_plan(policy: Policy) -> dict[str, Any]:
+    return {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+
+
+def _later(record: dict[str, Any]) -> dict[str, Any]:
+    return {**record, "head_sha": "c" * 40, "patch_digest": "z" * 32}
+
+
+def _finding(path: str, n: int = 3) -> dict[str, Any]:
+    return {"severity": "High", "file": path, "line": 3, "title": f"Bad value {n}", "detail": "Wrong."}
+
+
+def test_a_derived_do_not_ship_is_followed_by_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final = _final(
+        policy, tmp_path / "first", _derived_plan(policy), _v("bad", [_finding(SHARD)], decision="DO_NOT_SHIP")
+    )
+    record = _record(final)
+    assert record["decision"] == "DO_NOT_SHIP" and record["open_defects"] == [] and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    assert plan["protocol"]["kind"] == "first"
+
+
+def test_an_over_limit_derived_do_not_ship_is_followed_by_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    many = [_finding(SHARD, n) for n in range(policy.protocol.max_defects + 1)]
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("bad", many)))
+    assert record["decision"] == "DO_NOT_SHIP" and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_derived_ship_with_fixes_without_data_findings_allows_a_derived_round(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("typo", [_finding(SUMMARY)])))
+    assert record["decision"] == "SHIP_WITH_FIXES" and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert plan["derived"]["entry"] == "baseline" and plan["evidence_files"] == [SUMMARY]
+
+
+def test_a_same_head_review_and_a_ruling_after_a_derived_do_not_ship_read_in_full(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("bad", [], decision="DO_NOT_SHIP")))
+    step = _round(_found(record), manual=True, derived_digest=None)
+    assert step.kind == protocol.FIRST
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    plan = cli._base_plan(_policy(), "owner/repo", 7, "1")
+    plan.update({"base_sha": "b" * 40, "base_ref": "develop", "head_sha": "a" * 40})
+    ruling = adjudication.Adjudication("WITHDRAW", "D1", "fine")
+    assert cli.adjudicate_round(tmp_path / "ruling", plan, _policy(), _found(record), ruling, None) == 0
+    assert plan["decision"] == cli.HOLD
