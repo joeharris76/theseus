@@ -387,12 +387,17 @@ class LocalEnvironment:
         if local:
             plan["history"] = "local"
             found = findings.history_of(record)
+        relied_on_derived = (found.latest or {}).get("derived") is not None
         cli._write_json(out_dir / PRIOR_FILE, found.latest)
         disputes: list[dict[str, Any]] | None = None
         try:
             if (self.rebuttals or self.adjudicate) and not local:
                 raise findings.RecordError(
                     "the pull request already has CI reviews; dispute a finding on its review thread instead"
+                )
+            if self.adjudicate and relied_on_derived:
+                raise findings.RecordError(
+                    "the recorded review relied on derived data that a local review reads in full; review again first"
                 )
             if local:
                 disputes = []
@@ -425,13 +430,14 @@ class LocalEnvironment:
                 found=found,
                 previous_strikes=0,
                 pool_blocks=blocks,
-                manual=False,
+                manual=relied_on_derived,
                 event_name="pull_request_target",
                 base_changed_at=base_changed[0],
                 base_change_unreadable=base_changed[1],
                 disputes=disputes,
                 description=self._commit_messages(base) if policy.brief.include_intent else None,
                 since_diff=self._since_diff,
+                allow_derived=False,
             ),
             matchers,
         )
@@ -660,7 +666,6 @@ class Outcome:
     findings: tuple[dict[str, Any], ...]
     record: dict[str, Any] | None = None
     skipped: str = ""
-    derived: dict[str, str] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -670,7 +675,6 @@ class Outcome:
             "summary": self.summary,
             "findings": list(self.findings),
             "record": self.record,
-            "derived": self.derived,
         }
 
     @classmethod
@@ -684,21 +688,11 @@ class Outcome:
         record = data.get("record")
         if record is not None and not isinstance(record, dict):
             return None
-        held = data.get("derived")
-        if held is not None and not (
-            isinstance(held, dict)
-            and all(isinstance(key, str) and isinstance(value, str) for key, value in held.items())
-        ):
+        history = (record or {}).get("history") or [None]
+        last = history[-1]
+        if data.get("derived") is not None or (isinstance(last, dict) and last.get("derived") is not None):
             return None
-        return cls(
-            data["blocked"],
-            data["label"],
-            data["reviewer"],
-            data["summary"],
-            tuple(data["findings"]),
-            record,
-            derived=held,
-        )
+        return cls(data["blocked"], data["label"], data["reviewer"], data["summary"], tuple(data["findings"]), record)
 
 
 def _entry_finding(entry: Mapping[str, Any], cycle: int = 1) -> dict[str, Any]:
@@ -738,14 +732,8 @@ def judged_outcome(
 def recorded_outcome(record: Mapping[str, Any]) -> Outcome:
     found = tuple(_entry_finding(entry, record.get("cycle", 1)) for entry in record.get("open_defects", ()))
     blocked = record["decision"] in (DO_NOT_SHIP, protocol.REFUSED) or _blocking(found)
-    held = record.get("derived")
     return Outcome(
-        blocked,
-        protocol.LABELS[record["decision"]],
-        record.get("reviewer", ""),
-        record.get("summary", ""),
-        found,
-        derived=None if held is None else {"entry": held["entry"], "digest": held["digest"]},
+        blocked, protocol.LABELS[record["decision"]], record.get("reviewer", ""), record.get("summary", ""), found
     )
 
 
@@ -1028,11 +1016,7 @@ def _decided(run: Run, plan: dict[str, Any], previous: Mapping[str, Any] | None)
         plan["protocol"]["cycle"],
         report.defect_ids(plan, final.judgement.defects),
     )
-    held = plan.get("derived")
-    reliance = (
-        {key: str(held[key]) for key in ("entry", "digest", "attested_by")} if isinstance(held, Mapping) else None
-    )
-    return replace(outcome, record=record, derived=reliance)
+    return replace(outcome, record=record)
 
 
 def _persist_pool_blocks(run: Run) -> None:
@@ -1101,12 +1085,6 @@ def _show(outcome: Outcome, reporter: Reporter) -> None:
     reporter.say(f"{ADVISORY}: reviewer {outcome.reviewer or 'none'}, decision {outcome.label}.")
     if outcome.summary:
         reporter.say(str(outcome.summary)[:SUMMARY_LIMIT])
-    if outcome.derived:
-        attested = outcome.derived.get("attested_by")
-        reporter.say(
-            f"{ADVISORY}: summary only; the data files of derived path entry {outcome.derived['entry']} were not read"
-            + (f" and are attested by {attested}." if attested else ".")
-        )
     ordered = sorted(outcome.findings, key=_severity_rank)
     for finding in ordered[:FINDING_LIMIT]:
         reporter.say(
@@ -1347,7 +1325,6 @@ def _member_record(
     trusted_sha: str,
     outcome: str,
     reason: str,
-    derived: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": MEMBER_SCHEMA,
@@ -1357,7 +1334,6 @@ def _member_record(
         "head_sha": head,
         **member_binding(root, base, head),
         "trusted_sha": trusted_sha,
-        **({"derived": dict(derived)} if derived else {}),
     }
 
 
@@ -1395,7 +1371,7 @@ def _member_review(args: argparse.Namespace, reporter: Reporter) -> int:
     else:
         _show(outcome, reporter)
     _escalated(record, outcome, reporter)
-    result = _member_record(root, base, head, trusted_sha, kind, reason, outcome.derived)
+    result = _member_record(root, base, head, trusted_sha, kind, reason)
     _write_json_atomic(result_path, result)
     if kind == MEMBER_FINDINGS:
         reporter.say(
