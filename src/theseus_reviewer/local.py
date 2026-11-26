@@ -383,17 +383,21 @@ class LocalEnvironment:
             base_changed = cli._base_changed_at(self.repo, pr)
         states = file_states(self.root, base, self.head)
         local = not found.records
-        hosted_derived = not local and (found.latest or {}).get("derived") is not None
         record = findings.load(self.state, protocol.patch_digest(protocol.fingerprints(states))) if local else None
         if local:
             plan["history"] = "local"
             found = findings.history_of(record)
+        relied_on_derived = (found.latest or {}).get("derived") is not None
         cli._write_json(out_dir / PRIOR_FILE, found.latest)
         disputes: list[dict[str, Any]] | None = None
         try:
             if (self.rebuttals or self.adjudicate) and not local:
                 raise findings.RecordError(
                     "the pull request already has CI reviews; dispute a finding on its review thread instead"
+                )
+            if self.adjudicate and relied_on_derived:
+                raise findings.RecordError(
+                    "the recorded review relied on derived data that a local review reads in full; review again first"
                 )
             if local:
                 disputes = []
@@ -426,7 +430,7 @@ class LocalEnvironment:
                 found=found,
                 previous_strikes=0,
                 pool_blocks=blocks,
-                manual=bool(hosted_derived),
+                manual=relied_on_derived,
                 event_name="pull_request_target",
                 base_changed_at=base_changed[0],
                 base_change_unreadable=base_changed[1],
@@ -683,6 +687,10 @@ class Outcome:
             return None
         record = data.get("record")
         if record is not None and not isinstance(record, dict):
+            return None
+        if data.get("derived") is not None or any(
+            isinstance(item, dict) and item.get("derived") is not None for item in (record or {}).get("history", ())
+        ):
             return None
         return cls(data["blocked"], data["label"], data["reviewer"], data["summary"], tuple(data["findings"]), record)
 

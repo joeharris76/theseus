@@ -4,12 +4,13 @@ import copy
 import json
 import subprocess
 import unicodedata
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from theseus_reviewer import adjudication, capacity, cli, derived, local, protocol, report, status_text
+from theseus_reviewer import adjudication, capacity, cli, derived, findings, local, protocol, report, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
@@ -605,9 +606,7 @@ def test_a_carried_decision_keeps_the_record_and_the_wording(policy: Policy) -> 
     assert protocol.decode_marker(unattested.body)["derived"] == _recorded()
 
 
-def test_an_older_local_outcome_and_record_with_a_derived_key_still_read() -> None:
-    outcome = local.Outcome(False, "SHIP", "small", "", ())
-    assert local.Outcome.from_json({**outcome.to_json(), "derived": {"entry": "baseline"}}) == outcome
+def test_an_older_local_record_with_a_derived_key_still_reads() -> None:
     assert local.recorded_outcome(_bound()).label == "SHIP"
 
 
@@ -681,6 +680,59 @@ def test_a_local_review_still_reuses_a_hosted_full_decision(tmp_path: Path, monk
     env = _local_env(tmp_path, monkeypatch, pr="7")
     _hosted(env, monkeypatch)
     assert _local_plan(env)["decision"] != "review"
+
+
+def _stored_local_record(env: local.LocalEnvironment, **over: Any) -> None:
+    base = _git(env.root, "merge-base", env.base_ref, env.head)
+    digest = protocol.patch_digest(protocol.fingerprints(local.file_states(env.root, base, env.head)))
+    record = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha=env.head, patch_digest=digest, **over)
+    findings.store(
+        env.state,
+        {
+            "v": 1,
+            "patch_digest": digest,
+            "base_ref": "develop",
+            "head_sha": env.head,
+            "history": [record],
+            "findings": [],
+        },
+        (),
+    )
+
+
+def test_a_local_record_that_relied_on_derived_data_is_never_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _local_env(tmp_path, monkeypatch)
+    _stored_local_record(env, derived=_recorded())
+    plan = _local_plan(env)
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_ruling_cannot_clear_a_local_record_that_relied_on_derived_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = replace(_local_env(tmp_path, monkeypatch), adjudicate="Review adjudicate: WITHDRAW D1 - fine")
+    _stored_local_record(env, derived=_recorded())
+    assert env.plan() == 2
+    assert "relied on derived data" in capsys.readouterr().err
+
+
+def test_a_local_record_without_derived_data_is_still_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch)
+    _stored_local_record(env)
+    assert _local_plan(env)["decision"] != "review"
+
+
+def test_a_cached_local_outcome_from_a_derived_round_is_a_miss() -> None:
+    outcome = local.Outcome(False, "SHIP", "small", "", ())
+    assert local.Outcome.from_json({**outcome.to_json(), "derived": {"entry": "baseline"}}) is None
+    held = {"history": [_marker_record(derived=_recorded())]}
+    assert local.Outcome.from_json({**outcome.to_json(), "record": held}) is None
+    assert local.Outcome.from_json({**outcome.to_json(), "record": {"history": [_marker_record()]}}) == replace(
+        outcome, record={"history": [_marker_record()]}
+    )
 
 
 @pytest.mark.parametrize("decision", ["DO_NOT_SHIP", "REFUSED"])
