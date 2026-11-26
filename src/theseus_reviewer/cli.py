@@ -1007,6 +1007,8 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
         eligible = None
     if eligible is not None and (inputs.found.latest or {}).get("decision") in (DO_NOT_SHIP, protocol.REFUSED):
         eligible = None
+    if eligible is not None and recorded is None and (inputs.found.latest or {}).get("open_defects"):
+        eligible = None
     if eligible is not None and any(
         derived.data_anchored(
             str(item.get("file", "")), str(item.get("title", "")), eligible.paths, eligible.entry.summary

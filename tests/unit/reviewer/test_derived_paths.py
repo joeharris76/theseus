@@ -928,7 +928,12 @@ def test_an_open_defect_on_a_data_file_keeps_the_round_a_full_review(
     plan = _plan(Scenario(), _policy(), tmp_path / "data", monkeypatch, _found(latest))
     assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
     elsewhere = _marker_record(
-        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SUMMARY)]
+        decision="SHIP_WITH_FIXES",
+        coverage=1,
+        patch_map={},
+        head_sha="c" * 40,
+        open_defects=[_open_on(SUMMARY)],
+        derived=_recorded(),
     )
     assert _plan(Scenario(), _policy(), tmp_path / "summary", monkeypatch, _found(elsewhere))["derived"]
 
@@ -1047,7 +1052,12 @@ def test_a_summary_prior_about_a_non_data_file_is_still_clearable(
 ) -> None:
     prior = {"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": title}
     latest = _marker_record(
-        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+        decision="SHIP_WITH_FIXES",
+        coverage=1,
+        patch_map={},
+        head_sha="c" * 40,
+        open_defects=[prior],
+        derived=_recorded(),
     )
     assert _plan(Scenario(), _policy(), tmp_path / "plan", monkeypatch, _found(latest))["derived"]
     plan = {
@@ -1190,3 +1200,22 @@ def test_a_same_head_review_and_a_ruling_after_a_derived_do_not_ship_read_in_ful
     ruling = adjudication.Adjudication("WITHDRAW", "D1", "fine")
     assert cli.adjudicate_round(tmp_path / "ruling", plan, _policy(), _found(record), ruling, None) == 0
     assert plan["decision"] == cli.HOLD
+
+
+def test_an_open_defect_from_a_full_review_keeps_the_next_round_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {
+        "id": "D1",
+        "severity": "High",
+        "file": SUMMARY,
+        "line": 2,
+        "end_line": None,
+        "title": "Summary claims X but the shard shows Y",
+    }
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert "derived" not in latest
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
