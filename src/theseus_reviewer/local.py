@@ -383,6 +383,7 @@ class LocalEnvironment:
             base_changed = cli._base_changed_at(self.repo, pr)
         states = file_states(self.root, base, self.head)
         local = not found.records
+        hosted_derived = not local and (found.latest or {}).get("derived") is not None
         record = findings.load(self.state, protocol.patch_digest(protocol.fingerprints(states))) if local else None
         if local:
             plan["history"] = "local"
@@ -425,7 +426,7 @@ class LocalEnvironment:
                 found=found,
                 previous_strikes=0,
                 pool_blocks=blocks,
-                manual=False,
+                manual=bool(hosted_derived),
                 event_name="pull_request_target",
                 base_changed_at=base_changed[0],
                 base_change_unreadable=base_changed[1],

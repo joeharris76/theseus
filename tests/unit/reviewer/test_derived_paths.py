@@ -621,9 +621,7 @@ def _git(root: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-def test_a_local_review_of_a_data_and_summary_patch_is_planned_in_full(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _local_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pr: str = "") -> local.LocalEnvironment:
     repo = tmp_path / "repo"
     (repo / DATA_DIR).mkdir(parents=True)
     _git(repo, "init", "--quiet", "--initial-branch=develop")
@@ -644,15 +642,45 @@ def test_a_local_review_of_a_data_and_summary_patch_is_planned_in_full(
         local.BASE_ENV: "develop~1",
         local.HEAD_ENV: _git(repo, "rev-parse", "HEAD"),
         local.STATE_ENV: str(tmp_path / "state"),
+        **({local.PR_ENV: pr} if pr else {}),
     }
     monkeypatch.setenv("GITHUB_RUN_ID", "1")
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    env = local.LocalEnvironment.from_environ(environ, policy_path)
+    return local.LocalEnvironment.from_environ(environ, policy_path)
+
+
+def _local_plan(env: local.LocalEnvironment) -> dict[str, Any]:
     assert env.plan() == 0
-    plan = json.loads((env.layout.plan / cli.PLAN_FILE).read_text(encoding="utf-8"))
+    return json.loads((env.layout.plan / cli.PLAN_FILE).read_text(encoding="utf-8"))
+
+
+def test_a_local_review_of_a_data_and_summary_patch_is_planned_in_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _local_plan(_local_env(tmp_path, monkeypatch))
     assert plan["decision"] == "review" and "derived" not in plan
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def _hosted(env: local.LocalEnvironment, monkeypatch: pytest.MonkeyPatch, **over: Any) -> None:
+    record = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha=env.head, **over)
+    monkeypatch.setattr(cli, "_plan_history", lambda *_args: _found(record))
+    monkeypatch.setattr(cli, "_base_changed_at", lambda *_args: (None, False))
+
+
+def test_a_local_review_never_reuses_a_hosted_derived_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch, pr="7")
+    _hosted(env, monkeypatch, derived=_recorded())
+    plan = _local_plan(env)
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_local_review_still_reuses_a_hosted_full_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch, pr="7")
+    _hosted(env, monkeypatch)
+    assert _local_plan(env)["decision"] != "review"
 
 
 @pytest.mark.parametrize("decision", ["DO_NOT_SHIP", "REFUSED"])
