@@ -234,7 +234,7 @@ def assess(
     return None
 
 
-_LOCATION = re.compile(r" \[(?P<location>.*):[0-9]+\]$", re.DOTALL)
+_LOCATION = re.compile(r"(?P<location>.*):[0-9]+\]", re.DOTALL)
 ELLIPSIS = "\u2026"
 
 
@@ -262,13 +262,17 @@ def data_anchored(file: str, title: str, paths: Iterable[str], summary: str) -> 
         return False
     if title.endswith(ELLIPSIS):
         return True
-    found = _LOCATION.search(title)
-    if found is None:
-        return False
-    location = norm_path(found["location"])
-    if location.startswith(ELLIPSIS):
-        return _tail_of_data(location[1:], folded)
-    return location in folded
+    for match in re.finditer(r" \[", title):
+        found = _LOCATION.fullmatch(title, match.end())
+        if found is None:
+            continue
+        location = norm_path(found["location"])
+        if location.startswith(ELLIPSIS):
+            if _tail_of_data(location[1:], folded):
+                return True
+        elif location in folded:
+            return True
+    return False
 
 
 def record_of(plan: Mapping[str, Any]) -> dict[str, Any] | None:

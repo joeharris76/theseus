@@ -1048,3 +1048,35 @@ def test_a_differently_written_data_path_maps_to_the_data_file(variant: str, pol
     assert defect.file == data and defect.title == "Bad value"
     assert derived.data_anchored(cited, "Bad value", [data], SUMMARY)
     assert derived.data_anchored(SUMMARY, f"Bad value [{cited}:3]", [data], SUMMARY)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        f"Wrong p95 [ms] value [{SHARD}:3]",
+        f"Wrong [p95] [ms] value [{SHARD}:3]",
+        "Wrong p95 [ms] value […baseline/shard-00.json:3]",
+        "Wrong [p95] [ms] value […baseline/shard-00.json:3]",
+        f"Wrong p95 [ms] value [{SHARD.upper()}:12]",
+    ],
+)
+def test_a_bracketed_title_does_not_hide_the_data_location(title: str) -> None:
+    assert derived.data_anchored(SUMMARY, title, [MANIFEST, SHARD], SUMMARY)
+    assert derived.data_anchored("…" + SUMMARY[-31:], title, [MANIFEST, SHARD], SUMMARY)
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Wrong p95 [ms] value [src/other.py:3]", "Wrong [p95] [ms] [src/other.py:3]", "Wrong [ms] value […other.py:3]"],
+)
+def test_a_non_data_location_after_a_bracketed_title_is_not_data(title: str) -> None:
+    assert not derived.data_anchored(SUMMARY, title, [MANIFEST, SHARD], SUMMARY)
+
+
+def test_a_remapped_bracketed_title_is_recognised_as_data_anchored() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    item = Finding("High", "src/x.py", 4, "Wrong [ms] value", "Because.")
+    moved = protocol._on_summary(item, SUMMARY, [SHARD])
+    assert moved.file == SUMMARY and moved.title == "Wrong [ms] value [src/x.py:4]"
+    assert not derived.data_anchored(moved.file, moved.title, [SHARD], SUMMARY)
