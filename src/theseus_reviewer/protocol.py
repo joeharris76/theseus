@@ -16,7 +16,7 @@ from typing import Any
 
 from . import adjudication, legacy, promotion
 from .coverage import Returned
-from .derived import DERIVED_NAME, DERIVED_PATHS_MAX, data_anchored
+from .derived import DERIVED_NAME, DERIVED_PATHS_MAX, data_anchored, norm_path
 from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .gitmodes import ABSENT_MODE
@@ -886,7 +886,7 @@ def judge(
 def _on_summary(item: Finding, summary: str, own: Collection[str]) -> Finding:
     if item.file == summary or item.file in own:
         return item
-    folded = sorted(path for path in own if path.casefold() == item.file.casefold())
+    folded = sorted(path for path in own if norm_path(path) == norm_path(item.file))
     if folded:
         return replace(item, file=folded[0])
     location = f"{item.file}:{item.line}"

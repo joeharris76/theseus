@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -237,25 +238,34 @@ _LOCATION = re.compile(r" \[(?P<location>.*):[0-9]+\]$", re.DOTALL)
 ELLIPSIS = "\u2026"
 
 
+def norm_path(path: str) -> str:
+    return unicodedata.normalize("NFC", path).strip().casefold()
+
+
 def _tail_of_data(tail: str, folded: Sequence[str]) -> bool:
     return any(path.endswith(tail) for path in folded)
 
 
 def data_anchored(file: str, title: str, paths: Iterable[str], summary: str) -> bool:
-    folded = [path.casefold() for path in paths]
-    held = file.casefold()
+    folded = [norm_path(path) for path in paths]
+    held = norm_path(file)
+    own_summary = norm_path(summary)
     if held in folded:
         return True
     if held.startswith(ELLIPSIS):
-        return _tail_of_data(held[1:], folded)
-    if held != summary.casefold():
+        tail = held[1:]
+        if _tail_of_data(tail, folded):
+            return True
+        if not own_summary.endswith(tail):
+            return False
+    elif held != own_summary:
         return False
     if title.endswith(ELLIPSIS):
         return True
     found = _LOCATION.search(title)
     if found is None:
         return False
-    location = found["location"].casefold()
+    location = norm_path(found["location"])
     if location.startswith(ELLIPSIS):
         return _tail_of_data(location[1:], folded)
     return location in folded

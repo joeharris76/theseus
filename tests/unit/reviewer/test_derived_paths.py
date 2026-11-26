@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -1006,3 +1007,44 @@ def test_a_summary_prior_about_a_non_data_file_is_still_clearable(
     verdict["prior_defects"] = [{"id": "D1", "status": "fixed", "evidence": f"{SUMMARY}:1 is corrected"}]
     final = _final(policy, tmp_path / "judge", plan, verdict)
     assert final.judgement is not None and final.judgement.decision == "SHIP"
+
+
+def test_a_clipped_summary_path_still_reaches_the_title_checks() -> None:
+    clipped = "…" + SUMMARY[-31:]
+    paths = [MANIFEST, SHARD]
+    assert derived.data_anchored(clipped, f"Bad value [{SHARD}:3]"[:39] + "…", paths, SUMMARY)
+    assert derived.data_anchored(clipped, f"Bad value [{SHARD}:3]", paths, SUMMARY)
+    assert not derived.data_anchored(clipped, "Typo in the summary", paths, SUMMARY)
+    assert not derived.data_anchored("…other/file.md", "Typo…", paths, SUMMARY)
+
+
+def test_a_clipped_legacy_record_at_the_tightest_trim_stays_data_anchored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {
+        "id": "D1",
+        "severity": "High",
+        "file": "…" + SUMMARY[-31:],
+        "line": 1,
+        "end_line": None,
+        "title": f"Bad value [{SHARD}:3]"[:39] + "…",
+    }
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert "derived" not in _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+
+
+@pytest.mark.parametrize("variant", ["nfd", "space"])
+def test_a_differently_written_data_path_maps_to_the_data_file(variant: str, policy: Policy, tmp_path: Path) -> None:
+    data = f"{DATA_DIR}/caf\u00e9.json"
+    cited = unicodedata.normalize("NFD", data) if variant == "nfd" else f"{data} "
+    held = {"entry": "baseline", "digest": DIGEST, "paths": [data], "summary": SUMMARY, "attested_by": ATTESTED}
+    plan = {**_protocol_plan(policy), "derived": held}
+    finding = {"severity": "High", "file": cited, "line": 3, "title": "Bad value", "detail": "Wrong."}
+    final = _final(policy, tmp_path, plan, _v("bad", [finding]))
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == data and defect.title == "Bad value"
+    assert derived.data_anchored(cited, "Bad value", [data], SUMMARY)
+    assert derived.data_anchored(SUMMARY, f"Bad value [{cited}:3]", [data], SUMMARY)
