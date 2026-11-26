@@ -688,9 +688,9 @@ class Outcome:
         record = data.get("record")
         if record is not None and not isinstance(record, dict):
             return None
-        if data.get("derived") is not None or any(
-            isinstance(item, dict) and item.get("derived") is not None for item in (record or {}).get("history", ())
-        ):
+        history = (record or {}).get("history") or [None]
+        last = history[-1]
+        if data.get("derived") is not None or (isinstance(last, dict) and last.get("derived") is not None):
             return None
         return cls(data["blocked"], data["label"], data["reviewer"], data["summary"], tuple(data["findings"]), record)
 

@@ -733,6 +733,8 @@ def test_a_cached_local_outcome_from_a_derived_round_is_a_miss() -> None:
     assert local.Outcome.from_json({**outcome.to_json(), "record": {"history": [_marker_record()]}}) == replace(
         outcome, record={"history": [_marker_record()]}
     )
+    rerun = {"history": [_marker_record(derived=_recorded()), _marker_record(round=2)]}
+    assert local.Outcome.from_json({**outcome.to_json(), "record": rerun}) == replace(outcome, record=rerun)
 
 
 @pytest.mark.parametrize("decision", ["DO_NOT_SHIP", "REFUSED"])
