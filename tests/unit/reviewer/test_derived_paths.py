@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import subprocess
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -603,16 +605,65 @@ def test_a_carried_decision_keeps_the_record_and_the_wording(policy: Policy) -> 
     assert protocol.decode_marker(unattested.body)["derived"] == _recorded()
 
 
-def test_a_local_outcome_and_member_record_carry_the_reliance(monkeypatch: pytest.MonkeyPatch) -> None:
-    reliance = {"entry": "baseline", "digest": DIGEST, "attested_by": ATTESTED}
-    outcome = local.Outcome(False, "SHIP", "small", "", (), derived=reliance)
-    restored = local.Outcome.from_json(outcome.to_json())
-    assert restored is not None and restored.derived == reliance
-    assert local.recorded_outcome(_bound()).derived == {"entry": "baseline", "digest": DIGEST}
-    monkeypatch.setattr(local, "member_binding", lambda *_args: {"head_tree": "t", "patch_digest": "p"})
-    member = local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok", reliance)
-    assert member["derived"] == reliance
-    assert "derived" not in local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok")
+def test_an_older_local_outcome_and_record_with_a_derived_key_still_read() -> None:
+    outcome = local.Outcome(False, "SHIP", "small", "", ())
+    assert local.Outcome.from_json({**outcome.to_json(), "derived": {"entry": "baseline"}}) == outcome
+    assert local.recorded_outcome(_bound()).label == "SHIP"
+
+
+def _git(root: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def test_a_local_review_of_a_data_and_summary_patch_is_planned_in_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / DATA_DIR).mkdir(parents=True)
+    _git(repo, "init", "--quiet", "--initial-branch=develop")
+    for name in ("manifest.json", "shard-00.json", "SUMMARY.md"):
+        (repo / DATA_DIR / name).write_text("one\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    for name in ("manifest.json", "shard-00.json", "SUMMARY.md"):
+        (repo / DATA_DIR / name).write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "--quiet", "-am", "refresh")
+    policy_path = tmp_path / "policy.yml"
+    policy_path.write_text(json.dumps(_raw(_entry())), encoding="utf-8")
+    environ = {
+        local.WORK_ENV: str(tmp_path / "work"),
+        local.REPOSITORY_ENV: "o/r",
+        local.ROOT_ENV: str(repo),
+        local.TRUSTED_ENV: str(POLICY_PATH.parents[1]),
+        local.BASE_ENV: "develop~1",
+        local.HEAD_ENV: _git(repo, "rev-parse", "HEAD"),
+        local.STATE_ENV: str(tmp_path / "state"),
+    }
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    env = local.LocalEnvironment.from_environ(environ, policy_path)
+    assert env.plan() == 0
+    plan = json.loads((env.layout.plan / cli.PLAN_FILE).read_text(encoding="utf-8"))
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+@pytest.mark.parametrize("decision", ["DO_NOT_SHIP", "REFUSED"])
+def test_a_round_after_a_full_review_do_not_ship_or_a_refusal_is_not_derived(
+    decision: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kind = "refused" if decision == "REFUSED" else "first"
+    latest = _marker_record(decision=decision, kind=kind, coverage=1, patch_map={}, head_sha="c" * 40)
+    assert "derived" not in latest
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
 def test_soundness_data_is_eligible_and_fits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

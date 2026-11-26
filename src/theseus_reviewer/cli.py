@@ -899,6 +899,7 @@ class RoundInputs:
     linked: Sequence[Mapping[str, str]] = ()
     since_diff: Callable[[str], str | None] | None = None
     description: str | None = None
+    allow_derived: bool = True
 
 
 def _git_show_text(root: Path, ref: str, path: str) -> str:
@@ -965,7 +966,7 @@ def _resolve_promotion_bundle(
 
 
 def _derived_eligibility(policy: Policy, inputs: RoundInputs, matchers: Matchers) -> derived.Eligible | None:
-    if not policy.evidence.derived_paths:
+    if not policy.evidence.derived_paths or not inputs.allow_derived:
         return None
     gate_paths = policy.classifier.gate_paths
 
@@ -1004,7 +1005,7 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     recorded = (inputs.found.latest or {}).get("derived")
     if eligible is not None and recorded is not None and recorded["digest"] != eligible.entry.digest():
         eligible = None
-    if eligible is not None and recorded is not None and (inputs.found.latest or {}).get("decision") == DO_NOT_SHIP:
+    if eligible is not None and (inputs.found.latest or {}).get("decision") in (DO_NOT_SHIP, protocol.REFUSED):
         eligible = None
     if eligible is not None and any(
         derived.data_anchored(
