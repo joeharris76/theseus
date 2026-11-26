@@ -16,7 +16,7 @@ from typing import Any
 
 from . import adjudication, legacy, promotion
 from .coverage import Returned
-from .derived import DERIVED_NAME, DERIVED_PATHS_MAX
+from .derived import DERIVED_NAME, DERIVED_PATHS_MAX, data_anchored
 from .edits import EditStateError, is_edited
 from .evidence import withdrawal_cited
 from .gitmodes import ABSENT_MODE
@@ -916,7 +916,11 @@ def judge_planned(
         summary = plan["derived"]["summary"]
         own = plan["derived"]["paths"]
         changed = [summary, *own]
-        unread = {item["id"] for item in rules.get("prior", ()) if item.get("file") in plan["derived"]["paths"]}
+        unread = {
+            item["id"]
+            for item in rules.get("prior", ())
+            if data_anchored(str(item.get("file", "")), str(item.get("title", "")), own, summary)
+        }
         verdict = replace(
             verdict,
             defects=tuple(_on_summary(item, summary, own) for item in verdict.defects),

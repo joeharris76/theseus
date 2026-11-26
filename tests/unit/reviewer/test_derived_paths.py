@@ -946,3 +946,63 @@ def test_a_case_variant_of_a_data_path_maps_to_the_data_file(policy: Policy, tmp
     (defect,) = final.judgement.defects
     assert defect.file == SHARD and defect.title == "Bad value" and defect.line == 3
     assert _record(final)["open_defects"][0]["file"] == SHARD
+
+
+ANCHORS = [
+    pytest.param(SHARD, "Bad value", id="exact"),
+    pytest.param(f"{DATA_DIR.upper()}/SHARD-00.JSON", "Bad value", id="case"),
+    pytest.param("…baseline/shard-00.json", "Bad value", id="clipped-path"),
+    pytest.param("…", "Bad value", id="empty-clip"),
+    pytest.param(SUMMARY, f"Bad value [{SHARD}:3]", id="legacy-title"),
+    pytest.param(SUMMARY, f"Bad value [{SHARD.upper()}:3]", id="legacy-title-case"),
+    pytest.param(SUMMARY, "Bad value […baseline/shard-00.json:3]", id="legacy-clipped-location"),
+    pytest.param(SUMMARY, "Bad value that was cut sho…", id="legacy-clipped-title"),
+]
+
+
+@pytest.mark.parametrize(("file", "title"), ANCHORS)
+def test_every_data_anchored_form_keeps_the_round_a_full_review(
+    file: str, title: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": file, "line": 3, "end_line": None, "title": title}
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+@pytest.mark.parametrize(("file", "title"), ANCHORS)
+@pytest.mark.parametrize("status", ["fixed", "withdrawn"])
+def test_every_data_anchored_form_stays_open_in_a_derived_plan(
+    file: str, title: str, status: str, policy: Policy, tmp_path: Path
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": file, "line": 3, "end_line": None, "title": title}
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[prior]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [{"id": "D1", "status": status, "evidence": f"{SUMMARY}:3 says so"}]
+    final = _final(policy, tmp_path, plan, verdict)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    assert [item["id"] for item in final.judgement.carried] == ["D1"]
+
+
+@pytest.mark.parametrize("title", ["Typo in the summary", "Typo [src/other.py:3]", "Typo […other.py:3]"])
+def test_a_summary_prior_about_a_non_data_file_is_still_clearable(
+    title: str, policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": title}
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert _plan(Scenario(), _policy(), tmp_path / "plan", monkeypatch, _found(latest))["derived"]
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[prior]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [{"id": "D1", "status": "fixed", "evidence": f"{SUMMARY}:1 is corrected"}]
+    final = _final(policy, tmp_path / "judge", plan, verdict)
+    assert final.judgement is not None and final.judgement.decision == "SHIP"

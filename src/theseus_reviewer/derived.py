@@ -233,6 +233,34 @@ def assess(
     return None
 
 
+_LOCATION = re.compile(r" \[(?P<location>.*):[0-9]+\]$", re.DOTALL)
+ELLIPSIS = "\u2026"
+
+
+def _tail_of_data(tail: str, folded: Sequence[str]) -> bool:
+    return any(path.endswith(tail) for path in folded)
+
+
+def data_anchored(file: str, title: str, paths: Iterable[str], summary: str) -> bool:
+    folded = [path.casefold() for path in paths]
+    held = file.casefold()
+    if held in folded:
+        return True
+    if held.startswith(ELLIPSIS):
+        return _tail_of_data(held[1:], folded)
+    if held != summary.casefold():
+        return False
+    if title.endswith(ELLIPSIS):
+        return True
+    found = _LOCATION.search(title)
+    if found is None:
+        return False
+    location = found["location"].casefold()
+    if location.startswith(ELLIPSIS):
+        return _tail_of_data(location[1:], folded)
+    return location in folded
+
+
 def record_of(plan: Mapping[str, Any]) -> dict[str, Any] | None:
     held = plan.get("derived")
     if not isinstance(held, Mapping):
