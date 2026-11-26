@@ -124,7 +124,7 @@ wheels = [
 
 [[package]]
 name = "theseus-reviewer"
-version = "0.2.22"
+version = "0.2.23"
 source = { editable = "." }
 
 [package.dev-dependencies]
