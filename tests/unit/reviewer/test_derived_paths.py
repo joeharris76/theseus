@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,16 @@ OLD = ("100644", "1" * 40)
 NEW = ("100644", "2" * 40)
 LARGE_ROWS = 40_000
 OTHER_HEAD = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a derived-paths test reached the GitHub API")
+
+    monkeypatch.setattr(cli.github, "_run_api", refuse)
+    monkeypatch.setattr(cli.github, "issue_comments", lambda *_args: [])
+    monkeypatch.setattr(cli.github, "review_threads", lambda *_args: [])
 
 
 def _entry(**over: Any) -> dict[str, Any]:
@@ -232,7 +243,6 @@ def _plan(
     plan.update({"base_sha": "b" * 40, "base_ref": "develop", "head_sha": "a" * 40})
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    monkeypatch.setattr(cli.github, "review_threads", lambda *_args: [])
     inputs = cli.RoundInputs(
         files=scenario.files,
         in_scope={item.path for item in scenario.files},
@@ -452,8 +462,8 @@ def test_a_non_eligible_round_after_a_derived_clearance_reads_the_data(
     assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
-@pytest.mark.parametrize("path", [SHARD, "src/unchanged_module.py"])
-def test_a_finding_off_the_summary_is_counted_and_anchored_on_the_summary(
+@pytest.mark.parametrize("path", ["src/unchanged_module.py", "src/other.py"])
+def test_a_finding_outside_the_entry_is_counted_and_anchored_on_the_summary(
     path: str, policy: Policy, tmp_path: Path
 ) -> None:
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
@@ -820,14 +830,14 @@ def test_same_title_findings_on_different_files_stay_distinct(policy: Policy, tm
     plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
     findings = [
         {"severity": "High", "file": path, "line": 3, "title": "Same", "detail": f"Detail for {path}."}
-        for path in (SHARD, MANIFEST)
+        for path in ("src/a.py", "src/b.py")
     ]
     final = _final(policy, tmp_path, plan, _v("bad", findings))
     assert final.judgement is not None and len(final.judgement.defects) == 2
-    assert {item.title for item in final.judgement.defects} == {f"Same [{SHARD}:3]", f"Same [{MANIFEST}:3]"}
+    assert {item.title for item in final.judgement.defects} == {"Same [src/a.py:3]", "Same [src/b.py:3]"}
     assert final.review is not None
     text = final.review["body"] + "".join(item["body"] for item in final.review["comments"])
-    assert f"Detail for {SHARD}." in text and f"Detail for {MANIFEST}." in text
+    assert "Detail for src/a.py." in text and "Detail for src/b.py." in text
 
 
 def test_a_manual_review_on_the_same_head_reads_derived_data_in_full() -> None:
@@ -844,11 +854,229 @@ def test_a_near_limit_title_keeps_the_location_and_the_limit(policy: Policy, tmp
     long_path = "data/" + "d" * 380 + "/shard.json"
     findings = [
         {"severity": "High", "file": path, "line": 3, "title": "t" * 199, "detail": f"Detail {n}."}
-        for n, path in enumerate((SHARD, MANIFEST, long_path))
+        for n, path in enumerate(("src/a.py", "src/b.py", long_path))
     ]
     final = _final(policy, tmp_path, plan, _v("bad", findings))
     assert final.judgement is not None
     titles = [item.title for item in final.judgement.defects]
     assert len(titles) == 3 and len(set(titles)) == 3
     assert all(len(title) <= 200 for title in titles)
-    assert titles[0].endswith(f"[{SHARD}:3]") and titles[1].endswith(f"[{MANIFEST}:3]")
+    assert titles[0].endswith("[src/a.py:3]") and titles[1].endswith("[src/b.py:3]")
+
+
+def _open_on(path: str) -> dict[str, Any]:
+    return {"id": "D1", "severity": "High", "file": path, "line": 3, "end_line": None, "title": "Bad value"}
+
+
+def test_an_open_defect_on_a_data_file_keeps_the_round_a_full_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SHARD)]
+    )
+    plan = _plan(Scenario(), _policy(), tmp_path / "data", monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    elsewhere = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SUMMARY)]
+    )
+    assert _plan(Scenario(), _policy(), tmp_path / "summary", monkeypatch, _found(elsewhere))["derived"]
+
+
+@pytest.mark.parametrize("status", ["fixed", "withdrawn"])
+def test_a_summary_only_round_cannot_clear_a_data_anchored_prior(status: str, policy: Policy, tmp_path: Path) -> None:
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[_open_on(SHARD), {**_open_on(SUMMARY), "id": "D2"}]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [
+        {"id": "D1", "status": status, "evidence": f"{SHARD}:3 is right"},
+        {"id": "D2", "status": "fixed", "evidence": f"{SUMMARY}:3 is right"},
+    ]
+    final = _final(policy, tmp_path, plan, verdict)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    assert [item["id"] for item in final.judgement.carried] == ["D1"]
+
+
+def test_every_segment_is_kept_before_the_name_is_dropped_for_the_bare_note() -> None:
+    text = status_text.with_derived(
+        "SHIP · no open findings · degraded: openai", "Reproduce the baseline", status_text.SUCCESS_LIMIT
+    )
+    assert text == "SHIP · degraded: openai · summary only · data attested, not read"
+    carried = status_text.with_derived("SHIP · carried from 0123456789ab (same patch)", NAME, status_text.SUCCESS_LIMIT)
+    assert carried == "SHIP · summary only · data attested by Reproduce the fast-tier duration b…, not read"
+    kept = status_text.with_derived("SHIP · degraded: openai", NAME, status_text.SUCCESS_LIMIT)
+    assert kept == "SHIP · degraded: openai · summary only · data attested, not read"
+
+
+def _data_finding_round(policy: Policy, tmp_path: Path) -> report.Final:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    finding = {"severity": "High", "file": SHARD, "line": 3, "title": "Bad value", "detail": "Wrong baseline."}
+    return _final(policy, tmp_path, plan, _v("bad", [finding]))
+
+
+def test_a_finding_on_a_data_file_keeps_its_file_and_blocks(policy: Policy, tmp_path: Path) -> None:
+    final = _data_finding_round(policy, tmp_path)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SHARD and defect.title == "Bad value" and defect.line == 3
+    assert final.state == "failure" and final.review is not None
+    assert "Wrong baseline." in final.review["body"] + "".join(item["body"] for item in final.review["comments"])
+    (entry,) = _record(final)["open_defects"]
+    assert entry["file"] == SHARD and entry["title"] == "Bad value"
+
+
+def test_the_trigger_sequence_for_a_data_finding_ends_in_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = {
+        **_record(_data_finding_round(policy, tmp_path / "first")),
+        "head_sha": "c" * 40,
+        "patch_digest": "z" * 32,
+    }
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(record))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_case_variant_of_a_data_path_maps_to_the_data_file(policy: Policy, tmp_path: Path) -> None:
+    plan = {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+    cited = f"{DATA_DIR}/Shard-00.json"
+    finding = {"severity": "High", "file": cited, "line": 3, "title": "Bad value", "detail": "Wrong."}
+    final = _final(policy, tmp_path, plan, _v("bad", [finding]))
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == SHARD and defect.title == "Bad value" and defect.line == 3
+    assert _record(final)["open_defects"][0]["file"] == SHARD
+
+
+ANCHORS = [
+    pytest.param(SHARD, "Bad value", id="exact"),
+    pytest.param(f"{DATA_DIR.upper()}/SHARD-00.JSON", "Bad value", id="case"),
+    pytest.param("…baseline/shard-00.json", "Bad value", id="clipped-path"),
+    pytest.param("…", "Bad value", id="empty-clip"),
+    pytest.param(SUMMARY, f"Bad value [{SHARD}:3]", id="legacy-title"),
+    pytest.param(SUMMARY, f"Bad value [{SHARD.upper()}:3]", id="legacy-title-case"),
+    pytest.param(SUMMARY, "Bad value […baseline/shard-00.json:3]", id="legacy-clipped-location"),
+    pytest.param(SUMMARY, "Bad value that was cut sho…", id="legacy-clipped-title"),
+]
+
+
+@pytest.mark.parametrize(("file", "title"), ANCHORS)
+def test_every_data_anchored_form_keeps_the_round_a_full_review(
+    file: str, title: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": file, "line": 3, "end_line": None, "title": title}
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+@pytest.mark.parametrize(("file", "title"), ANCHORS)
+@pytest.mark.parametrize("status", ["fixed", "withdrawn"])
+def test_every_data_anchored_form_stays_open_in_a_derived_plan(
+    file: str, title: str, status: str, policy: Policy, tmp_path: Path
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": file, "line": 3, "end_line": None, "title": title}
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[prior]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [{"id": "D1", "status": status, "evidence": f"{SUMMARY}:3 says so"}]
+    final = _final(policy, tmp_path, plan, verdict)
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    assert [item["id"] for item in final.judgement.carried] == ["D1"]
+
+
+@pytest.mark.parametrize("title", ["Typo in the summary", "Typo [src/other.py:3]", "Typo […other.py:3]"])
+def test_a_summary_prior_about_a_non_data_file_is_still_clearable(
+    title: str, policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": title}
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert _plan(Scenario(), _policy(), tmp_path / "plan", monkeypatch, _found(latest))["derived"]
+    plan = {
+        **_protocol_plan(policy, kind="follow-up", round=2, prior=[prior]),
+        "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED},
+    }
+    verdict = _v("fine")
+    verdict["prior_defects"] = [{"id": "D1", "status": "fixed", "evidence": f"{SUMMARY}:1 is corrected"}]
+    final = _final(policy, tmp_path / "judge", plan, verdict)
+    assert final.judgement is not None and final.judgement.decision == "SHIP"
+
+
+def test_a_clipped_summary_path_still_reaches_the_title_checks() -> None:
+    clipped = "…" + SUMMARY[-31:]
+    paths = [MANIFEST, SHARD]
+    assert derived.data_anchored(clipped, f"Bad value [{SHARD}:3]"[:39] + "…", paths, SUMMARY)
+    assert derived.data_anchored(clipped, f"Bad value [{SHARD}:3]", paths, SUMMARY)
+    assert not derived.data_anchored(clipped, "Typo in the summary", paths, SUMMARY)
+    assert not derived.data_anchored("…other/file.md", "Typo…", paths, SUMMARY)
+
+
+def test_a_clipped_legacy_record_at_the_tightest_trim_stays_data_anchored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {
+        "id": "D1",
+        "severity": "High",
+        "file": "…" + SUMMARY[-31:],
+        "line": 1,
+        "end_line": None,
+        "title": f"Bad value [{SHARD}:3]"[:39] + "…",
+    }
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert "derived" not in _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+
+
+@pytest.mark.parametrize("variant", ["nfd", "space"])
+def test_a_differently_written_data_path_maps_to_the_data_file(variant: str, policy: Policy, tmp_path: Path) -> None:
+    data = f"{DATA_DIR}/caf\u00e9.json"
+    cited = unicodedata.normalize("NFD", data) if variant == "nfd" else f"{data} "
+    held = {"entry": "baseline", "digest": DIGEST, "paths": [data], "summary": SUMMARY, "attested_by": ATTESTED}
+    plan = {**_protocol_plan(policy), "derived": held}
+    finding = {"severity": "High", "file": cited, "line": 3, "title": "Bad value", "detail": "Wrong."}
+    final = _final(policy, tmp_path, plan, _v("bad", [finding]))
+    assert final.judgement is not None and final.judgement.decision != "SHIP"
+    (defect,) = final.judgement.defects
+    assert defect.file == data and defect.title == "Bad value"
+    assert derived.data_anchored(cited, "Bad value", [data], SUMMARY)
+    assert derived.data_anchored(SUMMARY, f"Bad value [{cited}:3]", [data], SUMMARY)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        f"Wrong p95 [ms] value [{SHARD}:3]",
+        f"Wrong [p95] [ms] value [{SHARD}:3]",
+        "Wrong p95 [ms] value […baseline/shard-00.json:3]",
+        "Wrong [p95] [ms] value […baseline/shard-00.json:3]",
+        f"Wrong p95 [ms] value [{SHARD.upper()}:12]",
+    ],
+)
+def test_a_bracketed_title_does_not_hide_the_data_location(title: str) -> None:
+    assert derived.data_anchored(SUMMARY, title, [MANIFEST, SHARD], SUMMARY)
+    assert derived.data_anchored("…" + SUMMARY[-31:], title, [MANIFEST, SHARD], SUMMARY)
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Wrong p95 [ms] value [src/other.py:3]", "Wrong [p95] [ms] [src/other.py:3]", "Wrong [ms] value […other.py:3]"],
+)
+def test_a_non_data_location_after_a_bracketed_title_is_not_data(title: str) -> None:
+    assert not derived.data_anchored(SUMMARY, title, [MANIFEST, SHARD], SUMMARY)
+
+
+def test_a_remapped_bracketed_title_is_recognised_as_data_anchored() -> None:
+    from theseus_reviewer.verdict import Finding
+
+    item = Finding("High", "src/x.py", 4, "Wrong [ms] value", "Because.")
+    moved = protocol._on_summary(item, SUMMARY, [SHARD])
+    assert moved.file == SUMMARY and moved.title == "Wrong [ms] value [src/x.py:4]"
+    assert not derived.data_anchored(moved.file, moved.title, [SHARD], SUMMARY)

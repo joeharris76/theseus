@@ -268,15 +268,12 @@ def with_derived(description: str, attested_by: str | None, limit: int) -> str:
         droppable.append(count)
         if ESCALATED.search(trimmed[count - 1]) or trimmed[count - 1] == RULING_HINT:
             break
-    if attested_by is not None:
-        for count in droppable:
-            base = SEP.join(trimmed[:count])
-            room = limit - len(base) - overhead
-            if room >= min(len(attested_by), DERIVED_FLOOR):
-                return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
     tail = f"{SEP}{derived_note(None)}"
     for count in droppable:
         base = SEP.join(trimmed[:count])
+        room = limit - len(base) - overhead
+        if attested_by is not None and room >= min(len(attested_by), DERIVED_FLOOR):
+            return f"{base}{SEP}{derived_note(hard_clip(attested_by, room))}"
         if len(base) + len(tail) <= limit:
             return f"{base}{tail}"
     kept = trimmed[: droppable[-1]]

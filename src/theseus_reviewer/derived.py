@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -231,6 +232,47 @@ def assess(
             return None
         return Eligible(entry, paths, stripped)
     return None
+
+
+_LOCATION = re.compile(r"(?P<location>.*):[0-9]+\]", re.DOTALL)
+ELLIPSIS = "\u2026"
+
+
+def norm_path(path: str) -> str:
+    return unicodedata.normalize("NFC", path).strip().casefold()
+
+
+def _tail_of_data(tail: str, folded: Sequence[str]) -> bool:
+    return any(path.endswith(tail) for path in folded)
+
+
+def data_anchored(file: str, title: str, paths: Iterable[str], summary: str) -> bool:
+    folded = [norm_path(path) for path in paths]
+    held = norm_path(file)
+    own_summary = norm_path(summary)
+    if held in folded:
+        return True
+    if held.startswith(ELLIPSIS):
+        tail = held[1:]
+        if _tail_of_data(tail, folded):
+            return True
+        if not own_summary.endswith(tail):
+            return False
+    elif held != own_summary:
+        return False
+    if title.endswith(ELLIPSIS):
+        return True
+    for match in re.finditer(r" \[", title):
+        found = _LOCATION.fullmatch(title, match.end())
+        if found is None:
+            continue
+        location = norm_path(found["location"])
+        if location.startswith(ELLIPSIS):
+            if _tail_of_data(location[1:], folded):
+                return True
+        elif location in folded:
+            return True
+    return False
 
 
 def record_of(plan: Mapping[str, Any]) -> dict[str, Any] | None:
