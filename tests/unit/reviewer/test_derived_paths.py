@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import copy
+import json
+import subprocess
 import unicodedata
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from theseus_reviewer import adjudication, capacity, cli, derived, local, protocol, report, status_text
+from theseus_reviewer import adjudication, capacity, cli, derived, findings, local, protocol, report, status_text
 from theseus_reviewer._vendor import yaml
 from theseus_reviewer.classifier import ChangedFile
 from theseus_reviewer.classify import Classification
@@ -603,16 +606,146 @@ def test_a_carried_decision_keeps_the_record_and_the_wording(policy: Policy) -> 
     assert protocol.decode_marker(unattested.body)["derived"] == _recorded()
 
 
-def test_a_local_outcome_and_member_record_carry_the_reliance(monkeypatch: pytest.MonkeyPatch) -> None:
-    reliance = {"entry": "baseline", "digest": DIGEST, "attested_by": ATTESTED}
-    outcome = local.Outcome(False, "SHIP", "small", "", (), derived=reliance)
-    restored = local.Outcome.from_json(outcome.to_json())
-    assert restored is not None and restored.derived == reliance
-    assert local.recorded_outcome(_bound()).derived == {"entry": "baseline", "digest": DIGEST}
-    monkeypatch.setattr(local, "member_binding", lambda *_args: {"head_tree": "t", "patch_digest": "p"})
-    member = local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok", reliance)
-    assert member["derived"] == reliance
-    assert "derived" not in local._member_record(Path("."), "b" * 40, "a" * 40, "c" * 40, "clear", "ok")
+def test_an_older_local_record_with_a_derived_key_still_reads() -> None:
+    assert local.recorded_outcome(_bound()).label == "SHIP"
+
+
+def _git(root: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _local_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pr: str = "") -> local.LocalEnvironment:
+    repo = tmp_path / "repo"
+    (repo / DATA_DIR).mkdir(parents=True)
+    _git(repo, "init", "--quiet", "--initial-branch=develop")
+    for name in ("manifest.json", "shard-00.json", "SUMMARY.md"):
+        (repo / DATA_DIR / name).write_text("one\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "--quiet", "-m", "base")
+    for name in ("manifest.json", "shard-00.json", "SUMMARY.md"):
+        (repo / DATA_DIR / name).write_text("two\n", encoding="utf-8")
+    _git(repo, "commit", "--quiet", "-am", "refresh")
+    policy_path = tmp_path / "policy.yml"
+    policy_path.write_text(json.dumps(_raw(_entry())), encoding="utf-8")
+    environ = {
+        local.WORK_ENV: str(tmp_path / "work"),
+        local.REPOSITORY_ENV: "o/r",
+        local.ROOT_ENV: str(repo),
+        local.TRUSTED_ENV: str(POLICY_PATH.parents[1]),
+        local.BASE_ENV: "develop~1",
+        local.HEAD_ENV: _git(repo, "rev-parse", "HEAD"),
+        local.STATE_ENV: str(tmp_path / "state"),
+        **({local.PR_ENV: pr} if pr else {}),
+    }
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    return local.LocalEnvironment.from_environ(environ, policy_path)
+
+
+def _local_plan(env: local.LocalEnvironment) -> dict[str, Any]:
+    assert env.plan() == 0
+    return json.loads((env.layout.plan / cli.PLAN_FILE).read_text(encoding="utf-8"))
+
+
+def test_a_local_review_of_a_data_and_summary_patch_is_planned_in_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _local_plan(_local_env(tmp_path, monkeypatch))
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def _hosted(env: local.LocalEnvironment, monkeypatch: pytest.MonkeyPatch, **over: Any) -> None:
+    record = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha=env.head, **over)
+    monkeypatch.setattr(cli, "_plan_history", lambda *_args: _found(record))
+    monkeypatch.setattr(cli, "_base_changed_at", lambda *_args: (None, False))
+
+
+def test_a_local_review_never_reuses_a_hosted_derived_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch, pr="7")
+    _hosted(env, monkeypatch, derived=_recorded())
+    plan = _local_plan(env)
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_local_review_still_reuses_a_hosted_full_decision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch, pr="7")
+    _hosted(env, monkeypatch)
+    assert _local_plan(env)["decision"] != "review"
+
+
+def _stored_local_record(env: local.LocalEnvironment, **over: Any) -> None:
+    base = _git(env.root, "merge-base", env.base_ref, env.head)
+    digest = protocol.patch_digest(protocol.fingerprints(local.file_states(env.root, base, env.head)))
+    record = _marker_record(decision="SHIP", coverage=1, patch_map={}, head_sha=env.head, patch_digest=digest, **over)
+    findings.store(
+        env.state,
+        {
+            "v": 1,
+            "patch_digest": digest,
+            "base_ref": "develop",
+            "head_sha": env.head,
+            "history": [record],
+            "findings": [],
+        },
+        (),
+    )
+
+
+def test_a_local_record_that_relied_on_derived_data_is_never_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _local_env(tmp_path, monkeypatch)
+    _stored_local_record(env, derived=_recorded())
+    plan = _local_plan(env)
+    assert plan["decision"] == "review" and "derived" not in plan
+    assert {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_ruling_cannot_clear_a_local_record_that_relied_on_derived_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = replace(_local_env(tmp_path, monkeypatch), adjudicate="Review adjudicate: WITHDRAW D1 - fine")
+    _stored_local_record(env, derived=_recorded())
+    assert env.plan() == 2
+    assert "relied on derived data" in capsys.readouterr().err
+
+
+def test_a_local_record_without_derived_data_is_still_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _local_env(tmp_path, monkeypatch)
+    _stored_local_record(env)
+    assert _local_plan(env)["decision"] != "review"
+
+
+def test_a_cached_local_outcome_from_a_derived_round_is_a_miss() -> None:
+    outcome = local.Outcome(False, "SHIP", "small", "", ())
+    assert local.Outcome.from_json({**outcome.to_json(), "derived": {"entry": "baseline"}}) is None
+    held = {"history": [_marker_record(derived=_recorded())]}
+    assert local.Outcome.from_json({**outcome.to_json(), "record": held}) is None
+    assert local.Outcome.from_json({**outcome.to_json(), "record": {"history": [_marker_record()]}}) == replace(
+        outcome, record={"history": [_marker_record()]}
+    )
+    rerun = {"history": [_marker_record(derived=_recorded()), _marker_record(round=2)]}
+    assert local.Outcome.from_json({**outcome.to_json(), "record": rerun}) == replace(outcome, record=rerun)
+
+
+@pytest.mark.parametrize("decision", ["DO_NOT_SHIP", "REFUSED"])
+def test_a_round_after_a_full_review_do_not_ship_or_a_refusal_is_not_derived(
+    decision: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kind = "refused" if decision == "REFUSED" else "first"
+    latest = _marker_record(decision=decision, kind=kind, coverage=1, patch_map={}, head_sha="c" * 40)
+    assert "derived" not in latest
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
 
 
 def test_soundness_data_is_eligible_and_fits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -877,7 +1010,12 @@ def test_an_open_defect_on_a_data_file_keeps_the_round_a_full_review(
     plan = _plan(Scenario(), _policy(), tmp_path / "data", monkeypatch, _found(latest))
     assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
     elsewhere = _marker_record(
-        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[_open_on(SUMMARY)]
+        decision="SHIP_WITH_FIXES",
+        coverage=1,
+        patch_map={},
+        head_sha="c" * 40,
+        open_defects=[_open_on(SUMMARY)],
+        derived=_recorded(),
     )
     assert _plan(Scenario(), _policy(), tmp_path / "summary", monkeypatch, _found(elsewhere))["derived"]
 
@@ -996,7 +1134,12 @@ def test_a_summary_prior_about_a_non_data_file_is_still_clearable(
 ) -> None:
     prior = {"id": "D1", "severity": "High", "file": SUMMARY, "line": 1, "end_line": None, "title": title}
     latest = _marker_record(
-        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+        decision="SHIP_WITH_FIXES",
+        coverage=1,
+        patch_map={},
+        head_sha="c" * 40,
+        open_defects=[prior],
+        derived=_recorded(),
     )
     assert _plan(Scenario(), _policy(), tmp_path / "plan", monkeypatch, _found(latest))["derived"]
     plan = {
@@ -1080,3 +1223,81 @@ def test_a_remapped_bracketed_title_is_recognised_as_data_anchored() -> None:
     moved = protocol._on_summary(item, SUMMARY, [SHARD])
     assert moved.file == SUMMARY and moved.title == "Wrong [ms] value [src/x.py:4]"
     assert not derived.data_anchored(moved.file, moved.title, [SHARD], SUMMARY)
+
+
+def _derived_plan(policy: Policy) -> dict[str, Any]:
+    return {**_protocol_plan(policy), "derived": {**_recorded(), "summary": SUMMARY, "attested_by": ATTESTED}}
+
+
+def _later(record: dict[str, Any]) -> dict[str, Any]:
+    return {**record, "head_sha": "c" * 40, "patch_digest": "z" * 32}
+
+
+def _finding(path: str, n: int = 3) -> dict[str, Any]:
+    return {"severity": "High", "file": path, "line": 3, "title": f"Bad value {n}", "detail": "Wrong."}
+
+
+def test_a_derived_do_not_ship_is_followed_by_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final = _final(
+        policy, tmp_path / "first", _derived_plan(policy), _v("bad", [_finding(SHARD)], decision="DO_NOT_SHIP")
+    )
+    record = _record(final)
+    assert record["decision"] == "DO_NOT_SHIP" and record["open_defects"] == [] and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+    assert plan["protocol"]["kind"] == "first"
+
+
+def test_an_over_limit_derived_do_not_ship_is_followed_by_a_full_review(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    many = [_finding(SHARD, n) for n in range(policy.protocol.max_defects + 1)]
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("bad", many)))
+    assert record["decision"] == "DO_NOT_SHIP" and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])
+
+
+def test_a_derived_ship_with_fixes_without_data_findings_allows_a_derived_round(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("typo", [_finding(SUMMARY)])))
+    assert record["decision"] == "SHIP_WITH_FIXES" and "derived" in record
+    plan = _plan(Scenario(), _policy(), tmp_path / "later", monkeypatch, _found(_later(record)))
+    assert plan["derived"]["entry"] == "baseline" and plan["evidence_files"] == [SUMMARY]
+
+
+def test_a_same_head_review_and_a_ruling_after_a_derived_do_not_ship_read_in_full(
+    policy: Policy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = _record(_final(policy, tmp_path / "first", _derived_plan(policy), _v("bad", [], decision="DO_NOT_SHIP")))
+    step = _round(_found(record), manual=True, derived_digest=None)
+    assert step.kind == protocol.FIRST
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    plan = cli._base_plan(_policy(), "owner/repo", 7, "1")
+    plan.update({"base_sha": "b" * 40, "base_ref": "develop", "head_sha": "a" * 40})
+    ruling = adjudication.Adjudication("WITHDRAW", "D1", "fine")
+    assert cli.adjudicate_round(tmp_path / "ruling", plan, _policy(), _found(record), ruling, None) == 0
+    assert plan["decision"] == cli.HOLD
+
+
+def test_an_open_defect_from_a_full_review_keeps_the_next_round_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prior = {
+        "id": "D1",
+        "severity": "High",
+        "file": SUMMARY,
+        "line": 2,
+        "end_line": None,
+        "title": "Summary claims X but the shard shows Y",
+    }
+    latest = _marker_record(
+        decision="SHIP_WITH_FIXES", coverage=1, patch_map={}, head_sha="c" * 40, open_defects=[prior]
+    )
+    assert "derived" not in latest
+    plan = _plan(Scenario(), _policy(), tmp_path, monkeypatch, _found(latest))
+    assert "derived" not in plan and {MANIFEST, SHARD} <= set(plan["evidence_files"])

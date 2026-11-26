@@ -532,12 +532,13 @@ def adjudicate_round(
     latest = found.latest or {}
     plan["adjudication"] = {"action": ruling.action, "id": ruling.defect_id, "reason": ruling.reason}
     held = derived.recorded_plan(policy.evidence.derived_paths, latest.get("derived"))
-    if latest.get("derived") and held is None:
+    if latest.get("derived") and (held is None or latest.get("decision") == DO_NOT_SHIP):
         plan.update(
             {
                 "decision": HOLD,
-                "decision_reason": "the decision relied on derived data whose policy entry has changed, so an owner"
-                " ruling cannot clear it; a full review is needed (/review)",
+                "decision_reason": "the decision relied on derived data that no reviewer read in full, because its"
+                " policy entry has changed or it was DO NOT SHIP, so an owner ruling cannot clear it; a full review"
+                " is needed (/review)",
             }
         )
         return _finish_plan(out_dir, plan)
@@ -898,6 +899,7 @@ class RoundInputs:
     linked: Sequence[Mapping[str, str]] = ()
     since_diff: Callable[[str], str | None] | None = None
     description: str | None = None
+    allow_derived: bool = True
 
 
 def _git_show_text(root: Path, ref: str, path: str) -> str:
@@ -964,7 +966,7 @@ def _resolve_promotion_bundle(
 
 
 def _derived_eligibility(policy: Policy, inputs: RoundInputs, matchers: Matchers) -> derived.Eligible | None:
-    if not policy.evidence.derived_paths:
+    if not policy.evidence.derived_paths or not inputs.allow_derived:
         return None
     gate_paths = policy.classifier.gate_paths
 
@@ -1002,6 +1004,10 @@ def plan_decision(plan: dict[str, Any], policy: Policy, out_dir: Path, inputs: R
     eligible = None if is_promotion else _derived_eligibility(policy, inputs, matchers)
     recorded = (inputs.found.latest or {}).get("derived")
     if eligible is not None and recorded is not None and recorded["digest"] != eligible.entry.digest():
+        eligible = None
+    if eligible is not None and (inputs.found.latest or {}).get("decision") in (DO_NOT_SHIP, protocol.REFUSED):
+        eligible = None
+    if eligible is not None and recorded is None and (inputs.found.latest or {}).get("open_defects"):
         eligible = None
     if eligible is not None and any(
         derived.data_anchored(
